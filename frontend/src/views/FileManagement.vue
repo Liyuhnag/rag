@@ -1,5 +1,6 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { getDocuments, uploadDocument, deleteDocument } from '../api'
 import Toast from '../components/Toast.vue'
 import Confirm from '../components/Confirm.vue'
 import Pagination from '../components/Pagination.vue'
@@ -25,153 +26,51 @@ const fileIconMap = {
 
 // 文件类型颜色映射
 const fileColorMap = {
-  pdf: '#EF4444',      // 红色 - PDF 经典色
-  md: '#A855F7',       // 紫色 - Markdown/代码
+  pdf: '#EF4444',
+  md: '#A855F7',
   markdown: '#A855F7',
-  doc: '#3B82F6',      // 蓝色 - Word
+  doc: '#3B82F6',
   docx: '#3B82F6',
-  txt: '#64748B',      // 灰色 - 纯文本
-  xls: '#10B981',      // 绿色 - Excel
+  txt: '#64748B',
+  xls: '#10B981',
   xlsx: '#10B981',
-  csv: '#14B8A6'       // 青绿色 - CSV 数据
+  csv: '#14B8A6'
 }
 
-// 真实文件数据（来自 SeaweedFS + kkFileView）
-const realFiles = [
-  {
-    id: 1,
-    name: 'ollama-readme.md',
-    type: 'md',
-    size: '12.3 KB',
-    chunks: 15,
-    status: 'completed',
-    uploadedAt: '2026-10-17 14:20',
-    url: 'http://ahanali.devcloud.woa.com:8888/buckets/rag-documents/md/ollama-readme.md',
-    previewUrl: 'http://ahanali.devcloud.woa.com:8012/onlinePreview?url=aHR0cDovL3NlYXdlZWRmczo4ODg4L2J1Y2tldHMvcmFnLWRvY3VtZW50cy9tZC9vbGxhbWEtcmVhZG1lLm1k'
-  },
-  {
-    id: 2,
-    name: 'seaweedfs-readme.md',
-    type: 'md',
-    size: '18.7 KB',
-    chunks: 20,
-    status: 'completed',
-    uploadedAt: '2026-10-17 14:18',
-    url: 'http://ahanali.devcloud.woa.com:8888/buckets/rag-documents/md/seaweedfs-readme.md',
-    previewUrl: 'http://ahanali.devcloud.woa.com:8012/onlinePreview?url=aHR0cDovL3NlYXdlZWRmczo4ODg4L2J1Y2tldHMvcmFnLWRvY3VtZW50cy9tZC9zZWF3ZWVkZnMtcmVhZG1lLm1k'
-  },
-  {
-    id: 3,
-    name: 'retrieval-augmented-generation.pdf',
-    type: 'pdf',
-    size: '2.1 MB',
-    chunks: 45,
-    status: 'completed',
-    uploadedAt: '2026-10-17 14:15',
-    url: 'http://ahanali.devcloud.woa.com:8888/buckets/rag-documents/pdf/retrieval-augmented-generation.pdf',
-    previewUrl: 'http://ahanali.devcloud.woa.com:8012/onlinePreview?url=aHR0cDovL3NlYXdlZWRmczo4ODg4L2J1Y2tldHMvcmFnLWRvY3VtZW50cy9wZGYvcmV0cmlldmFsLWF1Z21lbnRlZC1nZW5lcmF0aW9uLnBkZg%3D%3D'
-  },
-  {
-    id: 4,
-    name: 'attention-is-all-you-need.pdf',
-    type: 'pdf',
-    size: '1.8 MB',
-    chunks: 38,
-    status: 'completed',
-    uploadedAt: '2026-10-17 14:12',
-    url: 'http://ahanali.devcloud.woa.com:8888/buckets/rag-documents/pdf/attention-is-all-you-need.pdf',
-    previewUrl: 'http://ahanali.devcloud.woa.com:8012/onlinePreview?url=aHR0cDovL3NlYXdlZWRmczo4ODg4L2J1Y2tldHMvcmFnLWRvY3VtZW50cy9wZGYvYXR0ZW50aW9uLWlzLWFsbC15b3UtbmVlZC5wZGY%3D'
-  },
-  {
-    id: 5,
-    name: 'having-images.docx',
-    type: 'docx',
-    size: '850 KB',
-    chunks: 25,
-    status: 'completed',
-    uploadedAt: '2026-10-17 14:10',
-    url: 'http://ahanali.devcloud.woa.com:8888/buckets/rag-documents/docx/having-images.docx',
-    previewUrl: 'http://ahanali.devcloud.woa.com:8012/onlinePreview?url=aHR0cDovL3NlYXdlZWRmczo4ODg4L2J1Y2tldHMvcmFnLWRvY3VtZW50cy9kb2N4L2hhdmluZy1pbWFnZXMuZG9jeA%3D%3D'
-  },
-  {
-    id: 6,
-    name: 'sample-document.docx',
-    type: 'docx',
-    size: '625 KB',
-    chunks: 18,
-    status: 'completed',
-    uploadedAt: '2026-10-17 14:08',
-    url: 'http://ahanali.devcloud.woa.com:8888/buckets/rag-documents/docx/sample-document.docx',
-    previewUrl: 'http://ahanali.devcloud.woa.com:8012/onlinePreview?url=aHR0cDovL3NlYXdlZWRmczo4ODg4L2J1Y2tldHMvcmFnLWRvY3VtZW50cy9kb2N4L3NhbXBsZS1kb2N1bWVudC5kb2N4'
-  }
-]
+// === 数据状态 ===
+const allFiles = ref([])
+const loading = ref(false)
+const totalPages = ref(0)
+const totalItems = ref(0)
 
-// 生成模拟数据
-const generateMockFiles = () => {
-  const fileTypes = ['pdf', 'md', 'docx', 'txt', 'xlsx', 'csv']
-  const fileNames = [
-    'RAG技术文档', '向量数据库介绍', '项目需求文档', 'API接口设计',
-    '用户手册', '系统架构说明', '测试报告', '产品规格书',
-    '开发指南', '部署文档', '性能测试报告', '安全审计报告',
-    '数据字典', '业务流程图', '技术选型方案', '代码规范'
-  ]
-
-  const files = []
-  for (let i = 7; i <= 67; i++) {
-    const type = fileTypes[Math.floor(Math.random() * fileTypes.length)]
-    const baseName = fileNames[Math.floor(Math.random() * fileNames.length)]
-    files.push({
-      id: i,
-      name: `${baseName}_v${i}.${type}`,
-      type: type,
-      size: `${(Math.random() * 5 + 0.1).toFixed(1)} MB`,
-      chunks: Math.floor(Math.random() * 50) + 5,
-      status: 'completed',
-      uploadedAt: `2026-10-${String(Math.floor(Math.random() * 17) + 1).padStart(2, '0')} ${String(Math.floor(Math.random() * 24)).padStart(2, '0')}:${String(Math.floor(Math.random() * 60)).padStart(2, '0')}`,
-      url: null,
-      previewUrl: null
-    })
-  }
-  return files
-}
-
-// 所有文件列表（真实数据 + 模拟数据）
-const allFiles = ref([...realFiles, ...generateMockFiles()].sort((a, b) => b.id - a.id))
-
-// 分页状态
+// === 分页状态 ===
 const currentPage = ref(1)
 const pageSize = ref(20)
 
-// 列宽状态（使用 fr 弹性单位比例）
+// === 表格列宽（使用 fr 弹性单位） ===
 const columnWidths = ref({
-  name: 3,      // 文件名占 3 份
-  type: 0.8,    // 类型占 0.8 份
-  size: 0.8,    // 大小占 0.8 份
-  chunks: 0.8,  // 分块数占 0.8 份
-  time: 1.5,    // 上传时间占 1.5 份
-  actions: 0.8  // 操作占 0.8 份
+  name: 3,
+  type: 0.8,
+  size: 0.8,
+  chunks: 0.8,
+  time: 1.5,
+  actions: 0.8
 })
 
-// 拖拽状态
+// === 拖拽调整列宽 ===
 const resizing = ref(null)
 const startX = ref(0)
 const startWidth = ref(0)
 const tableRef = ref(null)
 const nextColumn = ref(null)
 const startNextWidth = ref(0)
-
-// 获取列的顺序
 const columnOrder = ['name', 'type', 'size', 'chunks', 'time', 'actions']
 
-// 开始调整列宽
 const startResize = (column, event) => {
   if (!tableRef.value) return
-
   resizing.value = column
   startX.value = event.clientX
   startWidth.value = columnWidths.value[column]
-
-  // 找到下一列
   const currentIndex = columnOrder.indexOf(column)
   if (currentIndex < columnOrder.length - 1) {
     nextColumn.value = columnOrder[currentIndex + 1]
@@ -179,7 +78,6 @@ const startResize = (column, event) => {
   } else {
     nextColumn.value = null
   }
-
   document.addEventListener('mousemove', onResize)
   document.addEventListener('mouseup', stopResize)
   document.body.style.cursor = 'col-resize'
@@ -187,39 +85,25 @@ const startResize = (column, event) => {
   event.preventDefault()
 }
 
-// 调整列宽中
 const onResize = (event) => {
   if (!resizing.value || !tableRef.value) return
-
-  // 计算鼠标移动的距离（像素）
   const diff = event.clientX - startX.value
-
-  // 获取容器总宽度
   const containerWidth = tableRef.value.offsetWidth
   const totalFr = Object.values(columnWidths.value).reduce((sum, fr) => sum + fr, 0)
   const pixelPerFr = containerWidth / totalFr
-
-  // 将像素差异转换为 fr 单位差异
   const frDiff = diff / pixelPerFr
-
-  // 更新当前列和下一列的宽度
-  const newWidth = Math.max(0.5, startWidth.value + frDiff) // 最小 0.5fr
-
+  const newWidth = Math.max(0.5, startWidth.value + frDiff)
   if (nextColumn.value) {
-    const newNextWidth = Math.max(0.5, startNextWidth.value - frDiff) // 最小 0.5fr
-
-    // 只有当两列都满足最小宽度时才更新
+    const newNextWidth = Math.max(0.5, startNextWidth.value - frDiff)
     if (newWidth >= 0.5 && newNextWidth >= 0.5) {
       columnWidths.value[resizing.value] = newWidth
       columnWidths.value[nextColumn.value] = newNextWidth
     }
   } else {
-    // 最后一列，直接更新
     columnWidths.value[resizing.value] = newWidth
   }
 }
 
-// 停止调整列宽
 const stopResize = () => {
   resizing.value = null
   nextColumn.value = null
@@ -229,54 +113,29 @@ const stopResize = () => {
   document.body.style.userSelect = ''
 }
 
-// 计算 grid 模板列
 const gridTemplateColumns = computed(() => {
   return `${columnWidths.value.name}fr ${columnWidths.value.type}fr ${columnWidths.value.size}fr ${columnWidths.value.chunks}fr ${columnWidths.value.time}fr ${columnWidths.value.actions}fr`
 })
 
-// 计算总页数
-const totalPages = computed(() => {
-  return Math.ceil(allFiles.value.length / pageSize.value)
-})
+// === 当前页的文件列表 ===
+const files = computed(() => allFiles.value)
 
-// 当前页的文件列表
-const files = computed(() => {
-  const start = (currentPage.value - 1) * pageSize.value
-  const end = start + pageSize.value
-  return allFiles.value.slice(start, end)
-})
-
-// 页面变化处理
-const handlePageChange = (page) => {
-  currentPage.value = page
-}
-
-// 每页数量变化处理
-const handlePageSizeChange = (size) => {
-  pageSize.value = size
-  currentPage.value = 1 // 重置到第一页
-}
-
-// 获取文件图标组件
-const getFileIcon = (type) => {
-  const lowerType = type.toLowerCase()
-  return fileIconMap[lowerType] || IconFileText
-}
-
-// 获取文件类型颜色
-const getFileColor = (type) => {
-  const lowerType = type.toLowerCase()
-  return fileColorMap[lowerType] || '#64748B'
-}
-
-// Toast 状态
+// === Toast 状态 ===
 const toastState = ref({
   show: false,
   type: 'info',
   message: ''
 })
 
-// Confirm 状态
+const showToast = (type, message) => {
+  toastState.value = { show: true, type, message }
+}
+
+const closeToast = () => {
+  toastState.value.show = false
+}
+
+// === Confirm 状态 ===
 const confirmState = ref({
   show: false,
   title: '确认操作',
@@ -285,31 +144,8 @@ const confirmState = ref({
   onConfirm: null
 })
 
-// 显示上传对话框
-const showUploadDialog = ref(false)
-const uploadingFiles = ref([])
-const uploadProgress = ref({})
-
-const showToast = (type, message) => {
-  toastState.value = {
-    show: true,
-    type,
-    message
-  }
-}
-
-const closeToast = () => {
-  toastState.value.show = false
-}
-
 const showConfirm = (title, message, type, onConfirm) => {
-  confirmState.value = {
-    show: true,
-    title,
-    message,
-    type,
-    onConfirm
-  }
+  confirmState.value = { show: true, title, message, type, onConfirm }
 }
 
 const closeConfirm = () => {
@@ -323,6 +159,11 @@ const handleConfirm = () => {
   }
   closeConfirm()
 }
+
+// === 上传对话框 ===
+const showUploadDialog = ref(false)
+const uploadingFiles = ref([])
+const uploadProgress = ref({})
 
 const openUploadDialog = () => {
   showUploadDialog.value = true
@@ -355,296 +196,391 @@ const addFiles = (newFiles) => {
     if (!uploadingFiles.value.find(f => f.name === file.name)) {
       uploadingFiles.value.push({
         id: Date.now() + Math.random(),
+        file,
         name: file.name,
         size: formatFileSize(file.size),
         status: 'pending',
-        file: file
+        progress: 0,
+        error: null
       })
     }
   })
 }
 
-const formatFileSize = (bytes) => {
-  if (bytes === 0) return '0 B'
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i]
+const removeUploadingFile = (id) => {
+  const index = uploadingFiles.value.findIndex(f => f.id === id)
+  if (index !== -1) {
+    uploadingFiles.value.splice(index, 1)
+  }
 }
 
-const getFileType = (filename) => {
-  const ext = filename.split('.').pop().toLowerCase()
-  return ext
-}
-
-const uploadFiles = async () => {
-  if (uploadingFiles.value.length === 0) {
-    showToast('warning', '请先选择要上传的文件')
+const startUpload = async () => {
+  const pendingFiles = uploadingFiles.value.filter(f => f.status === 'pending')
+  if (pendingFiles.length === 0) {
+    showToast('warning', '没有待上传的文件')
     return
   }
 
-  for (const fileItem of uploadingFiles.value) {
-    if (fileItem.status === 'pending') {
-      fileItem.status = 'uploading'
-      uploadProgress.value[fileItem.id] = 0
+  for (const fileItem of pendingFiles) {
+    fileItem.status = 'uploading'
+    fileItem.progress = 0
 
-      // 模拟上传进度
-      await new Promise(resolve => {
-        const interval = setInterval(() => {
-          uploadProgress.value[fileItem.id] += 10
-          if (uploadProgress.value[fileItem.id] >= 100) {
-            clearInterval(interval)
-            fileItem.status = 'completed'
+    try {
+      await uploadDocument(
+        fileItem.file,
+        'User', // TODO: 从登录状态获取真实用户名
+        (percent) => {
+          fileItem.progress = percent
+        }
+      )
 
-            // 添加到文件列表
-            allFiles.value.unshift({
-              id: Date.now() + Math.random(),
-              name: fileItem.name,
-              type: getFileType(fileItem.name),
-              size: fileItem.size,
-              chunks: Math.floor(Math.random() * 50) + 5,
-              status: 'completed',
-              uploadedAt: new Date().toLocaleString('zh-CN', {
-                year: 'numeric',
-                month: '2-digit',
-                day: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit'
-              }),
-              url: null
-            })
-
-            // 重置到第一页
-            currentPage.value = 1
-
-            resolve()
-          }
-        }, 200)
-      })
+      fileItem.status = 'completed'
+      fileItem.progress = 100
+    } catch (error) {
+      fileItem.status = 'failed'
+      fileItem.error = error.message || '上传失败'
     }
   }
 
-  showToast('success', `成功上传 ${uploadingFiles.value.length} 个文件`)
-  closeUploadDialog()
+  // 上传完成后刷新列表
+  const successCount = uploadingFiles.value.filter(f => f.status === 'completed').length
+  const failCount = uploadingFiles.value.filter(f => f.status === 'failed').length
+
+  if (successCount > 0) {
+    showToast('success', `成功上传 ${successCount} 个文件`)
+    await loadFiles()
+  }
+
+  if (failCount > 0) {
+    showToast('error', `${failCount} 个文件上传失败`)
+  }
+
+  // 3秒后关闭对话框
+  setTimeout(() => {
+    closeUploadDialog()
+  }, 3000)
 }
 
-const deleteFile = (file) => {
+// === 文件预览 ===
+const showPreview = ref(false)
+const previewFile = ref(null)
+
+const handlePreview = (file) => {
+  if (file.previewUrl) {
+    previewFile.value = file
+    showPreview.value = true
+  } else if (file.url) {
+    showToast('info', '该文件不支持预览，请下载查看')
+  } else {
+    showToast('warning', '文件链接不可用')
+  }
+}
+
+const closePreview = () => {
+  showPreview.value = false
+  previewFile.value = null
+}
+
+const handleDownload = (file) => {
+  if (file.url) {
+    window.open(file.url, '_blank')
+  } else {
+    showToast('warning', '文件链接不可用')
+  }
+}
+
+// === 删除文件 ===
+const handleDelete = (file) => {
   showConfirm(
     '确认删除',
     `确定要删除文件"${file.name}"吗？此操作不可恢复。`,
     'danger',
-    () => {
-      allFiles.value = allFiles.value.filter(f => f.id !== file.id)
-      showToast('success', '文件已删除')
-
-      // 如果当前页没有数据且不是第一页，回到上一页
-      if (files.value.length === 0 && currentPage.value > 1) {
-        currentPage.value--
+    async () => {
+      try {
+        await deleteDocument(file.id)
+        showToast('success', '文件删除成功')
+        await loadFiles()
+      } catch (error) {
+        showToast('error', error.message || '删除失败')
       }
     }
   )
 }
 
-// 预览状态
-const previewState = ref({
-  show: false,
-  file: null
+// === 分页 ===
+const handlePageChange = (page) => {
+  currentPage.value = page
+  loadFiles()
+}
+
+const handlePageSizeChange = (size) => {
+  pageSize.value = size
+  currentPage.value = 1
+  loadFiles()
+}
+
+// === 工具函数 ===
+const getFileIcon = (type) => {
+  const lowerType = type.toLowerCase()
+  return fileIconMap[lowerType] || IconFileText
+}
+
+const getFileColor = (type) => {
+  const lowerType = type.toLowerCase()
+  return fileColorMap[lowerType] || '#64748B'
+}
+
+const formatFileSize = (bytes) => {
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+}
+
+const formatDateTime = (dateTimeStr) => {
+  if (!dateTimeStr) return ''
+  // ISO 8601 格式转换为本地时间
+  const date = new Date(dateTimeStr)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hour = String(date.getHours()).padStart(2, '0')
+  const minute = String(date.getMinutes()).padStart(2, '0')
+  return `${year}-${month}-${day} ${hour}:${minute}`
+}
+
+// === 加载文件列表 ===
+const loadFiles = async () => {
+  loading.value = true
+  try {
+    const response = await getDocuments({
+      page: currentPage.value,
+      pageSize: pageSize.value,
+      sortBy: 'uploadedAt',
+      sortOrder: 'desc'
+    })
+
+    allFiles.value = response.data.map(doc => ({
+      id: doc.id,
+      name: doc.name,
+      type: doc.type,
+      size: formatFileSize(doc.size_bytes),
+      chunks: doc.chunk_count,
+      status: doc.status.toLowerCase(),
+      uploadedAt: formatDateTime(doc.uploaded_at),
+      operator: doc.operator,
+      url: null, // TODO: 后端需要添加原始文件 URL
+      previewUrl: null // TODO: 后端需要添加预览 URL
+    }))
+
+    totalItems.value = response.pagination.total_items
+    totalPages.value = response.pagination.total_pages
+  } catch (error) {
+    showToast('error', error.message || '加载文件列表失败')
+    allFiles.value = []
+    totalItems.value = 0
+    totalPages.value = 0
+  } finally {
+    loading.value = false
+  }
+}
+
+// === 生命周期 ===
+onMounted(() => {
+  loadFiles()
 })
-
-const previewFile = (file) => {
-  if (file.previewUrl) {
-    // 有预览 URL，打开预览弹窗
-    previewState.value = {
-      show: true,
-      file: file
-    }
-  } else if (file.url) {
-    // 有原始文件 URL 但没有预览 URL，提示不支持预览
-    showToast('warning', '该文件暂不支持在线预览，请下载查看')
-  } else {
-    showToast('warning', '该文件暂不支持预览')
-  }
-}
-
-const closePreview = () => {
-  previewState.value = {
-    show: false,
-    file: null
-  }
-}
-
-const downloadFile = (file) => {
-  if (file.url) {
-    const link = document.createElement('a')
-    link.href = file.url
-    link.download = file.name
-    link.click()
-    showToast('success', '开始下载文件')
-  } else {
-    showToast('warning', '该文件没有下载链接')
-  }
-}
-
-const removeUploadingFile = (id) => {
-  uploadingFiles.value = uploadingFiles.value.filter(f => f.id !== id)
-}
 </script>
 
 <template>
-  <div class="file-manager">
-    <!-- 头部操作栏 -->
-    <div class="header">
-      <div class="header-info">
-        <h2 class="title">文件管理</h2>
-        <p class="subtitle">共 {{ allFiles.length }} 个文件</p>
-      </div>
-
-      <button class="upload-btn" @click="openUploadDialog">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-          <polyline points="17 8 12 3 7 8" />
-          <line x1="12" y1="3" x2="12" y2="15" />
-        </svg>
-        上传文件
-      </button>
+  <div class="file-management">
+    <!-- 顶部工具栏 -->
+    <div class="toolbar">
+      <h2 class="title">文件管理</h2>
+      <button class="btn-upload" @click="openUploadDialog">上传文件</button>
     </div>
 
     <!-- 文件列表 -->
-    <div class="file-list" ref="tableRef">
-      <div class="list-header" :style="{ gridTemplateColumns }">
-        <div class="col-name header-cell">
-          文件名
-          <div class="resize-handle" @mousedown="startResize('name', $event)"></div>
+    <div class="file-list-container">
+      <div class="file-table" ref="tableRef">
+        <!-- 表头 -->
+        <div class="table-header" :style="{ gridTemplateColumns }">
+          <div class="header-cell">
+            <span>文件名</span>
+            <div class="resize-handle" @mousedown="startResize('name', $event)"></div>
+          </div>
+          <div class="header-cell">
+            <span>类型</span>
+            <div class="resize-handle" @mousedown="startResize('type', $event)"></div>
+          </div>
+          <div class="header-cell">
+            <span>大小</span>
+            <div class="resize-handle" @mousedown="startResize('size', $event)"></div>
+          </div>
+          <div class="header-cell">
+            <span>分块数</span>
+            <div class="resize-handle" @mousedown="startResize('chunks', $event)"></div>
+          </div>
+          <div class="header-cell">
+            <span>上传时间</span>
+            <div class="resize-handle" @mousedown="startResize('time', $event)"></div>
+          </div>
+          <div class="header-cell">
+            <span>操作</span>
+          </div>
         </div>
-        <div class="col-type header-cell">
-          类型
-          <div class="resize-handle" @mousedown="startResize('type', $event)"></div>
-        </div>
-        <div class="col-size header-cell">
-          大小
-          <div class="resize-handle" @mousedown="startResize('size', $event)"></div>
-        </div>
-        <div class="col-chunks header-cell">
-          分块数
-          <div class="resize-handle" @mousedown="startResize('chunks', $event)"></div>
-        </div>
-        <div class="col-time header-cell">
-          上传时间
-          <div class="resize-handle" @mousedown="startResize('time', $event)"></div>
-        </div>
-        <div class="col-actions header-cell">操作</div>
-      </div>
 
-      <div class="list-body">
-        <div v-for="file in files" :key="file.id" class="file-row" :style="{ gridTemplateColumns }">
-          <div class="col-name">
-            <div class="file-icon" :style="{ color: getFileColor(file.type) }">
-              <component :is="getFileIcon(file.type)" />
+        <!-- 加载状态 -->
+        <div v-if="loading" class="loading-state">
+          <div class="loading-spinner"></div>
+          <div class="loading-text">加载中...</div>
+        </div>
+
+        <!-- 空状态 -->
+        <div v-else-if="files.length === 0" class="empty-state">
+          <div class="empty-icon">📄</div>
+          <div class="empty-text">暂无文件</div>
+          <button class="btn-upload-empty" @click="openUploadDialog">上传文件</button>
+        </div>
+
+        <!-- 文件行 -->
+        <div v-else class="table-body">
+          <div
+            v-for="file in files"
+            :key="file.id"
+            class="file-row"
+            :style="{ gridTemplateColumns }"
+          >
+            <div class="cell cell-name">
+              <component :is="getFileIcon(file.type)" class="file-icon" />
+              <span class="file-name" :title="file.name">{{ file.name }}</span>
             </div>
-            <span class="file-name">{{ file.name }}</span>
-          </div>
-
-          <div class="col-type">
-            <span class="file-type-badge">
-              {{ file.type.toUpperCase() }}
-            </span>
-          </div>
-
-          <div class="col-size">{{ file.size }}</div>
-
-          <div class="col-chunks">{{ file.chunks }} 个</div>
-
-          <div class="col-time">{{ file.uploadedAt }}</div>
-
-          <div class="col-actions">
-            <button class="action-btn" @click="previewFile(file)" title="预览">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                <circle cx="12" cy="12" r="3" />
-              </svg>
-            </button>
-
-            <button class="action-btn delete" @click="deleteFile(file)" title="删除">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="3 6 5 6 21 6" />
-                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-              </svg>
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 分页 -->
-    <Pagination
-      :current-page="currentPage"
-      :total-pages="totalPages"
-      :total-items="allFiles.length"
-      :page-size="pageSize"
-      @page-change="handlePageChange"
-      @page-size-change="handlePageSizeChange"
-    />
-
-    <!-- 上传对话框 -->
-    <div v-if="showUploadDialog" class="dialog-overlay" @click="closeUploadDialog">
-      <div class="dialog" @click.stop>
-        <div class="dialog-header">
-          <h3>上传文件</h3>
-          <button class="close-btn" @click="closeUploadDialog">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
-        </div>
-
-        <div class="dialog-body">
-          <label class="file-select-area">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <polyline points="17 8 12 3 7 8" />
-              <line x1="12" y1="3" x2="12" y2="15" />
-            </svg>
-            <span>点击选择文件</span>
-            <p>支持 PDF、TXT、MD、DOCX 格式</p>
-            <input
-              type="file"
-              multiple
-              accept=".pdf,.txt,.md,.docx"
-              @change="handleFileInput"
-              style="display: none"
-            />
-          </label>
-
-          <!-- 待上传文件列表 -->
-          <div v-if="uploadingFiles.length > 0" class="uploading-list">
-            <div v-for="file in uploadingFiles" :key="file.id" class="uploading-item">
-              <div class="uploading-info">
-                <span class="uploading-name">{{ file.name }}</span>
-                <span class="uploading-size">{{ file.size }}</span>
-              </div>
-
-              <div v-if="file.status === 'uploading'" class="uploading-progress">
-                <div class="progress-bar" :style="{ width: uploadProgress[file.id] + '%' }"></div>
-              </div>
-
-              <button
-                v-if="file.status === 'pending'"
-                class="remove-btn"
-                @click="removeUploadingFile(file.id)"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
+            <div class="cell cell-type">
+              <span class="type-badge" :style="{ color: getFileColor(file.type), borderColor: getFileColor(file.type) }">
+                {{ file.type.toUpperCase() }}
+              </span>
+            </div>
+            <div class="cell cell-size">{{ file.size }}</div>
+            <div class="cell cell-chunks">{{ file.chunks }}</div>
+            <div class="cell cell-time">{{ file.uploadedAt }}</div>
+            <div class="cell cell-actions">
+              <button class="btn-action" @click="handlePreview(file)" title="预览">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M8 3C4.5 3 1.7 5.6 1 8c.7 2.4 3.5 5 7 5s6.3-2.6 7-5c-.7-2.4-3.5-5-7-5z" stroke="currentColor" stroke-width="1.5"/>
+                  <circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.5"/>
+                </svg>
+              </button>
+              <button class="btn-action btn-delete" @click="handleDelete(file)" title="删除">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M3 4h10M6 4V3h4v1M6 7v4M10 7v4M4 4l.5 8h7l.5-8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                 </svg>
               </button>
             </div>
           </div>
         </div>
+      </div>
 
-        <div class="dialog-footer">
-          <button class="cancel-btn" @click="closeUploadDialog">取消</button>
-          <button class="confirm-btn" @click="uploadFiles">开始上传</button>
+      <!-- 分页 -->
+      <Pagination
+        v-if="!loading && files.length > 0"
+        :currentPage="currentPage"
+        :totalPages="totalPages"
+        :totalItems="totalItems"
+        @page-change="handlePageChange"
+        @page-size-change="handlePageSizeChange"
+      />
+    </div>
+
+    <!-- 上传对话框 -->
+    <div v-if="showUploadDialog" class="upload-dialog-overlay" @click.self="closeUploadDialog">
+      <div class="upload-dialog">
+        <div class="upload-header">
+          <h3>上传文件</h3>
+          <button class="btn-close" @click="closeUploadDialog">✕</button>
+        </div>
+
+        <div class="upload-body">
+          <div class="upload-area">
+            <input
+              type="file"
+              id="file-input"
+              multiple
+              @change="handleFileInput"
+              accept=".pdf,.doc,.docx,.txt,.md,.markdown,.xls,.xlsx,.csv"
+            />
+            <label for="file-input" class="upload-label">
+              <div class="upload-icon">📁</div>
+              <div class="upload-text">点击选择文件或拖拽到此处</div>
+              <div class="upload-hint">支持 PDF、Word、Excel、Markdown、TXT、CSV</div>
+            </label>
+          </div>
+
+          <div v-if="uploadingFiles.length > 0" class="uploading-files">
+            <div v-for="file in uploadingFiles" :key="file.id" class="uploading-file">
+              <div class="file-info">
+                <span class="file-name">{{ file.name }}</span>
+                <span class="file-size">{{ file.size }}</span>
+              </div>
+              <div class="file-status">
+                <div v-if="file.status === 'pending'" class="status-pending">待上传</div>
+                <div v-else-if="file.status === 'uploading'" class="status-uploading">
+                  <div class="progress-bar">
+                    <div class="progress-fill" :style="{ width: file.progress + '%' }"></div>
+                  </div>
+                  <span class="progress-text">{{ file.progress }}%</span>
+                </div>
+                <div v-else-if="file.status === 'completed'" class="status-completed">✓ 完成</div>
+                <div v-else-if="file.status === 'failed'" class="status-failed">✕ {{ file.error }}</div>
+              </div>
+              <button
+                v-if="file.status === 'pending'"
+                class="btn-remove"
+                @click="removeUploadingFile(file.id)"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="upload-footer">
+          <button class="btn-cancel" @click="closeUploadDialog">取消</button>
+          <button
+            class="btn-confirm"
+            @click="startUpload"
+            :disabled="uploadingFiles.filter(f => f.status === 'pending').length === 0"
+          >
+            开始上传
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 文件预览 -->
+    <div v-if="showPreview" class="preview-overlay" @click.self="closePreview">
+      <div class="preview-container">
+        <div class="preview-header">
+          <div class="preview-title">
+            <component :is="getFileIcon(previewFile.type)" class="preview-icon" />
+            <span class="preview-filename">{{ previewFile.name }}</span>
+            <span class="preview-badge" :style="{ color: getFileColor(previewFile.type), borderColor: getFileColor(previewFile.type) }">
+              {{ previewFile.type.toUpperCase() }}
+            </span>
+          </div>
+          <div class="preview-actions">
+            <button class="btn-download" @click="handleDownload(previewFile)">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M8 2v8M5 7l3 3 3-3M3 14h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              下载
+            </button>
+            <button class="btn-close-preview" @click="closePreview">✕</button>
+          </div>
+        </div>
+        <div class="preview-content">
+          <iframe
+            :src="previewFile.previewUrl"
+            frameborder="0"
+            allowfullscreen
+          ></iframe>
         </div>
       </div>
     </div>
@@ -666,563 +602,540 @@ const removeUploadingFile = (id) => {
       @confirm="handleConfirm"
       @cancel="closeConfirm"
     />
-
-    <!-- 文件预览弹窗 -->
-    <div v-if="previewState.show" class="preview-overlay" @click="closePreview">
-      <div class="preview-dialog" @click.stop>
-        <div class="preview-header">
-          <div class="preview-title">
-            <span>{{ previewState.file?.name }}</span>
-            <span class="preview-badge">{{ previewState.file?.type.toUpperCase() }}</span>
-          </div>
-          <div class="preview-actions">
-            <button class="preview-download-btn" @click="downloadFile(previewState.file)">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                <polyline points="7 10 12 15 17 10" />
-                <line x1="12" y1="15" x2="12" y2="3" />
-              </svg>
-              下载原文件
-            </button>
-            <button class="preview-close-btn" @click="closePreview">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="18" y1="6" x2="6" y2="18" />
-                <line x1="6" y1="6" x2="18" y2="18" />
-              </svg>
-            </button>
-          </div>
-        </div>
-        <div class="preview-body">
-          <iframe
-            :src="previewState.file?.previewUrl"
-            class="preview-iframe"
-          ></iframe>
-        </div>
-      </div>
-    </div>
   </div>
 </template>
 
 <style scoped>
-.file-manager {
+.file-management {
   height: 100%;
   display: flex;
   flex-direction: column;
-  padding: 32px;
-  gap: 24px;
+  background: var(--surface-1);
 }
 
-/* 头部 */
-.header {
+.toolbar {
   display: flex;
   justify-content: space-between;
   align-items: center;
-}
-
-.header-info {
-  display: grid;
-  gap: 4px;
+  padding: var(--space-lg) var(--space-xl);
+  background: var(--surface-0);
+  border-bottom: 1px solid var(--border);
 }
 
 .title {
-  font-size: 24px;
+  font-size: 20px;
   font-weight: 600;
   color: var(--text-primary);
   margin: 0;
 }
 
-.subtitle {
-  font-size: 14px;
-  color: var(--text-secondary);
-  margin: 0;
-}
-
-.upload-btn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 24px;
+.btn-upload {
+  padding: 10px 20px;
   background: var(--primary);
-  color: #FFFFFF;
+  color: white;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
 }
 
-.upload-btn svg {
-  width: 18px;
-  height: 18px;
-}
-
-/* 文件列表 */
-.file-list {
+.file-list-container {
   flex: 1;
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  overflow: hidden;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
-.list-header,
-.file-row {
+.file-table {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: var(--space-lg) var(--space-xl);
+}
+
+.table-header {
   display: grid;
-  gap: 16px;
-  padding: 16px 20px;
-  align-items: center;
-}
-
-.list-header {
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--border);
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-secondary);
+  gap: var(--space-md);
+  padding: var(--space-md) 0;
+  border-bottom: 2px solid var(--border);
+  margin-bottom: var(--space-md);
 }
 
 .header-cell {
   position: relative;
-  display: flex;
-  align-items: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding-right: var(--space-md);
 }
 
 .resize-handle {
   position: absolute;
-  right: -8px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 16px;
-  height: 100%;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 8px;
   cursor: col-resize;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  user-select: none;
 }
 
-.resize-handle::before {
-  content: '';
-  width: 2px;
-  height: 60%;
-  background: var(--border);
-  transition: background 0.2s;
-}
-
-.resize-handle:hover::before {
+.resize-handle:hover {
   background: var(--primary);
+  opacity: 0.3;
 }
 
-.resize-handle:active::before {
-  background: var(--primary-hover);
-}
-
-.list-body {
+.table-body {
   flex: 1;
   overflow-y: auto;
 }
 
 .file-row {
+  display: grid;
+  gap: var(--space-md);
+  padding: var(--space-md) 0;
   border-bottom: 1px solid var(--border);
+  align-items: center;
+}
+
+.file-row:hover {
+  background: var(--surface-2);
+}
+
+.cell {
   font-size: 14px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.file-row:last-child {
-  border-bottom: none;
-}
-
-.col-name {
+.cell-name {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-sm);
 }
 
 .file-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   flex-shrink: 0;
-  position: relative;
-}
-
-.file-icon::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  background: currentColor;
-  opacity: 0.1;
-}
-
-.file-icon svg {
   width: 20px;
   height: 20px;
-  position: relative;
-  z-index: 1;
 }
 
 .file-name {
-  color: var(--text-primary);
-  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.file-type-badge {
+.type-badge {
   display: inline-block;
-  padding: 4px 10px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  padding: 2px 8px;
+  border: 1px solid;
+  border-radius: var(--radius-sm);
   font-size: 11px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  background: var(--surface-3);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  font-weight: 600;
 }
 
-.col-size,
-.col-chunks,
-.col-time {
-  color: var(--text-secondary);
-}
-
-.col-actions {
+.cell-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--space-sm);
 }
 
-.action-btn {
+.btn-action {
   width: 32px;
   height: 32px;
-  border: 1px solid var(--border);
-  background: transparent;
-  border-radius: 6px;
-  color: var(--text-secondary);
-  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0;
-  transition: all 0.2s;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-0);
+  color: var(--text-secondary);
+  cursor: pointer;
 }
 
-.action-btn:hover {
-  border-color: var(--primary);
-  color: var(--primary);
-  background: rgba(56, 189, 248, 0.1);
-}
-
-.action-btn.delete:hover {
+.btn-delete:hover {
   border-color: var(--error);
-  color: var(--error);
-  background: rgba(239, 68, 68, 0.1);
+  background: var(--error);
+  color: white;
 }
 
-.action-btn svg {
-  width: 16px;
-  height: 16px;
+/* 加载状态 */
+.loading-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-md);
 }
 
-/* 对话框 */
-.dialog-overlay {
+.loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-text {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+/* 空状态 */
+.empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-md);
+}
+
+.empty-icon {
+  font-size: 48px;
+  opacity: 0.3;
+}
+
+.empty-text {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.btn-upload-empty {
+  padding: 10px 20px;
+  background: var(--primary);
+  color: white;
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+/* 上传对话框 */
+.upload-dialog-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.4);
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 1000;
 }
 
-.dialog {
-  width: 560px;
-  background: var(--surface-1);
-  border-radius: 12px;
-  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
-  display: grid;
-  grid-template-rows: auto 1fr auto;
+.upload-dialog {
+  width: 600px;
+  max-height: 80vh;
+  background: var(--surface-0);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-.dialog-header {
+.upload-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 20px 24px;
+  padding: var(--space-lg) var(--space-xl);
   border-bottom: 1px solid var(--border);
 }
 
-.dialog-header h3 {
+.upload-header h3 {
+  margin: 0;
   font-size: 18px;
   font-weight: 600;
   color: var(--text-primary);
-  margin: 0;
 }
 
-.close-btn {
+.btn-close {
   width: 32px;
   height: 32px;
   border: none;
-  background: transparent;
-  color: var(--text-tertiary);
+  background: none;
+  font-size: 20px;
+  color: var(--text-secondary);
   cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
 }
 
-.close-btn svg {
-  width: 18px;
-  height: 18px;
-}
-
-.dialog-body {
-  padding: 24px;
-  display: grid;
-  gap: 16px;
-  max-height: 400px;
+.upload-body {
+  flex: 1;
+  padding: var(--space-xl);
   overflow-y: auto;
 }
 
-.file-select-area {
-  border: 2px dashed var(--border);
-  border-radius: 8px;
-  padding: 40px 24px;
+.upload-area {
+  position: relative;
+  margin-bottom: var(--space-lg);
+}
+
+#file-input {
+  display: none;
+}
+
+.upload-label {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  justify-content: center;
+  padding: var(--space-xl);
+  border: 2px dashed var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
   cursor: pointer;
 }
 
-.file-select-area svg {
-  width: 40px;
-  height: 40px;
-  color: var(--primary);
-}
-
-.file-select-area span {
-  font-size: 16px;
-  color: var(--text-primary);
-}
-
-.file-select-area p {
-  font-size: 14px;
-  color: var(--text-secondary);
-  margin: 0;
-}
-
-.uploading-list {
-  display: grid;
-  gap: 12px;
-}
-
-.uploading-item {
-  padding: 12px;
+.upload-label:hover {
+  border-color: var(--primary);
   background: var(--surface-2);
-  border-radius: 8px;
-  display: grid;
-  gap: 8px;
-  position: relative;
 }
 
-.uploading-info {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+.upload-icon {
+  font-size: 48px;
+  margin-bottom: var(--space-md);
 }
 
-.uploading-name {
+.upload-text {
   font-size: 14px;
   color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  margin-bottom: var(--space-sm);
 }
 
-.uploading-size {
-  font-size: 13px;
-  color: var(--text-secondary);
+.upload-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.uploading-files {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.uploading-file {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-md);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+}
+
+.file-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.file-info .file-name {
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.file-info .file-size {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.file-status {
   flex-shrink: 0;
-  margin-left: 12px;
+  width: 120px;
 }
 
-.uploading-progress {
-  height: 4px;
-  background: var(--surface-3);
-  border-radius: 4px;
-  overflow: hidden;
+.status-pending {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.status-uploading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
 }
 
 .progress-bar {
-  height: 100%;
-  background: var(--primary);
+  flex: 1;
+  height: 4px;
+  background: var(--surface-2);
+  border-radius: 2px;
+  overflow: hidden;
 }
 
-.remove-btn {
-  position: absolute;
-  top: 8px;
-  right: 8px;
+.progress-fill {
+  height: 100%;
+  background: var(--primary);
+  transition: width 0.3s;
+}
+
+.progress-text {
+  font-size: 12px;
+  color: var(--text-secondary);
+  width: 40px;
+  text-align: right;
+}
+
+.status-completed {
+  font-size: 12px;
+  color: var(--success);
+}
+
+.status-failed {
+  font-size: 12px;
+  color: var(--error);
+}
+
+.btn-remove {
+  flex-shrink: 0;
   width: 24px;
   height: 24px;
   border: none;
-  background: transparent;
+  background: none;
+  font-size: 16px;
   color: var(--text-tertiary);
   cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
 }
 
-.remove-btn svg {
-  width: 14px;
-  height: 14px;
+.btn-remove:hover {
+  color: var(--error);
 }
 
-.dialog-footer {
-  padding: 16px 24px;
-  border-top: 1px solid var(--border);
+.upload-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 12px;
+  gap: var(--space-md);
+  padding: var(--space-lg) var(--space-xl);
+  border-top: 1px solid var(--border);
 }
 
-.cancel-btn,
-.confirm-btn {
-  padding: 10px 24px;
-  border-radius: 8px;
+.btn-cancel {
+  padding: 10px 20px;
+  border: 1px solid var(--border);
+  background: var(--surface-0);
+  color: var(--text-primary);
+  border-radius: var(--radius-md);
   font-size: 14px;
-  font-weight: 500;
   cursor: pointer;
 }
 
-.cancel-btn {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text-secondary);
-}
-
-.confirm-btn {
-  background: var(--primary);
+.btn-confirm {
+  padding: 10px 20px;
   border: none;
-  color: #FFFFFF;
+  background: var(--primary);
+  color: white;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  cursor: pointer;
 }
 
-/* 预览弹窗 */
+.btn-confirm:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 文件预览 */
 .preview-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  inset: 0;
+  background: rgba(0, 0, 0, 0.8);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 2000;
 }
 
-.preview-dialog {
-  background: var(--surface-1);
-  border-radius: 12px;
+.preview-container {
   width: 95vw;
   height: 95vh;
-  max-width: 1600px;
+  background: var(--surface-0);
+  border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
 }
 
 .preview-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 20px 24px;
+  padding: var(--space-lg) var(--space-xl);
   border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
+  background: var(--surface-0);
 }
 
 .preview-title {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-md);
+}
+
+.preview-icon {
+  width: 24px;
+  height: 24px;
+}
+
+.preview-filename {
   font-size: 16px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text-primary);
 }
 
 .preview-badge {
-  padding: 4px 8px;
-  background: var(--primary);
-  color: white;
-  border-radius: 4px;
+  padding: 2px 8px;
+  border: 1px solid;
+  border-radius: var(--radius-sm);
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.5px;
 }
 
 .preview-actions {
   display: flex;
-  gap: 12px;
   align-items: center;
+  gap: var(--space-md);
 }
 
-.preview-download-btn {
+.btn-download {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-sm);
   padding: 8px 16px;
-  background: var(--primary);
-  color: white;
-  border: none;
-  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-0);
+  color: var(--text-primary);
+  border-radius: var(--radius-md);
   font-size: 14px;
-  font-weight: 500;
   cursor: pointer;
 }
 
-.preview-download-btn svg {
-  width: 16px;
-  height: 16px;
+.btn-download:hover {
+  background: var(--surface-2);
 }
 
-.preview-close-btn {
-  width: 36px;
-  height: 36px;
-  border: 1px solid var(--border);
-  background: var(--surface-1);
-  border-radius: 6px;
+.btn-close-preview {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: none;
+  font-size: 20px;
   color: var(--text-secondary);
   cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
 }
 
-.preview-close-btn svg {
-  width: 18px;
-  height: 18px;
-}
-
-.preview-body {
+.preview-content {
   flex: 1;
   overflow: hidden;
-  background: var(--surface-3);
 }
 
-.preview-iframe {
+.preview-content iframe {
   width: 100%;
   height: 100%;
-  border: none;
 }
 </style>
