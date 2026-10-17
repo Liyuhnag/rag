@@ -1,11 +1,28 @@
 # -*- coding: utf-8 -*-
-"""测试用的进程内文档记录。正式环境走 model.document.orm 的 SQL。"""
+"""测试用的进程内文档存储。"""
 
+from config import Settings
 from model.document import Document
+from services.document import DocumentStore
+from services.document.object_storage import ObjectStorage
+
+
+class MemoryObjectStorage(ObjectStorage):
+    """进程内对象存储。"""
+
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+
+    def put(self, key: str, content: bytes, content_type: str) -> None:
+        del content_type
+        self.objects[key] = content
+
+    def delete(self, key: str) -> None:
+        self.objects.pop(key, None)
 
 
 class MemoryDocumentRepository:
-    """测试用的进程内记录。"""
+    """进程内文档记录。"""
 
     def __init__(self) -> None:
         self.records: dict[str, Document] = {}
@@ -41,3 +58,17 @@ class MemoryDocumentRepository:
         records.sort(key=sort_key, reverse=reverse)
         start = (page - 1) * page_size
         return records[start : start + page_size], len(records)
+
+
+def memory_document_store(settings: Settings) -> DocumentStore:
+    """用进程内实现组装文档服务。"""
+    records = MemoryDocumentRepository()
+    return DocumentStore(
+        MemoryObjectStorage(),
+        records.insert,
+        records.get,
+        records.delete,
+        records.list_page,
+        bucket=settings.s3_bucket,
+        file_base_url=settings.file_base_url,
+    )

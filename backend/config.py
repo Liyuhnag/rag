@@ -58,7 +58,6 @@ class Settings:
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     )
-    storage_backend: str = "memory"
     s3_endpoint: str = ""
     s3_region: str = "us-east-1"
     s3_access_key_id: str = ""
@@ -86,20 +85,9 @@ def load_settings() -> Settings:
     if max_upload_bytes < 1:
         raise RuntimeError("MAX_UPLOAD_BYTES 必须大于 0")
 
-    backend = os.getenv("STORAGE_BACKEND", "s3").strip().lower()
-    if backend not in {"s3", "memory"}:
-        raise RuntimeError("STORAGE_BACKEND 必须是 s3 或 memory")
-
-    settings = Settings(
-        max_upload_bytes=max_upload_bytes,
-        cors_origins=_cors_origins_from_env(),
-        storage_backend=backend,
-        s3_region=os.getenv("S3_REGION", "us-east-1").strip() or "us-east-1",
-        mysql_host=os.getenv("MYSQL_HOST", "127.0.0.1").strip() or "127.0.0.1",
-        file_base_url=os.getenv("FILE_BASE_URL", "").strip().rstrip("/"),
-    )
-    if backend == "memory":
-        return settings
+    s3_region = os.getenv("S3_REGION", "us-east-1").strip() or "us-east-1"
+    mysql_host = os.getenv("MYSQL_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    file_base_url = os.getenv("FILE_BASE_URL", "").strip().rstrip("/")
 
     raw_port = os.getenv("MYSQL_PORT", "3306").strip()
     try:
@@ -110,11 +98,10 @@ def load_settings() -> Settings:
         raise RuntimeError("MYSQL_PORT 必须在 1 到 65535 之间")
 
     return Settings(
-        max_upload_bytes=settings.max_upload_bytes,
-        cors_origins=settings.cors_origins,
-        storage_backend=backend,
+        max_upload_bytes=max_upload_bytes,
+        cors_origins=_cors_origins_from_env(),
         s3_endpoint=_required("S3_ENDPOINT"),
-        s3_region=settings.s3_region,
+        s3_region=s3_region,
         s3_access_key_id=_first_present(
             "S3_ACCESS_KEY_ID",
             "AWS_ACCESS_KEY_ID",
@@ -124,10 +111,10 @@ def load_settings() -> Settings:
             "AWS_SECRET_ACCESS_KEY",
         ),
         s3_bucket=_required("S3_BUCKET"),
-        mysql_host=settings.mysql_host,
+        mysql_host=mysql_host,
         mysql_port=mysql_port,
         mysql_user=_required("MYSQL_USER"),
         mysql_password=_required("MYSQL_PASSWORD"),
         mysql_database=_required("MYSQL_DATABASE"),
-        file_base_url=settings.file_base_url,
+        file_base_url=file_base_url,
     )

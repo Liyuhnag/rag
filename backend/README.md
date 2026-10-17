@@ -26,7 +26,6 @@ uv run pytest
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `STORAGE_BACKEND` | `s3` | `s3` 使用对象存储和 MySQL；`memory` 只用于测试 |
 | `MAX_UPLOAD_BYTES` | `20971520` | 单个文件上限，20MB |
 | `CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | 允许的前端来源，逗号分隔 |
 | `S3_ENDPOINT` | 无 | S3 地址，例如 `http://127.0.0.1:8333` |

@@ -13,10 +13,8 @@ from model.common.database import configure as configure_database
 from model.document import Document
 from model.document import DocumentStatus
 from model.document import orm as document_orm
-from services.document.object_storage import MemoryObjectStorage
 from services.document.object_storage import ObjectStorage
 from services.document.object_storage import S3ObjectStorage
-from services.document.repository import MemoryDocumentRepository
 from services.exceptions import StorageError
 
 
@@ -125,18 +123,7 @@ class DocumentStore:
 
 
 def build_document_store(settings: Settings) -> DocumentStore:
-    """按配置组装文档服务。测试默认使用内存实现。"""
-    if settings.storage_backend == "memory":
-        records = MemoryDocumentRepository()
-        return DocumentStore(
-            MemoryObjectStorage(),
-            records.insert,
-            records.get,
-            records.delete,
-            records.list_page,
-            bucket=settings.s3_bucket,
-            file_base_url=settings.file_base_url,
-        )
+    """按配置组装文档服务。"""
     configure_database(
         host=settings.mysql_host,
         port=settings.mysql_port,

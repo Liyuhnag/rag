@@ -25,20 +25,6 @@ class ObjectStorage:
         raise NotImplementedError
 
 
-class MemoryObjectStorage(ObjectStorage):
-    """测试用的进程内对象存储。"""
-
-    def __init__(self) -> None:
-        self.objects: dict[str, bytes] = {}
-
-    def put(self, key: str, content: bytes, content_type: str) -> None:
-        del content_type
-        self.objects[key] = content
-
-    def delete(self, key: str) -> None:
-        self.objects.pop(key, None)
-
-
 class S3ObjectStorage(ObjectStorage):
     """路径风格的 S3 兼容存储。"""
 
