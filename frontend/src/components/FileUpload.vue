@@ -1,35 +1,72 @@
 <script setup>
 import { ref } from 'vue'
+import Alert from './Alert.vue'
 
-// 已上传的文件列表（模拟数据）
-const uploadedFiles = ref([
+// 文件列表（模拟数据）
+const files = ref([
   {
     id: 1,
     name: 'RAG技术文档.pdf',
+    type: 'pdf',
     size: '2.5 MB',
     chunks: 45,
     status: 'completed',
-    uploadedAt: '2026-10-15 14:30'
+    uploadedAt: '2026-10-15 14:30',
+    url: null // 预留预览 URL
   },
   {
     id: 2,
     name: '向量数据库介绍.md',
+    type: 'md',
     size: '156 KB',
     chunks: 12,
     status: 'completed',
-    uploadedAt: '2026-10-14 09:15'
+    uploadedAt: '2026-10-14 09:15',
+    url: null
+  },
+  {
+    id: 3,
+    name: '项目需求文档.docx',
+    type: 'docx',
+    size: '1.2 MB',
+    chunks: 28,
+    status: 'completed',
+    uploadedAt: '2026-10-13 16:20',
+    url: null
   }
 ])
 
-// 待上传的文件
-const pendingFiles = ref([])
-const isDragging = ref(false)
+// Alert 状态
+const alertState = ref({
+  show: false,
+  type: 'info',
+  message: ''
+})
+
+// 显示上传对话框
+const showUploadDialog = ref(false)
+const uploadingFiles = ref([])
 const uploadProgress = ref({})
 
-const handleDrop = (e) => {
-  isDragging.value = false
-  const droppedFiles = Array.from(e.dataTransfer.files)
-  addFiles(droppedFiles)
+const showAlert = (type, message) => {
+  alertState.value = {
+    show: true,
+    type,
+    message
+  }
+}
+
+const closeAlert = () => {
+  alertState.value.show = false
+}
+
+const openUploadDialog = () => {
+  showUploadDialog.value = true
+}
+
+const closeUploadDialog = () => {
+  showUploadDialog.value = false
+  uploadingFiles.value = []
 }
 
 const handleFileInput = (e) => {
@@ -39,8 +76,8 @@ const handleFileInput = (e) => {
 
 const addFiles = (newFiles) => {
   newFiles.forEach(file => {
-    if (!pendingFiles.value.find(f => f.name === file.name)) {
-      pendingFiles.value.push({
+    if (!uploadingFiles.value.find(f => f.name === file.name)) {
+      uploadingFiles.value.push({
         id: Date.now() + Math.random(),
         name: file.name,
         size: formatFileSize(file.size),
@@ -59,18 +96,18 @@ const formatFileSize = (bytes) => {
   return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i]
 }
 
-const removePendingFile = (id) => {
-  pendingFiles.value = pendingFiles.value.filter(f => f.id !== id)
-}
-
-const deleteUploadedFile = (id) => {
-  if (confirm('确定要删除这个文件吗？')) {
-    uploadedFiles.value = uploadedFiles.value.filter(f => f.id !== id)
-  }
+const getFileType = (filename) => {
+  const ext = filename.split('.').pop().toLowerCase()
+  return ext
 }
 
 const uploadFiles = async () => {
-  for (const fileItem of pendingFiles.value) {
+  if (uploadingFiles.value.length === 0) {
+    showAlert('warning', '请先选择要上传的文件')
+    return
+  }
+
+  for (const fileItem of uploadingFiles.value) {
     if (fileItem.status === 'pending') {
       fileItem.status = 'uploading'
       uploadProgress.value[fileItem.id] = 0
@@ -83,10 +120,11 @@ const uploadFiles = async () => {
             clearInterval(interval)
             fileItem.status = 'completed'
 
-            // 移动到已上传列表
-            uploadedFiles.value.unshift({
+            // 添加到文件列表
+            files.value.unshift({
               id: Date.now() + Math.random(),
               name: fileItem.name,
+              type: getFileType(fileItem.name),
               size: fileItem.size,
               chunks: Math.floor(Math.random() * 50) + 5,
               status: 'completed',
@@ -96,7 +134,8 @@ const uploadFiles = async () => {
                 day: '2-digit',
                 hour: '2-digit',
                 minute: '2-digit'
-              })
+              }),
+              url: null
             })
 
             resolve()
@@ -106,93 +145,98 @@ const uploadFiles = async () => {
     }
   }
 
-  // 清空待上传列表
-  pendingFiles.value = pendingFiles.value.filter(f => f.status !== 'completed')
+  showAlert('success', `成功上传 ${uploadingFiles.value.length} 个文件`)
+  closeUploadDialog()
+}
+
+const deleteFile = (file) => {
+  showAlert('warning', `确定要删除文件"${file.name}"吗？`)
+  // TODO: 实现确认后删除逻辑
+  // 临时实现：3秒后自动删除
+  setTimeout(() => {
+    files.value = files.value.filter(f => f.id !== file.id)
+    showAlert('success', '文件已删除')
+  }, 3000)
+}
+
+const previewFile = (file) => {
+  if (file.url) {
+    // TODO: 集成文件预览组件库
+    showAlert('info', '文件预览功能开发中...')
+  } else {
+    showAlert('warning', '该文件暂不支持预览')
+  }
+}
+
+const removeUploadingFile = (id) => {
+  uploadingFiles.value = uploadingFiles.value.filter(f => f.id !== id)
 }
 </script>
 
 <template>
   <div class="file-manager">
-    <!-- 上传区域 -->
-    <div class="upload-section">
-      <div class="section-header">
-        <h2 class="section-title">上传文件</h2>
-        <p class="section-desc">支持 PDF、TXT、MD、DOCX 格式</p>
+    <!-- 头部操作栏 -->
+    <div class="header">
+      <div class="header-info">
+        <h2 class="title">文件管理</h2>
+        <p class="subtitle">共 {{ files.length }} 个文件</p>
       </div>
 
-      <div
-        class="drop-zone"
-        :class="{ dragging: isDragging }"
-        @drop.prevent="handleDrop"
-        @dragover.prevent="isDragging = true"
-        @dragleave.prevent="isDragging = false"
-      >
-        <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <button class="upload-btn" @click="openUploadDialog">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
           <polyline points="17 8 12 3 7 8" />
           <line x1="12" y1="3" x2="12" y2="15" />
         </svg>
-        <p class="drop-text">拖拽文件到此处</p>
-        <p class="drop-or">或</p>
-        <label class="select-btn">
-          选择文件
-          <input
-            type="file"
-            multiple
-            accept=".pdf,.txt,.md,.docx"
-            @change="handleFileInput"
-            style="display: none"
-          />
-        </label>
+        上传文件
+      </button>
+    </div>
+
+    <!-- 文件列表 -->
+    <div class="file-list">
+      <div class="list-header">
+        <div class="col-name">文件名</div>
+        <div class="col-type">类型</div>
+        <div class="col-size">大小</div>
+        <div class="col-chunks">分块数</div>
+        <div class="col-time">上传时间</div>
+        <div class="col-actions">操作</div>
       </div>
 
-      <!-- 待上传列表 -->
-      <div v-if="pendingFiles.length > 0" class="pending-list">
-        <div class="list-header">
-          <span class="list-title">待上传 ({{ pendingFiles.length }})</span>
-          <button
-            class="upload-btn"
-            @click="uploadFiles"
-            :disabled="pendingFiles.every(f => f.status !== 'pending')"
-          >
-            开始上传
-          </button>
-        </div>
-
-        <div class="file-items">
-          <div
-            v-for="file in pendingFiles"
-            :key="file.id"
-            class="file-item pending"
-          >
-            <div class="file-icon">
+      <div class="list-body">
+        <div v-for="file in files" :key="file.id" class="file-row">
+          <div class="col-name">
+            <div class="file-icon" :class="`icon-${file.type}`">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
                 <polyline points="13 2 13 9 20 9" />
               </svg>
             </div>
+            <span class="file-name">{{ file.name }}</span>
+          </div>
 
-            <div class="file-details">
-              <div class="file-name">{{ file.name }}</div>
-              <div class="file-meta">
-                <span class="file-size">{{ file.size }}</span>
-                <span class="file-status" :class="file.status">
-                  {{ file.status === 'pending' ? '待上传' : file.status === 'uploading' ? '上传中...' : '已完成' }}
-                </span>
-              </div>
-              <div v-if="file.status === 'uploading'" class="progress">
-                <div class="progress-bar" :style="{ width: uploadProgress[file.id] + '%' }"></div>
-              </div>
-            </div>
+          <div class="col-type">
+            <span class="file-type-badge">{{ file.type.toUpperCase() }}</span>
+          </div>
 
-            <button
-              class="file-action"
-              @click="removePendingFile(file.id)"
-              :disabled="file.status === 'uploading'"
-            >
+          <div class="col-size">{{ file.size }}</div>
+
+          <div class="col-chunks">{{ file.chunks }} 个</div>
+
+          <div class="col-time">{{ file.uploadedAt }}</div>
+
+          <div class="col-actions">
+            <button class="action-btn" @click="previewFile(file)">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="18" y1="6" x2="6" y2="18" />
-                <line x1="6" y1="6" x2="18" y2="18" />
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+            </button>
+
+            <button class="action-btn" @click="deleteFile(file)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="3 6 5 6 21 6" />
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
               </svg>
             </button>
           </div>
@@ -200,146 +244,120 @@ const uploadFiles = async () => {
       </div>
     </div>
 
-    <!-- 已上传文件列表 -->
-    <div class="uploaded-section">
-      <div class="section-header">
-        <h2 class="section-title">已上传文件</h2>
-        <p class="section-desc">共 {{ uploadedFiles.length }} 个文件</p>
-      </div>
-
-      <div class="file-items">
-        <div
-          v-for="file in uploadedFiles"
-          :key="file.id"
-          class="file-item uploaded"
-        >
-          <div class="file-icon">
+    <!-- 上传对话框 -->
+    <div v-if="showUploadDialog" class="dialog-overlay" @click="closeUploadDialog">
+      <div class="dialog" @click.stop>
+        <div class="dialog-header">
+          <h3>上传文件</h3>
+          <button class="close-btn" @click="closeUploadDialog">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
-              <polyline points="13 2 13 9 20 9" />
-            </svg>
-          </div>
-
-          <div class="file-details">
-            <div class="file-name">{{ file.name }}</div>
-            <div class="file-meta">
-              <span class="file-size">{{ file.size }}</span>
-              <span class="file-chunks">{{ file.chunks }} 个分块</span>
-              <span class="file-date">{{ file.uploadedAt }}</span>
-            </div>
-          </div>
-
-          <button
-            class="file-action"
-            @click="deleteUploadedFile(file.id)"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="3 6 5 6 21 6" />
-              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
             </svg>
           </button>
         </div>
+
+        <div class="dialog-body">
+          <label class="file-select-area">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+            <span>点击选择文件</span>
+            <p>支持 PDF、TXT、MD、DOCX 格式</p>
+            <input
+              type="file"
+              multiple
+              accept=".pdf,.txt,.md,.docx"
+              @change="handleFileInput"
+              style="display: none"
+            />
+          </label>
+
+          <!-- 待上传文件列表 -->
+          <div v-if="uploadingFiles.length > 0" class="uploading-list">
+            <div v-for="file in uploadingFiles" :key="file.id" class="uploading-item">
+              <div class="uploading-info">
+                <span class="uploading-name">{{ file.name }}</span>
+                <span class="uploading-size">{{ file.size }}</span>
+              </div>
+
+              <div v-if="file.status === 'uploading'" class="uploading-progress">
+                <div class="progress-bar" :style="{ width: uploadProgress[file.id] + '%' }"></div>
+              </div>
+
+              <button
+                v-if="file.status === 'pending'"
+                class="remove-btn"
+                @click="removeUploadingFile(file.id)"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="dialog-footer">
+          <button class="cancel-btn" @click="closeUploadDialog">取消</button>
+          <button class="confirm-btn" @click="uploadFiles">开始上传</button>
+        </div>
       </div>
     </div>
+
+    <!-- Alert 组件 -->
+    <Alert
+      :type="alertState.type"
+      :message="alertState.message"
+      :show="alertState.show"
+      @close="closeAlert"
+    />
   </div>
 </template>
 
 <style scoped>
 .file-manager {
-  max-width: 1000px;
-  margin: 0 auto;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
   padding: 32px;
-  display: grid;
-  gap: 32px;
-}
-
-.upload-section,
-.uploaded-section {
-  display: grid;
   gap: 24px;
 }
 
-.section-header {
-  display: grid;
-  gap: 4px;
-}
-
-.section-title {
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.section-desc {
-  font-size: 14px;
-  color: var(--text-secondary);
-}
-
-.drop-zone {
-  border: 2px dashed var(--border);
-  border-radius: 8px;
-  background: var(--surface-1);
-  padding: 48px 24px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-}
-
-.drop-zone.dragging {
-  border-color: var(--accent);
-  background: var(--accent-light);
-}
-
-.upload-icon {
-  width: 48px;
-  height: 48px;
-  color: var(--accent);
-}
-
-.drop-text {
-  font-size: 16px;
-  color: var(--text-primary);
-}
-
-.drop-or {
-  font-size: 14px;
-  color: var(--text-dim);
-}
-
-.select-btn {
-  padding: 10px 24px;
-  background: var(--accent);
-  color: #FFFFFF;
-  border-radius: 8px;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.pending-list {
-  background: var(--surface-2);
-  border-radius: 8px;
-  padding: 16px;
-  display: grid;
-  gap: 16px;
-}
-
-.list-header {
+/* 头部 */
+.header {
   display: flex;
   justify-content: space-between;
   align-items: center;
 }
 
-.list-title {
-  font-size: 16px;
+.header-info {
+  display: grid;
+  gap: 4px;
+}
+
+.title {
+  font-size: 24px;
   font-weight: 600;
   color: var(--text-primary);
+  margin: 0;
+}
+
+.subtitle {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin: 0;
 }
 
 .upload-btn {
-  padding: 8px 20px;
-  background: var(--accent);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 24px;
+  background: var(--primary);
   color: #FFFFFF;
   border: none;
   border-radius: 8px;
@@ -348,91 +366,251 @@ const uploadFiles = async () => {
   cursor: pointer;
 }
 
-.upload-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+.upload-btn svg {
+  width: 18px;
+  height: 18px;
 }
 
-.file-items {
-  display: grid;
-  gap: 8px;
-}
-
-.file-item {
-  display: grid;
-  grid-template-columns: 40px 1fr auto;
-  gap: 16px;
-  align-items: center;
-  padding: 12px;
-  border-radius: 8px;
-}
-
-.file-item.pending {
-  background: var(--surface-1);
-}
-
-.file-item.uploaded {
+/* 文件列表 */
+.file-list {
+  flex: 1;
   background: var(--surface-1);
   border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.list-header,
+.file-row {
+  display: grid;
+  grid-template-columns: 2fr 100px 120px 120px 180px 120px;
+  gap: 16px;
+  padding: 16px 20px;
+  align-items: center;
+}
+
+.list-header {
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.list-body {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.file-row {
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+
+.file-row:last-child {
+  border-bottom: none;
+}
+
+.col-name {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .file-icon {
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   border-radius: 8px;
-  background: var(--surface-3);
+  background: var(--surface-2);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--accent);
+  flex-shrink: 0;
 }
 
 .file-icon svg {
-  width: 20px;
-  height: 20px;
-}
-
-.file-details {
-  min-width: 0;
-  display: grid;
-  gap: 4px;
+  width: 18px;
+  height: 18px;
+  color: var(--primary);
 }
 
 .file-name {
-  font-size: 14px;
-  font-weight: 500;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.file-meta {
+.file-type-badge {
+  display: inline-block;
+  padding: 4px 8px;
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.col-size,
+.col-chunks,
+.col-time {
+  color: var(--text-secondary);
+}
+
+.col-actions {
   display: flex;
+  gap: 8px;
+}
+
+.action-btn {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.action-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* 对话框 */
+.dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.dialog {
+  width: 560px;
+  background: var(--surface-1);
+  border-radius: 12px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+}
+
+.dialog-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.dialog-header h3 {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.close-btn {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.close-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.dialog-body {
+  padding: 24px;
+  display: grid;
+  gap: 16px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.file-select-area {
+  border: 2px dashed var(--border);
+  border-radius: 8px;
+  padding: 40px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   gap: 12px;
+  cursor: pointer;
+}
+
+.file-select-area svg {
+  width: 40px;
+  height: 40px;
+  color: var(--primary);
+}
+
+.file-select-area span {
+  font-size: 16px;
+  color: var(--text-primary);
+}
+
+.file-select-area p {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.uploading-list {
+  display: grid;
+  gap: 12px;
+}
+
+.uploading-item {
+  padding: 12px;
+  background: var(--surface-2);
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  position: relative;
+}
+
+.uploading-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.uploading-name {
+  font-size: 14px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.uploading-size {
   font-size: 13px;
   color: var(--text-secondary);
+  flex-shrink: 0;
+  margin-left: 12px;
 }
 
-.file-status {
-  color: var(--text-secondary);
-}
-
-.file-status.uploading {
-  color: var(--accent);
-}
-
-.file-status.completed {
-  color: #10B981;
-}
-
-.file-chunks,
-.file-date {
-  color: var(--text-dim);
-}
-
-.progress {
-  margin-top: 8px;
+.uploading-progress {
   height: 4px;
   background: var(--surface-3);
   border-radius: 4px;
@@ -441,29 +619,56 @@ const uploadFiles = async () => {
 
 .progress-bar {
   height: 100%;
-  background: var(--accent);
+  background: var(--primary);
 }
 
-.file-action {
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
+.remove-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  border: none;
   background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text-dim);
+  color: var(--text-tertiary);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 0;
 }
 
-.file-action:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
+.remove-btn svg {
+  width: 14px;
+  height: 14px;
 }
 
-.file-action svg {
-  width: 16px;
-  height: 16px;
+.dialog-footer {
+  padding: 16px 24px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.cancel-btn,
+.confirm-btn {
+  padding: 10px 24px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.cancel-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+.confirm-btn {
+  background: var(--primary);
+  border: none;
+  color: #FFFFFF;
 }
 </style>
