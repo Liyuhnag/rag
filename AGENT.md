@@ -227,3 +227,88 @@ git checkout -b feat/功能名
 git reflog
 git cherry-pick <commit-hash>
 ```
+
+## 飞书项目管理规范
+
+### 项目管理多维表格
+
+**表格地址：** https://ocn0mresg7ps.feishu.cn/base/JVnnbUcNEaSkvqs7XhTc8ZbKnjf?table=tblDay8wKWi3Vjpf&view=vewhWaSvDl
+
+### 开发流程
+
+#### 1. 开始任务开发
+
+1. 在飞书多维表格中找到对应任务
+2. 将任务状态更新为 **"开发中"**
+3. 从 `feature` 分支创建对应的功能分支
+4. 开始开发工作
+
+```bash
+# 示例
+git checkout feature
+git pull origin feature
+git checkout -b feat/file-list-upload-merge
+```
+
+#### 2. 开发过程中
+
+- 按照 Git 提交规范进行提交
+- 及时更新任务进度（如有需要）
+- 将设计文档写入飞书知识库
+
+**知识库地址：** https://ocn0mresg7ps.feishu.cn/wiki/Glekw2U3giVrOukDOcIcVkCPndf
+
+#### 3. 完成开发
+
+1. 确保代码通过测试
+2. 将功能分支合并回 `feature` 分支
+3. 推送到远程仓库
+4. 创建 Pull Request (PR)
+5. **将 PR 链接更新到飞书表格对应任务的 PR 字段**
+6. **将任务状态更新为 "开发完成"**
+
+```bash
+# 合并到 feature 分支
+git checkout feature
+git merge feat/file-list-upload-merge
+git push origin feature
+
+# 创建 PR（使用 GitHub CLI）
+gh pr create --base main --head feature --title "feat: 文件列表与上传合并" --body "具体的功能描述"
+```
+
+#### 4. 任务状态说明
+
+- **待开发**：任务已创建，等待开始
+- **开发中**：正在进行开发工作
+- **开发完成**：代码已提交并创建 PR，等待审查
+- **已上线**：代码已合并到 main 并部署（由负责人操作）
+
+### 设计文档规范
+
+所有设计文档都应该写入飞书知识库，包括但不限于：
+
+- API 接口设计
+- 数据库设计
+- 架构设计
+- 技术方案
+- 性能优化方案
+
+**文档命名规范：** `[模块名] 功能名称 - 文档类型`
+
+示例：
+- `[前端] 文件上传 - 技术方案`
+- `[后端] 向量检索 - API 设计`
+- `[架构] RAG 系统 - 整体设计`
+
+### Agent 自动化工作流程
+
+当收到任务标题时，Agent 应自动执行以下步骤：
+
+1. **更新飞书表格** - 将任务状态改为"开发中"
+2. **创建功能分支** - 从 feature 切出对应的 feat 分支
+3. **执行开发工作** - 实现功能
+4. **合并到 feature** - 完成后合并回 feature 分支
+5. **创建 PR** - 创建从 feature 到 main 的 PR
+6. **更新飞书表格** - 将 PR 链接填入表格，状态改为"开发完成"
+7. **记录设计文档**（如有需要）- 将技术方案写入知识库

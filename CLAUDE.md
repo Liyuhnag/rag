@@ -1,139 +1,308 @@
-# RAG 项目文档
+# RAG 项目技术文档
 
 ## 项目概述
 
-这是一个 RAG (Retrieval-Augmented Generation) 项目，主要包含两个核心功能：
-1. 文本向量化（文件上传）
-2. 检索对话（聊天界面）
+RAG (Retrieval-Augmented Generation) 智能对话系统，通过向量检索技术增强大语言模型的回答准确性。
+
+### 核心功能
+1. **文档向量化** - 上传文档并转换为向量存储
+2. **智能检索对话** - 基于向量检索的上下文增强对话
 
 ## 技术栈
 
-### 前端
-- Vue 3 + Vite
-- 深色主题，天蓝色 (#38BDF8) 作为主题色
-- 左侧固定导航，右侧内容区域
-- CSS Grid 布局
+### 前端技术
+- **框架**：Vue 3 + Vite
+- **构建工具**：Vite
+- **样式方案**：原生 CSS + CSS Grid
+- **主题风格**：淡色调、简洁风格
+- **布局模式**：左侧固定导航（280px） + 右侧自适应内容区
 
-### 后端（待开发）
-- Python（推荐）
-- 向量数据库（如 Chroma、Pinecone）
-- LLM API（如 OpenAI、Anthropic Claude）
+### 后端技术（规划中）
+- **语言**：Python 3.10+
+- **向量数据库**：Chroma / Pinecone / Milvus（待选型）
+- **LLM 接口**：Anthropic Claude API / OpenAI API
+- **文档处理**：LangChain / LlamaIndex
+- **向量模型**：sentence-transformers
 
-## Git 分支规范
+## Git 工作流规范
 
-**重要：严格遵守以下分支规范**
+### 分支策略
 
-### 分支结构
-- `main` - **生产部署分支，禁止直接提交或推送**
-- `feature` - 开发主分支，所有功能开发的基础分支
-- `feat/**` - 具体功能开发分支，从 feature 分支切出
+```
+main (生产环境)
+  ↑
+  └─ feature (集成分支)
+       ↑
+       ├─ feat/file-upload
+       ├─ feat/vector-search
+       └─ feat/chat-interface
+```
 
-### 工作流程
-1. 从 `feature` 分支切出功能分支：`git checkout -b feat/功能名称`
-2. 在功能分支上开发和提交
-3. 完成后合并回 `feature` 分支
-4. 经过测试后，由负责人将 `feature` 合并到 `main` 进行部署
+#### 分支说明
+| 分支类型 | 用途 | 保护级别 |
+|---------|------|---------|
+| `main` | 生产部署分支 | 🔒 禁止直接推送 |
+| `feature` | 开发主分支 | ⚠️ 需要 review |
+| `feat/**` | 功能开发分支 | ✅ 自由提交 |
 
-### 提交规范
-- `feat: 新功能描述` - 新功能
-- `fix: 修复描述` - Bug 修复
-- `style: 样式调整描述` - 样式修改
-- `refactor: 重构描述` - 代码重构
-- `docs: 文档更新描述` - 文档更新
-- `chore: 构建/工具链更新` - 构建配置或工具更新
+### 开发流程
+
+**1. 开始新功能**
+```bash
+git checkout feature
+git pull origin feature
+git checkout -b feat/功能简称
+```
+
+**2. 开发与提交**
+```bash
+git add .
+git commit -m "feat: 添加文件上传功能"
+git push origin feat/功能简称
+```
+
+**3. 合并到 feature**
+```bash
+git checkout feature
+git merge feat/功能简称
+git push origin feature
+```
+
+**4. 发布到生产（仅负责人）**
+```bash
+git checkout main
+git merge feature
+git push origin main
+```
+
+### Commit Message 规范
+
+格式：`<type>: <subject>`
+
+| Type | 说明 | 示例 |
+|------|------|------|
+| `feat` | 新功能 | `feat: 添加文件拖拽上传` |
+| `fix` | Bug 修复 | `fix: 修复上传进度计算错误` |
+| `style` | 样式调整 | `style: 优化按钮圆角` |
+| `refactor` | 代码重构 | `refactor: 抽取向量搜索逻辑` |
+| `perf` | 性能优化 | `perf: 优化大文件上传性能` |
+| `docs` | 文档更新 | `docs: 更新 API 接口文档` |
+| `test` | 测试相关 | `test: 添加上传组件单元测试` |
+| `chore` | 构建/工具 | `chore: 升级 Vite 到 5.0` |
+
+## 飞书项目管理规范
+
+### 资源链接
+
+| 资源 | 链接 | 用途 |
+|------|------|------|
+| 多维表格 | [打开表格](https://ocn0mresg7ps.feishu.cn/base/JVnnbUcNEaSkvqs7XhTc8ZbKnjf?table=tblDay8wKWi3Vjpf&view=vewhWaSvDl) | 任务管理、状态跟踪 |
+| 知识库 | [打开知识库](https://ocn0mresg7ps.feishu.cn/wiki/Glekw2U3giVrOukDOcIcVkCPndf) | 技术文档、设计方案 |
+
+### 任务状态流转
+
+```
+待开发 → 开发中 → 开发完成 → 已上线
+  ↓        ↓         ↓          ↓
+创建任务  开始开发  提交PR    部署生产
+```
+
+| 状态 | 说明 | 操作要求 |
+|------|------|---------|
+| **待开发** | 任务已创建，等待认领 | 无需操作 |
+| **开发中** | 正在开发 | 开始开发时更新状态 |
+| **开发完成** | 已提交 PR，等待审查 | 填写 PR 链接 |
+| **已上线** | 已部署到生产环境 | 由负责人操作 |
+
+### Agent 自动化流程
+
+收到任务标题后，自动执行：
+
+1. ✅ 更新飞书表格状态 → **开发中**
+2. ✅ 创建功能分支 `feat/任务名`
+3. ✅ 实现功能并提交代码
+4. ✅ 合并到 `feature` 分支
+5. ✅ 创建 PR（feature → main）
+6. ✅ 更新飞书表格：填写 PR 链接，状态 → **开发完成**
+7. ✅ 如有必要，在知识库记录设计文档
 
 ## 项目结构
 
-**⚠️ 重要：前后端共用一个 Git 仓库，所有代码都在 /Applications/rag/ 下**
-
 ```
-rag/                          # 仓库根目录
-├── frontend/                 # 前端项目
+rag/                                # 仓库根目录
+├── frontend/                       # 前端项目
 │   ├── src/
 │   │   ├── components/
-│   │   │   ├── FileUpload.vue     # 文件上传组件
-│   │   │   └── ChatInterface.vue  # 聊天界面组件
-│   │   ├── App.vue                # 主应用组件
-│   │   ├── main.js                # 入口文件
-│   │   └── style.css              # 全局样式
+│   │   │   ├── FileUpload.vue      # 文件上传组件
+│   │   │   └── ChatInterface.vue   # 聊天界面组件
+│   │   ├── App.vue                 # 主应用
+│   │   ├── main.js                 # 入口文件
+│   │   └── style.css               # 全局样式
 │   ├── public/
 │   ├── index.html
 │   ├── package.json
 │   └── vite.config.js
-├── backend/                  # 后端项目（待开发）
-│   ├── api/                  # API 接口
-│   ├── services/             # 业务逻辑
-│   │   ├── vectorization/    # 向量化服务
-│   │   └── retrieval/        # 检索服务
-│   └── requirements.txt      # Python 依赖
-├── docs/                     # 项目文档
-├── CLAUDE.md                 # 本文件 - 技术文档
-├── AGENT.md                  # Agent 工作规范
-├── README.md                 # 项目说明
-└── .gitignore                # Git 忽略规则
+│
+├── backend/                        # 后端项目（规划中）
+│   ├── api/                        # API 接口
+│   ├── services/                   # 业务逻辑
+│   ├── models/                     # 数据模型
+│   ├── main.py                     # FastAPI 入口
+│   └── requirements.txt
+│
+├── CLAUDE.md                       # 项目技术文档（本文件）
+├── AGENT.md                        # Agent 工作规范
+└── README.md                       # 项目说明
 ```
 
-## 设计规范
+## UI 设计规范
 
-### 配色方案（深色主题）
-- **主题色**：天蓝色 `#38BDF8`
-- **表面层**（深色梯度）：
-  - `--surface-0`: `#05070C` (最深)
-  - `--surface-1`: `#0A0D12`
-  - `--surface-2`: `#0F131C`
-  - `--surface-3`: `#161D2B`
-  - `--surface-4`: `#1E2636` (最浅)
-- **文字**：
-  - 主要：`#E2E8F0`
-  - 次要：`#94A3B8`
-  - 弱化：`#64748B`
-- **边框**：`rgba(255, 255, 255, 0.1)`
+### 设计系统 Token
 
-### 布局原则
-- 左侧导航固定宽度 280px
-- 内容区域自适应
-- 无悬浮元素
-- 使用 CSS Grid 作为主要布局方式
-- 圆角使用：
-  - 按钮：`999px` (胶囊形)
-  - 卡片/容器：`12px`
-  - 输入框：`999px` (胶囊形)
+#### 色彩系统（淡色调）
 
-## 开发说明
+**主题色**
+```css
+--primary: #38BDF8;     /* 天蓝色 */
+```
 
-### 前端开发
+**表面层级**（浅灰色调）
+```css
+--surface-0: #FFFFFF;   /* 纯白背景 */
+--surface-1: #F8FAFC;   /* 应用背景 */
+--surface-2: #F1F5F9;   /* 卡片背景 */
+--surface-3: #E2E8F0;   /* 次级背景 */
+```
 
-启动开发服务器：
+**文字层级**
+```css
+--text-primary: #1E293B;    /* 主要文字 */
+--text-secondary: #64748B;  /* 次要文字 */
+--text-tertiary: #94A3B8;   /* 辅助文字 */
+```
+
+**边框**
+```css
+--border: #E2E8F0;
+```
+
+**状态色**
+```css
+--success: #10B981;
+--warning: #F59E0B;
+--error: #EF4444;
+--info: #3B82F6;
+```
+
+#### 间距系统
+
+```css
+--space-xs: 4px;
+--space-sm: 8px;
+--space-md: 16px;
+--space-lg: 24px;
+--space-xl: 32px;
+```
+
+#### 圆角系统
+
+```css
+--radius-sm: 4px;       /* 小组件 */
+--radius-md: 8px;       /* 卡片、容器 */
+--radius-lg: 12px;      /* 大面板 */
+```
+
+#### 字体系统
+
+```css
+--font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+--font-size-sm: 14px;
+--font-size-base: 16px;
+--font-size-lg: 18px;
+```
+
+### 组件设计原则
+
+- **按钮**：圆角 8px，无 hover 效果
+- **输入框**：圆角 8px，边框样式
+- **卡片**：圆角 8px，浅灰背景
+- **布局**：使用 CSS Grid，左侧导航 280px
+
+### 交互原则
+
+- 不使用 hover 效果
+- 不使用过渡动画
+- 简洁直接的交互反馈
+
+## 开发指南
+
+### 环境要求
+
+**前端**
+- Node.js >= 18.0.0
+- npm >= 9.0.0
+
+**后端（规划中）**
+- Python >= 3.10
+- pip >= 23.0
+
+### 快速开始
+
+#### 前端开发
+
 ```bash
+# 安装依赖
 cd frontend
+npm install
+
+# 启动开发服务器
 npm run dev
-```
+# 访问 http://localhost:5173
 
-构建生产版本：
-```bash
-cd frontend
+# 构建生产版本
 npm run build
 ```
 
-### 后端开发（待补充）
+### 代码规范
 
-```bash
-cd backend
-# 待添加启动命令
+#### 前端
+
+**Vue 组件结构**
+```vue
+<script setup>
+// 1. imports
+// 2. props/emits
+// 3. reactive state
+// 4. computed
+// 5. methods
+// 6. lifecycle hooks
+</script>
+
+<template>
+  <!-- 模板内容 -->
+</template>
+
+<style scoped>
+/* 组件样式 */
+</style>
 ```
 
-## 待开发功能
+**命名规范**
+- 组件文件：PascalCase（`FileUpload.vue`）
+- 组件名：PascalCase（`<FileUpload />`）
+- 变量/函数：camelCase（`handleUpload`）
+- CSS 类名：kebab-case（`.file-upload-button`）
+- 常量：UPPER_SNAKE_CASE（`MAX_FILE_SIZE`）
 
-### 后端
-- [ ] 文件上传 API
-- [ ] 文本向量化处理
-- [ ] 向量存储
-- [ ] 检索 API
-- [ ] 对话生成 API
+#### 后端（规划中）
 
-### 前端
-- [ ] 文件上传功能实现
-- [ ] 上传进度显示
-- [ ] 聊天消息发送
-- [ ] 流式响应显示
-- [ ] 来源引用展示
+**Python 代码风格**
+- 遵循 PEP 8
+- 使用 type hints
+- 最大行长度：88（Black 默认）
+
+**命名规范**
+- 文件/模块：snake_case（`text_splitter.py`）
+- 类名：PascalCase（`VectorStore`）
+- 函数/变量：snake_case（`get_embeddings`）
+- 常量：UPPER_SNAKE_CASE（`MAX_CHUNK_SIZE`）
