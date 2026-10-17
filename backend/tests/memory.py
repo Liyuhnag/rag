@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 """测试用的进程内文档存储。"""
 
+import pytest
+
 from config import Settings
 from model.document import Document
-from services.document import DocumentStore
+from model.document import orm as document_orm
+from services.document import configure
 from services.document.object_storage import ObjectStorage
 
 
@@ -60,15 +63,21 @@ class MemoryDocumentRepository:
         return records[start : start + page_size], len(records)
 
 
-def memory_document_store(settings: Settings) -> DocumentStore:
-    """用进程内实现组装文档服务。"""
-    records = MemoryDocumentRepository()
-    return DocumentStore(
+def use_memory_records(
+    monkeypatch: pytest.MonkeyPatch,
+    records: MemoryDocumentRepository,
+) -> None:
+    """让文档服务的数据库调用走进程内记录。"""
+    monkeypatch.setattr(document_orm, "insert", records.insert)
+    monkeypatch.setattr(document_orm, "get", records.get)
+    monkeypatch.setattr(document_orm, "delete", records.delete)
+    monkeypatch.setattr(document_orm, "list_page", records.list_page)
+
+
+def open_memory_storage(settings: Settings) -> None:
+    """接入进程内对象存储。"""
+    configure(
         MemoryObjectStorage(),
-        records.insert,
-        records.get,
-        records.delete,
-        records.list_page,
         bucket=settings.s3_bucket,
         file_base_url=settings.file_base_url,
     )

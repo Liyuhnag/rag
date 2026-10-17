@@ -2,6 +2,7 @@
 """FastAPI 应用入口。"""
 
 import logging
+from collections.abc import Callable
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,24 +14,22 @@ from api.health import router as health_router
 from config import Settings
 from config import load_settings
 from services.chat_service import ChatService
-from services.document import DocumentStore
-from services.document import build_document_store
+from services.document import connect_storage
 
 logger = logging.getLogger("rag.api")
 
 
 def create_app(
     settings: Settings | None = None,
-    document_store: DocumentStore | None = None,
+    open_storage: Callable[[Settings], None] | None = None,
 ) -> FastAPI:
     active = load_settings() if settings is None else settings
+    if open_storage is None:
+        connect_storage(active)
+    else:
+        open_storage(active)
     application = FastAPI(title="RAG API", version="0.1.0")
     application.state.settings = active
-    application.state.document_store = (
-        document_store
-        if document_store is not None
-        else build_document_store(active)
-    )
     application.state.chat_service = ChatService()
     register_exception_handlers(application)
     application.add_middleware(

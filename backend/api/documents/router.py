@@ -10,7 +10,6 @@ from fastapi import Query
 from fastapi import UploadFile
 from fastapi.responses import Response
 
-from api.common.deps import get_document_store
 from api.common.deps import get_settings
 from api.documents.errors import not_found
 from api.documents.schemas import DocumentListQuery
@@ -22,7 +21,7 @@ from api.documents.validators import extract_file_type
 from api.documents.validators import normalize_filename
 from api.documents.validators import read_upload
 from config import Settings
-from services.document import DocumentStore
+from services.document import store as document_store
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -30,14 +29,13 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 @router.get("", response_model=DocumentListResponse)
 def list_documents(
     query: Annotated[DocumentListQuery, Query()],
-    store: DocumentStore = Depends(get_document_store),
 ) -> DocumentListResponse:
     """分页返回已上传文档。
 
     查询参数：page、pageSize、sortBy、sortOrder。
     sortBy 可选 uploadedAt、name、sizeBytes。
     """
-    records, total_items = store.list_page(
+    records, total_items = document_store.list_page(
         query.page,
         query.page_size,
         query.sort_by.value,
@@ -55,7 +53,6 @@ def list_documents(
 async def upload_document(
     file: UploadFile = File(...),
     settings: Settings = Depends(get_settings),
-    store: DocumentStore = Depends(get_document_store),
 ) -> DocumentResponse:
     """上传一个文档。
 
@@ -69,7 +66,7 @@ async def upload_document(
         content = await read_upload(file, settings.max_upload_bytes)
     finally:
         await file.close()
-    record = store.add(
+    record = document_store.add(
         name=filename,
         file_type=file_type,
         content=content,
@@ -78,24 +75,18 @@ async def upload_document(
 
 
 @router.get("/{document_id}", response_model=DocumentResponse)
-def get_document(
-    document_id: str,
-    store: DocumentStore = Depends(get_document_store),
-) -> DocumentResponse:
+def get_document(document_id: str) -> DocumentResponse:
     """按文档 ID 返回一条记录。不存在时返回 404。"""
-    record = store.get(document_id)
+    record = document_store.get(document_id)
     if record is None:
         raise not_found()
     return to_document_response(record)
 
 
 @router.delete("/{document_id}", status_code=204)
-def delete_document(
-    document_id: str,
-    store: DocumentStore = Depends(get_document_store),
-) -> Response:
+def delete_document(document_id: str) -> Response:
     """删除文档记录及其对象。成功返回 204，不存在时返回 404。"""
-    deleted = store.delete(document_id)
+    deleted = document_store.delete(document_id)
     if deleted is None:
         raise not_found()
     return Response(status_code=204)
