@@ -36,6 +36,76 @@ const fileColorMap = {
   csv: '#14B8A6'       // 青绿色 - CSV 数据
 }
 
+// 真实文件数据（来自 SeaweedFS + kkFileView）
+const realFiles = [
+  {
+    id: 1,
+    name: 'ollama-readme.md',
+    type: 'md',
+    size: '12.3 KB',
+    chunks: 15,
+    status: 'completed',
+    uploadedAt: '2026-10-17 14:20',
+    url: 'http://ahanali.devcloud.woa.com:8888/buckets/rag-documents/md/ollama-readme.md',
+    previewUrl: 'http://ahanali.devcloud.woa.com:8012/onlinePreview?url=aHR0cDovL3NlYXdlZWRmczo4ODg4L2J1Y2tldHMvcmFnLWRvY3VtZW50cy9tZC9vbGxhbWEtcmVhZG1lLm1k'
+  },
+  {
+    id: 2,
+    name: 'seaweedfs-readme.md',
+    type: 'md',
+    size: '18.7 KB',
+    chunks: 20,
+    status: 'completed',
+    uploadedAt: '2026-10-17 14:18',
+    url: 'http://ahanali.devcloud.woa.com:8888/buckets/rag-documents/md/seaweedfs-readme.md',
+    previewUrl: 'http://ahanali.devcloud.woa.com:8012/onlinePreview?url=aHR0cDovL3NlYXdlZWRmczo4ODg4L2J1Y2tldHMvcmFnLWRvY3VtZW50cy9tZC9zZWF3ZWVkZnMtcmVhZG1lLm1k'
+  },
+  {
+    id: 3,
+    name: 'retrieval-augmented-generation.pdf',
+    type: 'pdf',
+    size: '2.1 MB',
+    chunks: 45,
+    status: 'completed',
+    uploadedAt: '2026-10-17 14:15',
+    url: 'http://ahanali.devcloud.woa.com:8888/buckets/rag-documents/pdf/retrieval-augmented-generation.pdf',
+    previewUrl: 'http://ahanali.devcloud.woa.com:8012/onlinePreview?url=aHR0cDovL3NlYXdlZWRmczo4ODg4L2J1Y2tldHMvcmFnLWRvY3VtZW50cy9wZGYvcmV0cmlldmFsLWF1Z21lbnRlZC1nZW5lcmF0aW9uLnBkZg%3D%3D'
+  },
+  {
+    id: 4,
+    name: 'attention-is-all-you-need.pdf',
+    type: 'pdf',
+    size: '1.8 MB',
+    chunks: 38,
+    status: 'completed',
+    uploadedAt: '2026-10-17 14:12',
+    url: 'http://ahanali.devcloud.woa.com:8888/buckets/rag-documents/pdf/attention-is-all-you-need.pdf',
+    previewUrl: 'http://ahanali.devcloud.woa.com:8012/onlinePreview?url=aHR0cDovL3NlYXdlZWRmczo4ODg4L2J1Y2tldHMvcmFnLWRvY3VtZW50cy9wZGYvYXR0ZW50aW9uLWlzLWFsbC15b3UtbmVlZC5wZGY%3D'
+  },
+  {
+    id: 5,
+    name: 'having-images.docx',
+    type: 'docx',
+    size: '850 KB',
+    chunks: 25,
+    status: 'completed',
+    uploadedAt: '2026-10-17 14:10',
+    url: 'http://ahanali.devcloud.woa.com:8888/buckets/rag-documents/docx/having-images.docx',
+    previewUrl: 'http://ahanali.devcloud.woa.com:8012/onlinePreview?url=aHR0cDovL3NlYXdlZWRmczo4ODg4L2J1Y2tldHMvcmFnLWRvY3VtZW50cy9kb2N4L2hhdmluZy1pbWFnZXMuZG9jeA%3D%3D'
+  },
+  {
+    id: 6,
+    name: 'sample-document.docx',
+    type: 'docx',
+    size: '625 KB',
+    chunks: 18,
+    status: 'completed',
+    uploadedAt: '2026-10-17 14:08',
+    url: 'http://ahanali.devcloud.woa.com:8888/buckets/rag-documents/docx/sample-document.docx',
+    previewUrl: 'http://ahanali.devcloud.woa.com:8012/onlinePreview?url=aHR0cDovL3NlYXdlZWRmczo4ODg4L2J1Y2tldHMvcmFnLWRvY3VtZW50cy9kb2N4L3NhbXBsZS1kb2N1bWVudC5kb2N4'
+  }
+]
+
 // 生成模拟数据
 const generateMockFiles = () => {
   const fileTypes = ['pdf', 'md', 'docx', 'txt', 'xlsx', 'csv']
@@ -47,7 +117,7 @@ const generateMockFiles = () => {
   ]
 
   const files = []
-  for (let i = 1; i <= 67; i++) {
+  for (let i = 7; i <= 67; i++) {
     const type = fileTypes[Math.floor(Math.random() * fileTypes.length)]
     const baseName = fileNames[Math.floor(Math.random() * fileNames.length)]
     files.push({
@@ -58,14 +128,15 @@ const generateMockFiles = () => {
       chunks: Math.floor(Math.random() * 50) + 5,
       status: 'completed',
       uploadedAt: `2026-10-${String(Math.floor(Math.random() * 17) + 1).padStart(2, '0')} ${String(Math.floor(Math.random() * 24)).padStart(2, '0')}:${String(Math.floor(Math.random() * 60)).padStart(2, '0')}`,
-      url: null
+      url: null,
+      previewUrl: null
     })
   }
-  return files.sort((a, b) => b.id - a.id)
+  return files
 }
 
-// 所有文件列表（模拟数据）
-const allFiles = ref(generateMockFiles())
+// 所有文件列表（真实数据 + 模拟数据）
+const allFiles = ref([...realFiles, ...generateMockFiles()].sort((a, b) => b.id - a.id))
 
 // 分页状态
 const currentPage = ref(1)
@@ -375,12 +446,43 @@ const deleteFile = (file) => {
   )
 }
 
+// 预览状态
+const previewState = ref({
+  show: false,
+  file: null
+})
+
 const previewFile = (file) => {
-  if (file.url) {
-    // TODO: 集成文件预览组件库
-    showToast('info', '文件预览功能开发中...')
+  if (file.previewUrl) {
+    // 有预览 URL，打开预览弹窗
+    previewState.value = {
+      show: true,
+      file: file
+    }
+  } else if (file.url) {
+    // 有原始文件 URL 但没有预览 URL，提示不支持预览
+    showToast('warning', '该文件暂不支持在线预览，请下载查看')
   } else {
     showToast('warning', '该文件暂不支持预览')
+  }
+}
+
+const closePreview = () => {
+  previewState.value = {
+    show: false,
+    file: null
+  }
+}
+
+const downloadFile = (file) => {
+  if (file.url) {
+    const link = document.createElement('a')
+    link.href = file.url
+    link.download = file.name
+    link.click()
+    showToast('success', '开始下载文件')
+  } else {
+    showToast('warning', '该文件没有下载链接')
   }
 }
 
@@ -565,6 +667,40 @@ const removeUploadingFile = (id) => {
       @confirm="handleConfirm"
       @cancel="closeConfirm"
     />
+
+    <!-- 文件预览弹窗 -->
+    <div v-if="previewState.show" class="preview-overlay" @click="closePreview">
+      <div class="preview-dialog" @click.stop>
+        <div class="preview-header">
+          <div class="preview-title">
+            <span>{{ previewState.file?.name }}</span>
+            <span class="preview-badge">{{ previewState.file?.type.toUpperCase() }}</span>
+          </div>
+          <div class="preview-actions">
+            <button class="preview-download-btn" @click="downloadFile(previewState.file)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+              下载原文件
+            </button>
+            <button class="preview-close-btn" @click="closePreview">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="preview-body">
+          <iframe
+            :src="previewState.file?.previewUrl"
+            class="preview-iframe"
+          ></iframe>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -980,5 +1116,114 @@ const removeUploadingFile = (id) => {
   background: var(--primary);
   border: none;
   color: #FFFFFF;
+}
+
+/* 预览弹窗 */
+.preview-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+
+.preview-dialog {
+  background: var(--surface-1);
+  border-radius: 12px;
+  width: 95vw;
+  height: 95vh;
+  max-width: 1600px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+
+.preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.preview-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.preview-badge {
+  padding: 4px 8px;
+  background: var(--primary);
+  color: white;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.preview-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.preview-download-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  background: var(--primary);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.preview-download-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.preview-close-btn {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.preview-close-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.preview-body {
+  flex: 1;
+  overflow: hidden;
+  background: var(--surface-3);
+}
+
+.preview-iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
 }
 </style>
