@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """文档接口。上传写入存储，检索和生成仍未接入。"""
 
+import pytest
+
 from api.documents.validators import normalize_filename
 
 
@@ -62,6 +64,35 @@ def test_get_and_delete_uploaded_document(client):
     missing = client.get(f"/api/documents/{document_id}")
     assert missing.status_code == 404
     assert missing.json()["error"]["code"] == "NOT_FOUND"
+
+
+def test_soft_time_limit_marks_task_failed(client, monkeypatch):
+    from celery.exceptions import SoftTimeLimitExceeded
+
+    from model.task import orm as task_orm
+    from services.document import store as document_store
+    from task.document import process_document
+
+    assert process_document.soft_time_limit == 60
+    assert process_document.time_limit == 90
+    reasons = []
+    real_fail = task_orm.fail
+
+    def remember(task_id, message):
+        reasons.append(message)
+        real_fail(task_id, message)
+
+    def timed_out(*args, **kwargs):
+        raise SoftTimeLimitExceeded()
+
+    monkeypatch.setattr(task_orm, "fail", remember)
+    monkeypatch.setattr(document_store, "add", timed_out)
+    with pytest.raises(SoftTimeLimitExceeded):
+        _upload(client, "note.txt", b"hello")
+
+    assert reasons == ["处理超时"]
+    listed = client.get("/api/documents")
+    assert listed.json()["pagination"]["totalItems"] == 0
 
 
 def test_upload_rejects_when_queue_is_full(client, monkeypatch):

@@ -3,12 +3,19 @@
 
 from pathlib import Path
 
+from celery.exceptions import SoftTimeLimitExceeded
+
 from model.task import orm as task_orm
 from services.document import store as document_store
 from task.app import celery_app
 
 
-@celery_app.task(name="rag.process_document", ignore_result=True)
+@celery_app.task(
+    name="rag.process_document",
+    ignore_result=True,
+    soft_time_limit=60,
+    time_limit=90,
+)
 def process_document(task_id: str) -> None:
     """执行一条文档处理任务。
 
@@ -26,7 +33,10 @@ def process_document(task_id: str) -> None:
             path.read_bytes(),
         )
     except Exception as exc:
-        task_orm.fail(task_id, str(exc) or "处理失败")
+        message = "处理超时" if isinstance(exc, SoftTimeLimitExceeded) else (
+            str(exc) or "处理失败"
+        )
+        task_orm.fail(task_id, message)
         raise
     finally:
         path.unlink(missing_ok=True)
