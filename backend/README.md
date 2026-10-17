@@ -56,7 +56,8 @@ uv run pytest
 | --- | --- | --- |
 | `GET` | `/api/health` | 健康检查 |
 | `GET` | `/api/documents` | 分页返回已上传文档 |
-| `POST` | `/api/documents` | 校验文件后写入对象存储，并保存文档记录 |
+| `POST` | `/api/documents` | 校验文件后提交异步处理，返回任务 |
+| `GET` | `/api/tasks/{id}` | 返回异步任务状态；完成后带有文档 ID |
 | `GET` | `/api/documents/{id}` | 返回一条文档记录 |
 | `DELETE` | `/api/documents/{id}` | 删除文档记录和对象 |
 | `POST` | `/api/chat` | 校验问题后返回 `501`，检索生成尚未接入 |

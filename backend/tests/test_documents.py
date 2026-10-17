@@ -20,14 +20,19 @@ def test_upload_stores_document(client):
     content = b"%PDF-1.4 sample"
     response = _upload(client, "手册.pdf", content)
 
-    assert response.status_code == 201
-    body = response.json()
+    assert response.status_code == 202
+    task = response.json()
+    assert task["status"] == "STORED"
+    assert task["documentId"]
+
+    stored = client.get(f"/api/documents/{task['documentId']}")
+    assert stored.status_code == 200
+    body = stored.json()
     assert body["name"] == "手册.pdf"
     assert body["type"] == "pdf"
     assert body["sizeBytes"] == len(content)
     assert body["chunkCount"] == 0
     assert body["status"] == "UPLOADED"
-    assert body["id"]
     assert body["uploadedAt"]
 
 
@@ -45,7 +50,7 @@ def test_list_returns_uploaded_document(client):
 
 def test_get_and_delete_uploaded_document(client):
     created = _upload(client, "note.txt", b"hello").json()
-    document_id = created["id"]
+    document_id = created["documentId"]
 
     fetched = client.get(f"/api/documents/{document_id}")
     assert fetched.status_code == 200
@@ -88,6 +93,13 @@ def test_upload_requires_file(client):
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
     assert "traceback" not in response.text.lower()
+
+
+def test_get_missing_task(client):
+    response = client.get("/api/tasks/missing")
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "NOT_FOUND"
 
 
 def test_get_missing_document(client):

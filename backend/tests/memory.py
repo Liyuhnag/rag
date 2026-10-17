@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """测试用的进程内文档存储。"""
 
+from dataclasses import replace
+from datetime import datetime
+from datetime import timezone
+
 import pytest
 
 from config import Settings
@@ -8,6 +12,8 @@ from model.document import Document
 from model.document import orm as document_orm
 from services.common.object_storage import ObjectStorage
 from services.common.object_storage import configure
+from task import record as task_record
+from task.record import ProcessingTask
 
 
 class MemoryObjectStorage(ObjectStorage):
@@ -72,6 +78,55 @@ def use_memory_records(
     monkeypatch.setattr(document_orm, "get", records.get)
     monkeypatch.setattr(document_orm, "delete", records.delete)
     monkeypatch.setattr(document_orm, "list_page", records.list_page)
+
+
+class MemoryTaskRepository:
+    """进程内异步任务。"""
+
+    def __init__(self) -> None:
+        self.tasks: dict[str, ProcessingTask] = {}
+
+    def insert(self, task: ProcessingTask) -> None:
+        self.tasks[task.id] = task
+
+    def get(self, task_id: str) -> ProcessingTask | None:
+        return self.tasks.get(task_id)
+
+    def set_status(self, task_id: str, status: str) -> None:
+        task = self.tasks[task_id]
+        self.tasks[task_id] = replace(
+            task,
+            status=status,
+            updated_at=datetime.now(timezone.utc),
+        )
+
+    def finish(self, task_id: str, document_id: str) -> None:
+        task = self.tasks[task_id]
+        self.tasks[task_id] = replace(
+            task,
+            status="STORED",
+            document_id=document_id,
+            updated_at=datetime.now(timezone.utc),
+        )
+
+    def fail(self, task_id: str, message: str) -> None:
+        task = self.tasks[task_id]
+        self.tasks[task_id] = replace(
+            task,
+            status="FAILED",
+            error_message=message[:1024],
+            updated_at=datetime.now(timezone.utc),
+        )
+
+
+def use_memory_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """让异步任务记录留在进程内。"""
+    tasks = MemoryTaskRepository()
+    monkeypatch.setattr(task_record, "insert", tasks.insert)
+    monkeypatch.setattr(task_record, "get", tasks.get)
+    monkeypatch.setattr(task_record, "set_status", tasks.set_status)
+    monkeypatch.setattr(task_record, "finish", tasks.finish)
+    monkeypatch.setattr(task_record, "fail", tasks.fail)
 
 
 def open_memory_storage(settings: Settings) -> None:

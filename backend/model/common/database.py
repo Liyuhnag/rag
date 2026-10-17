@@ -37,7 +37,18 @@ def configure(
     _db["user"] = user
     _db["password"] = password
     _db["database"] = database
-    execute(_SCHEMA_SQL, {})
+    for statement in _schema_statements(_SCHEMA_SQL):
+        execute(statement, {})
+
+
+def _schema_statements(sql: str) -> list[str]:
+    """去掉注释后按语句拆开。pymysql 一次只执行一条。"""
+    lines = [
+        line
+        for line in sql.splitlines()
+        if not line.strip().startswith("--")
+    ]
+    return [part.strip() for part in "\n".join(lines).split(";") if part.strip()]
 
 
 def as_utc(value: datetime) -> datetime:
