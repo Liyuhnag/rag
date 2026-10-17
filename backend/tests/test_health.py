@@ -21,12 +21,12 @@ def test_health_allows_frontend_origin(client):
     )
 
 
-def test_health_allows_devcloud_frontend(client):
+def test_health_allows_local_frontend_on_another_port(client):
     response = client.get(
         "/api/health",
-        headers={"Origin": "http://ahanali.devcloud.woa.com:5173"},
+        headers={"Origin": "http://127.0.0.1:5174"},
     )
 
     assert response.headers["access-control-allow-origin"] == (
-        "http://ahanali.devcloud.woa.com:5173"
+        "http://127.0.0.1:5174"
     )
