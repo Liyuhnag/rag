@@ -24,16 +24,16 @@ const fileIconMap = {
 }
 
 // 文件类型颜色映射
-const fileTypeColors = {
-  pdf: '#EF4444',
-  md: '#3B82F6',
-  markdown: '#3B82F6',
-  doc: '#2563EB',
-  docx: '#2563EB',
-  txt: '#64748B',
-  xls: '#10B981',
+const fileColorMap = {
+  pdf: '#EF4444',      // 红色 - PDF 经典色
+  md: '#A855F7',       // 紫色 - Markdown/代码
+  markdown: '#A855F7',
+  doc: '#3B82F6',      // 蓝色 - Word
+  docx: '#3B82F6',
+  txt: '#64748B',      // 灰色 - 纯文本
+  xls: '#10B981',      // 绿色 - Excel
   xlsx: '#10B981',
-  csv: '#10B981'
+  csv: '#14B8A6'       // 青绿色 - CSV 数据
 }
 
 // 生成模拟数据
@@ -45,7 +45,6 @@ const generateMockFiles = () => {
     '开发指南', '部署文档', '性能测试报告', '安全审计报告',
     '数据字典', '业务流程图', '技术选型方案', '代码规范'
   ]
-  const operators = ['张三', '李四', '王五', '赵六', '钱七']
 
   const files = []
   for (let i = 1; i <= 67; i++) {
@@ -58,7 +57,6 @@ const generateMockFiles = () => {
       size: `${(Math.random() * 5 + 0.1).toFixed(1)} MB`,
       chunks: Math.floor(Math.random() * 50) + 5,
       status: 'completed',
-      operator: operators[Math.floor(Math.random() * operators.length)],
       uploadedAt: `2026-10-${String(Math.floor(Math.random() * 17) + 1).padStart(2, '0')} ${String(Math.floor(Math.random() * 24)).padStart(2, '0')}:${String(Math.floor(Math.random() * 60)).padStart(2, '0')}`,
       url: null
     })
@@ -72,6 +70,98 @@ const allFiles = ref(generateMockFiles())
 // 分页状态
 const currentPage = ref(1)
 const pageSize = ref(20)
+
+// 列宽状态（使用 fr 弹性单位比例）
+const columnWidths = ref({
+  name: 3,      // 文件名占 3 份
+  type: 0.8,    // 类型占 0.8 份
+  size: 0.8,    // 大小占 0.8 份
+  chunks: 0.8,  // 分块数占 0.8 份
+  time: 1.5,    // 上传时间占 1.5 份
+  actions: 0.8  // 操作占 0.8 份
+})
+
+// 拖拽状态
+const resizing = ref(null)
+const startX = ref(0)
+const startWidth = ref(0)
+const tableRef = ref(null)
+const nextColumn = ref(null)
+const startNextWidth = ref(0)
+
+// 获取列的顺序
+const columnOrder = ['name', 'type', 'size', 'chunks', 'time', 'actions']
+
+// 开始调整列宽
+const startResize = (column, event) => {
+  if (!tableRef.value) return
+
+  resizing.value = column
+  startX.value = event.clientX
+  startWidth.value = columnWidths.value[column]
+
+  // 找到下一列
+  const currentIndex = columnOrder.indexOf(column)
+  if (currentIndex < columnOrder.length - 1) {
+    nextColumn.value = columnOrder[currentIndex + 1]
+    startNextWidth.value = columnWidths.value[nextColumn.value]
+  } else {
+    nextColumn.value = null
+  }
+
+  document.addEventListener('mousemove', onResize)
+  document.addEventListener('mouseup', stopResize)
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+  event.preventDefault()
+}
+
+// 调整列宽中
+const onResize = (event) => {
+  if (!resizing.value || !tableRef.value) return
+
+  // 计算鼠标移动的距离（像素）
+  const diff = event.clientX - startX.value
+
+  // 获取容器总宽度
+  const containerWidth = tableRef.value.offsetWidth
+  const totalFr = Object.values(columnWidths.value).reduce((sum, fr) => sum + fr, 0)
+  const pixelPerFr = containerWidth / totalFr
+
+  // 将像素差异转换为 fr 单位差异
+  const frDiff = diff / pixelPerFr
+
+  // 更新当前列和下一列的宽度
+  const newWidth = Math.max(0.5, startWidth.value + frDiff) // 最小 0.5fr
+
+  if (nextColumn.value) {
+    const newNextWidth = Math.max(0.5, startNextWidth.value - frDiff) // 最小 0.5fr
+
+    // 只有当两列都满足最小宽度时才更新
+    if (newWidth >= 0.5 && newNextWidth >= 0.5) {
+      columnWidths.value[resizing.value] = newWidth
+      columnWidths.value[nextColumn.value] = newNextWidth
+    }
+  } else {
+    // 最后一列，直接更新
+    columnWidths.value[resizing.value] = newWidth
+  }
+}
+
+// 停止调整列宽
+const stopResize = () => {
+  resizing.value = null
+  nextColumn.value = null
+  document.removeEventListener('mousemove', onResize)
+  document.removeEventListener('mouseup', stopResize)
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+}
+
+// 计算 grid 模板列
+const gridTemplateColumns = computed(() => {
+  return `${columnWidths.value.name}fr ${columnWidths.value.type}fr ${columnWidths.value.size}fr ${columnWidths.value.chunks}fr ${columnWidths.value.time}fr ${columnWidths.value.actions}fr`
+})
 
 // 计算总页数
 const totalPages = computed(() => {
@@ -90,6 +180,12 @@ const handlePageChange = (page) => {
   currentPage.value = page
 }
 
+// 每页数量变化处理
+const handlePageSizeChange = (size) => {
+  pageSize.value = size
+  currentPage.value = 1 // 重置到第一页
+}
+
 // 获取文件图标组件
 const getFileIcon = (type) => {
   const lowerType = type.toLowerCase()
@@ -99,7 +195,7 @@ const getFileIcon = (type) => {
 // 获取文件类型颜色
 const getFileColor = (type) => {
   const lowerType = type.toLowerCase()
-  return fileTypeColors[lowerType] || '#64748B'
+  return fileColorMap[lowerType] || '#64748B'
 }
 
 // Toast 状态
@@ -313,19 +409,33 @@ const removeUploadingFile = (id) => {
     </div>
 
     <!-- 文件列表 -->
-    <div class="file-list">
-      <div class="list-header">
-        <div class="col-name">文件名</div>
-        <div class="col-type">类型</div>
-        <div class="col-size">大小</div>
-        <div class="col-chunks">分块数</div>
-        <div class="col-operator">操作人</div>
-        <div class="col-time">上传时间</div>
-        <div class="col-actions">操作</div>
+    <div class="file-list" ref="tableRef">
+      <div class="list-header" :style="{ gridTemplateColumns }">
+        <div class="col-name header-cell">
+          文件名
+          <div class="resize-handle" @mousedown="startResize('name', $event)"></div>
+        </div>
+        <div class="col-type header-cell">
+          类型
+          <div class="resize-handle" @mousedown="startResize('type', $event)"></div>
+        </div>
+        <div class="col-size header-cell">
+          大小
+          <div class="resize-handle" @mousedown="startResize('size', $event)"></div>
+        </div>
+        <div class="col-chunks header-cell">
+          分块数
+          <div class="resize-handle" @mousedown="startResize('chunks', $event)"></div>
+        </div>
+        <div class="col-time header-cell">
+          上传时间
+          <div class="resize-handle" @mousedown="startResize('time', $event)"></div>
+        </div>
+        <div class="col-actions header-cell">操作</div>
       </div>
 
       <div class="list-body">
-        <div v-for="file in files" :key="file.id" class="file-row">
+        <div v-for="file in files" :key="file.id" class="file-row" :style="{ gridTemplateColumns }">
           <div class="col-name">
             <div class="file-icon" :style="{ color: getFileColor(file.type) }">
               <component :is="getFileIcon(file.type)" />
@@ -334,11 +444,7 @@ const removeUploadingFile = (id) => {
           </div>
 
           <div class="col-type">
-            <span class="file-type-badge" :style="{
-              color: getFileColor(file.type),
-              background: `${getFileColor(file.type)}15`,
-              borderColor: `${getFileColor(file.type)}30`
-            }">
+            <span class="file-type-badge">
               {{ file.type.toUpperCase() }}
             </span>
           </div>
@@ -346,13 +452,6 @@ const removeUploadingFile = (id) => {
           <div class="col-size">{{ file.size }}</div>
 
           <div class="col-chunks">{{ file.chunks }} 个</div>
-
-          <div class="col-operator">
-            <div class="operator-info">
-              <div class="operator-avatar">{{ file.operator.charAt(0) }}</div>
-              <span>{{ file.operator }}</span>
-            </div>
-          </div>
 
           <div class="col-time">{{ file.uploadedAt }}</div>
 
@@ -382,6 +481,7 @@ const removeUploadingFile = (id) => {
       :total-items="allFiles.length"
       :page-size="pageSize"
       @page-change="handlePageChange"
+      @page-size-change="handlePageSizeChange"
     />
 
     <!-- 上传对话框 -->
@@ -535,7 +635,6 @@ const removeUploadingFile = (id) => {
 .list-header,
 .file-row {
   display: grid;
-  grid-template-columns: 2fr 100px 100px 100px 140px 150px 100px;
   gap: 16px;
   padding: 16px 20px;
   align-items: center;
@@ -547,6 +646,41 @@ const removeUploadingFile = (id) => {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-secondary);
+}
+
+.header-cell {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.resize-handle {
+  position: absolute;
+  right: -8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 100%;
+  cursor: col-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.resize-handle::before {
+  content: '';
+  width: 2px;
+  height: 60%;
+  background: var(--border);
+  transition: background 0.2s;
+}
+
+.resize-handle:hover::before {
+  background: var(--primary);
+}
+
+.resize-handle:active::before {
+  background: var(--primary-hover);
 }
 
 .list-body {
@@ -570,20 +704,30 @@ const removeUploadingFile = (id) => {
 }
 
 .file-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  background: var(--surface-2);
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  position: relative;
+}
+
+.file-icon::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.1;
 }
 
 .file-icon svg {
-  width: 18px;
-  height: 18px;
-  color: var(--primary);
+  width: 20px;
+  height: 20px;
+  position: relative;
+  z-index: 1;
 }
 
 .file-name {
@@ -595,35 +739,15 @@ const removeUploadingFile = (id) => {
 
 .file-type-badge {
   display: inline-block;
-  padding: 4px 8px;
-  border: 1px solid;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
   border-radius: 4px;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.col-operator {
+  font-size: 11px;
+  font-weight: 500;
   color: var(--text-secondary);
-}
-
-.operator-info {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.operator-avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  background: var(--primary);
-  color: #FFFFFF;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  font-weight: 600;
-  flex-shrink: 0;
+  background: var(--surface-3);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .col-size,

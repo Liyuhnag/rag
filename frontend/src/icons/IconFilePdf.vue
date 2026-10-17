@@ -1,8 +1,21 @@
 <template>
-  <svg viewBox="0 0 24 24" fill="currentColor">
-    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" opacity="0.2"/>
-    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" stroke="currentColor" stroke-width="2" fill="none"/>
-    <polyline points="14 2 14 8 20 8" stroke="currentColor" stroke-width="2" fill="none"/>
-    <text x="12" y="17" text-anchor="middle" font-size="5" font-weight="bold" fill="currentColor">PDF</text>
+  <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 文档背景 -->
+    <path d="M14 2H6C4.9 2 4 2.9 4 4V20C4 21.1 4.9 22 6 22H18C19.1 22 20 21.1 20 20V8L14 2Z"
+          fill="currentColor" opacity="0.1"/>
+    <!-- 折角 -->
+    <path d="M14 2V6C14 7.1 14.9 8 16 8H20"
+          fill="currentColor" opacity="0.15"/>
+    <!-- 文档轮廓 -->
+    <path d="M14 2H6C4.9 2 4 2.9 4 4V20C4 21.1 4.9 22 6 22H18C19.1 22 20 21.1 20 20V8L14 2Z"
+          stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- 折角轮廓 -->
+    <path d="M14 2V6C14 7.1 14.9 8 16 8H20"
+          stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- PDF 文字标记 -->
+    <text x="12" y="16" font-size="6" font-weight="700" text-anchor="middle" fill="currentColor" font-family="system-ui, -apple-system, sans-serif">PDF</text>
   </svg>
 </template>
+
+<script setup>
+</script>

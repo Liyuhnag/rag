@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 
 const props = defineProps({
   currentPage: {
@@ -20,7 +20,10 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['update:currentPage', 'pageChange'])
+const emit = defineEmits(['update:currentPage', 'pageChange', 'pageSizeChange'])
+
+const pageSizeOptions = [10, 20, 50, 100]
+const showPageSizeMenu = ref(false)
 
 // 计算显示的页码范围
 const pageNumbers = computed(() => {
@@ -92,14 +95,49 @@ const startItem = computed(() => {
 const endItem = computed(() => {
   return Math.min(props.currentPage * props.pageSize, props.totalItems)
 })
+
+const changePageSize = (size) => {
+  emit('pageSizeChange', size)
+  showPageSizeMenu.value = false
+}
+
+const togglePageSizeMenu = () => {
+  showPageSizeMenu.value = !showPageSizeMenu.value
+}
 </script>
 
 <template>
   <div class="pagination">
+    <!-- 左侧信息区域 -->
     <div class="pagination-info">
-      显示第 {{ startItem }}-{{ endItem }} 项，共 {{ totalItems }} 项
+      <span class="info-text">
+        显示 {{ startItem }}-{{ endItem }} 条，共 {{ totalItems }} 条
+      </span>
+
+      <!-- 每页数量选择器 -->
+      <div class="page-size-selector">
+        <button class="page-size-btn" @click="togglePageSizeMenu">
+          {{ pageSize }} 条/页
+          <svg class="dropdown-icon" viewBox="0 0 20 20" fill="currentColor">
+            <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+          </svg>
+        </button>
+
+        <div v-if="showPageSizeMenu" class="page-size-menu">
+          <button
+            v-for="size in pageSizeOptions"
+            :key="size"
+            class="page-size-option"
+            :class="{ active: size === pageSize }"
+            @click="changePageSize(size)"
+          >
+            {{ size }} 条/页
+          </button>
+        </div>
+      </div>
     </div>
 
+    <!-- 右侧分页控制 -->
     <div class="pagination-controls">
       <button
         class="page-btn page-arrow"
@@ -146,9 +184,88 @@ const endItem = computed(() => {
 }
 
 .pagination-info {
+  display: flex;
+  align-items: center;
+  gap: 16px;
   font-size: 14px;
   color: var(--text-secondary);
 }
+
+.info-text {
+  white-space: nowrap;
+}
+
+.page-size-selector {
+  position: relative;
+}
+
+.page-size-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.page-size-btn:hover {
+  background: var(--surface-3);
+  border-color: var(--primary);
+  color: var(--text-primary);
+}
+
+.dropdown-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.page-size-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  z-index: 100;
+  min-width: 120px;
+}
+
+.page-size-option {
+  display: block;
+  width: 100%;
+  padding: 10px 16px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.page-size-option:hover {
+  background: var(--surface-3);
+  color: var(--text-primary);
+}
+
+.page-size-option.active {
+  background: var(--primary);
+  color: #FFFFFF;
+}
+
+.page-size-option.active:hover {
+  background: var(--primary-hover);
+}
+
 
 .pagination-controls {
   display: flex;
