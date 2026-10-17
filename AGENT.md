@@ -378,34 +378,34 @@ rag/                                # 仓库根目录
 
 ### 设计系统 Token
 
-#### 色彩系统（深色主题）
+#### 色彩系统（淡色调）
 
 **主题色**
 - `--primary`: `#38BDF8` (天蓝色)
 - `--primary-hover`: `#0EA5E9`
 - `--primary-active`: `#0284C7`
 
-**表面层级**（深色梯度，从深到浅）
+**表面层级**（浅灰色调）
 ```css
---surface-0: #05070C;  /* 最深背景 */
---surface-1: #0A0D12;  /* 应用背景 */
---surface-2: #0F131C;  /* 卡片背景 */
---surface-3: #161D2B;  /* 悬停状态 */
---surface-4: #1E2636;  /* 激活状态 */
+--surface-0: #F8FAFC;  /* 浅灰背景 */
+--surface-1: #FFFFFF;  /* 纯白背景 */
+--surface-2: #F1F5F9;  /* 卡片背景 */
+--surface-3: #E2E8F0;  /* 悬停状态 */
+--surface-4: #CBD5E1;  /* 激活状态 */
 ```
 
 **文字层级**
 ```css
---text-primary: #E2E8F0;    /* 主要文字 */
---text-secondary: #94A3B8;  /* 次要文字 */
---text-tertiary: #64748B;   /* 辅助文字 */
---text-disabled: #475569;   /* 禁用状态 */
+--text-primary: #1E293B;    /* 主要文字 */
+--text-secondary: #64748B;  /* 次要文字 */
+--text-tertiary: #94A3B8;   /* 辅助文字 */
+--text-disabled: #CBD5E1;   /* 禁用状态 */
 ```
 
 **边框与分割线**
 ```css
---border: rgba(255, 255, 255, 0.1);
---divider: rgba(255, 255, 255, 0.05);
+--border: #E2E8F0;
+--divider: #F1F5F9;
 ```
 
 **状态色**
@@ -440,10 +440,10 @@ rag/                                # 仓库根目录
 #### 阴影系统
 
 ```css
---shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
---shadow-md: 0 4px 6px rgba(0, 0, 0, 0.3);
---shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.4);
---shadow-xl: 0 20px 25px rgba(0, 0, 0, 0.5);
+--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+--shadow-md: 0 4px 6px rgba(0, 0, 0, 0.07);
+--shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
+--shadow-xl: 0 20px 25px rgba(0, 0, 0, 0.15);
 ```
 
 #### 字体系统
