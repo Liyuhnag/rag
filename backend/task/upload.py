@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from model.task import ProcessingTask
 from model.task import orm as task_orm
-from task.runner import submit
+from task.document import process_document
 
 
 def accept_upload(name: str, file_type: str, content: bytes) -> ProcessingTask:
@@ -31,7 +31,7 @@ def accept_upload(name: str, file_type: str, content: bytes) -> ProcessingTask:
         updated_at=now,
     )
     task_orm.insert(task)
-    submit(task_id)
+    process_document.delay(task_id)
     stored = task_orm.get(task_id)
     return stored if stored is not None else task
 

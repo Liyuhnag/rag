@@ -5,7 +5,7 @@ from pathlib import Path
 
 from model.task import orm as task_orm
 from services.document import store as document_store
-from task.celery_app import celery_app
+from main import celery_app
 
 
 @celery_app.task(name="rag.process_document", ignore_result=True)

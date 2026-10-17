@@ -14,7 +14,7 @@ from services.common.object_storage import ObjectStorage
 from services.common.object_storage import configure
 from model.task import ProcessingTask
 from model.task import orm as task_orm
-from task.celery_app import celery_app
+from main import celery_app
 
 
 class MemoryObjectStorage(ObjectStorage):

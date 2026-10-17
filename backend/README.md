@@ -10,8 +10,8 @@ Python 环境使用 [uv](https://docs.astral.sh/uv/)。解释器版本见 `.pyth
 cd backend
 uv sync --all-groups
 uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
-uv run celery -A task.celery_app worker --loglevel=info
-uv run celery -A task.celery_app flower
+uv run celery -A main.celery_app worker --loglevel=info
+uv run celery -A main.celery_app flower
 ```
 
 接口进程、Celery worker 和 Flower 要在同一台机器上。上传内容先落在本机临时目录，再由 worker 写入对象存储。Redis 只监听 `127.0.0.1:6379`。Flower 监控页是 `http://<主机>:5555`，登录账号在 `FLOWER_BASIC_AUTH`。
