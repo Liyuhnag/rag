@@ -6,6 +6,8 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115,<1",
     "pydantic>=2.7,<3",
+    "pymysql>=1.2.3",
+    "python-dotenv>=1.2.4",
     "python-multipart>=0.0.12",
     "uvicorn>=0.32,<1",
 ]

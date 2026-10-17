@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from models.common import error_payload
 from services.exceptions import FeatureNotReady
+from services.exceptions import StorageError
 
 logger = logging.getLogger("rag.api")
 
@@ -48,6 +49,22 @@ def register_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=exc.status_code,
             content=error_payload(exc.code, exc.message, exc.details),
+        )
+
+    @app.exception_handler(StorageError)
+    async def handle_storage_error(
+        request: Request,
+        exc: StorageError,
+    ) -> JSONResponse:
+        logger.error(
+            "storage error on %s %s: %s",
+            request.method,
+            request.url.path,
+            exc.message,
+        )
+        return JSONResponse(
+            status_code=502,
+            content=error_payload("STORAGE_UNAVAILABLE", exc.message),
         )
 
     @app.exception_handler(FeatureNotReady)

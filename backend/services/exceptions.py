@@ -8,3 +8,11 @@ class FeatureNotReady(Exception):
     def __init__(self, message: str) -> None:
         super().__init__(message)
         self.message = message
+
+
+class StorageError(Exception):
+    """对象存储或数据库暂时不可用。"""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message

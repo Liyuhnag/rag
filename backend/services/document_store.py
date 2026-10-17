@@ -1,33 +1,50 @@
 # -*- coding: utf-8 -*-
-"""文档服务占位。存储、分块和向量化由后续实现补上。"""
+"""文档服务。原始文件进入对象存储，记录进入数据库。"""
 
-from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
+from datetime import timezone
+from uuid import uuid4
 
-from services.exceptions import FeatureNotReady
+from config import Settings
+from services.document_record import DocumentRecord
+from services.document_repository import DocumentRepository
+from services.document_repository import MemoryDocumentRepository
+from services.document_repository import MysqlDocumentRepository
+from services.exceptions import StorageError
+from services.object_storage import MemoryObjectStorage
+from services.object_storage import ObjectStorage
+from services.object_storage import S3ObjectStorage
 
 
-@dataclass
-class DocumentRecord:
-    """服务返回给 API 的文档记录。"""
-
-    id: str
-    name: str
-    file_type: str
-    size_bytes: int
-    chunk_count: int
-    status: str
-    operator: str
-    uploaded_at: datetime
-    stored_name: str
+CONTENT_TYPES = {
+    "pdf": "application/pdf",
+    "txt": "text/plain; charset=utf-8",
+    "md": "text/markdown; charset=utf-8",
+    "markdown": "text/markdown; charset=utf-8",
+    "csv": "text/csv; charset=utf-8",
+    "doc": "application/msword",
+    "docx": (
+        "application/vnd.openxmlformats-officedocument."
+        "wordprocessingml.document"
+    ),
+    "xls": "application/vnd.ms-excel",
+    "xlsx": (
+        "application/vnd.openxmlformats-officedocument."
+        "spreadsheetml.sheet"
+    ),
+}
 
 
 class DocumentStore:
-    """文档服务占位。"""
+    """保存上传文件并维护文档记录。"""
 
-    def __init__(self, upload_dir: Path) -> None:
-        self.upload_dir = upload_dir
+    def __init__(
+        self,
+        objects: ObjectStorage,
+        records: DocumentRepository,
+    ) -> None:
+        self.objects = objects
+        self.records = records
 
     def add(
         self,
@@ -36,16 +53,39 @@ class DocumentStore:
         content: bytes,
         operator: str,
     ) -> DocumentRecord:
-        del name, file_type, content, operator
-        raise FeatureNotReady("文档服务尚未接入")
+        document_id = uuid4().hex
+        record = DocumentRecord(
+            id=document_id,
+            name=name,
+            file_type=file_type,
+            size_bytes=len(content),
+            chunk_count=0,
+            status="UPLOADED",
+            operator=operator,
+            uploaded_at=datetime.now(timezone.utc),
+            stored_name=f"documents/{document_id}/{name}",
+        )
+        self.objects.put(
+            record.stored_name,
+            content,
+            CONTENT_TYPES.get(file_type, "application/octet-stream"),
+        )
+        try:
+            self.records.insert(record)
+        except StorageError:
+            self.objects.delete(record.stored_name)
+            raise
+        return record
 
     def get(self, document_id: str) -> DocumentRecord | None:
-        del document_id
-        raise FeatureNotReady("文档服务尚未接入")
+        return self.records.get(document_id)
 
-    def delete(self, document_id: str) -> None:
-        del document_id
-        raise FeatureNotReady("文档服务尚未接入")
+    def delete(self, document_id: str) -> DocumentRecord | None:
+        record = self.records.delete(document_id)
+        if record is None:
+            return None
+        self.objects.delete(record.stored_name)
+        return record
 
     def list_page(
         self,
@@ -54,5 +94,29 @@ class DocumentStore:
         sort_by: str,
         sort_order: str,
     ) -> tuple[list[DocumentRecord], int]:
-        del page, page_size, sort_by, sort_order
-        raise FeatureNotReady("文档服务尚未接入")
+        return self.records.list_page(page, page_size, sort_by, sort_order)
+
+
+def build_document_store(settings: Settings) -> DocumentStore:
+    """按配置组装文档服务。测试默认使用内存实现。"""
+    if settings.storage_backend == "memory":
+        return DocumentStore(
+            MemoryObjectStorage(),
+            MemoryDocumentRepository(),
+        )
+    return DocumentStore(
+        S3ObjectStorage(
+            endpoint=settings.s3_endpoint,
+            region=settings.s3_region,
+            access_key_id=settings.s3_access_key_id,
+            secret_access_key=settings.s3_secret_access_key,
+            bucket=settings.s3_bucket,
+        ),
+        MysqlDocumentRepository(
+            host=settings.mysql_host,
+            port=settings.mysql_port,
+            user=settings.mysql_user,
+            password=settings.mysql_password,
+            database=settings.mysql_database,
+        ),
+    )

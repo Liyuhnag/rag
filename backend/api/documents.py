@@ -23,7 +23,7 @@ from models.document import DocumentResponse
 from models.document import DocumentStatus
 from models.document import SortField
 from models.document import SortOrder
-from services.document_store import DocumentRecord
+from services.document_record import DocumentRecord
 from services.document_store import DocumentStore
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -56,6 +56,11 @@ def list_documents(
     ),
     store: DocumentStore = Depends(get_document_store),
 ) -> DocumentListResponse:
+    """分页返回已上传文档。
+
+    查询参数：page、pageSize、sortBy、sortOrder。
+    sortBy 可选 uploadedAt、name、sizeBytes。
+    """
     records, total_items = store.list_page(
         page,
         page_size,
@@ -84,6 +89,12 @@ async def upload_document(
     settings: Settings = Depends(get_settings),
     store: DocumentStore = Depends(get_document_store),
 ) -> DocumentResponse:
+    """上传一个文档。
+
+    表单字段 file 为文件，operator 可选。
+    文件写入对象存储，记录写入数据库，成功返回 201。
+    空文件返回 422，超过大小限制返回 413。
+    """
     filename = normalize_filename(file.filename)
     file_type = extract_file_type(filename)
     try:
@@ -108,6 +119,7 @@ def get_document(
     document_id: str,
     store: DocumentStore = Depends(get_document_store),
 ) -> DocumentResponse:
+    """按文档 ID 返回一条记录。不存在时返回 404。"""
     record = store.get(document_id)
     if record is None:
         raise AppError(404, "NOT_FOUND", "文档不存在")
@@ -119,5 +131,8 @@ def delete_document(
     document_id: str,
     store: DocumentStore = Depends(get_document_store),
 ) -> Response:
-    store.delete(document_id)
+    """删除文档记录及其对象。成功返回 204，不存在时返回 404。"""
+    deleted = store.delete(document_id)
+    if deleted is None:
+        raise AppError(404, "NOT_FOUND", "文档不存在")
     return Response(status_code=204)
