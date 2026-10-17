@@ -56,195 +56,200 @@ const formatTime = (date) => {
 
 <template>
   <div class="chat-page">
-    <div class="chat-wrapper">
-      <div class="chat-header">
-        <h1 class="title">知识检索</h1>
+    <!-- 头部 -->
+    <div class="header">
+      <div class="header-info">
+        <h2 class="title">知识检索</h2>
         <p class="subtitle">基于向量数据库的智能问答</p>
       </div>
+    </div>
 
-      <div class="chat-content" ref="chatContainer">
-        <div v-if="messages.length === 0" class="empty-state">
-          <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-          </svg>
-          <p class="empty-text">开始提问吧</p>
-          <p class="empty-hint">系统会从已上传的文档中检索相关内容并回答</p>
-        </div>
+    <!-- 对话内容区 -->
+    <div class="chat-container" ref="chatContainer">
+      <div v-if="messages.length === 0" class="empty-state">
+        <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+        </svg>
+        <p class="empty-text">开始提问吧</p>
+        <p class="empty-hint">系统会从已上传的文档中检索相关内容并回答</p>
+      </div>
 
-        <div v-else class="messages">
-          <div
-            v-for="message in messages"
-            :key="message.id"
-            class="message"
-            :class="message.type"
-          >
-            <div class="message-avatar">
-              <span v-if="message.type === 'user'">U</span>
-              <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10" />
-                <path d="M8 14s1.5 2 4 2 4-2 4-2" />
-                <line x1="9" y1="9" x2="9.01" y2="9" />
-                <line x1="15" y1="9" x2="15.01" y2="9" />
-              </svg>
-            </div>
+      <div v-else class="messages">
+        <div
+          v-for="message in messages"
+          :key="message.id"
+          class="message"
+          :class="message.type"
+        >
+          <div class="message-avatar">
+            <span v-if="message.type === 'user'">U</span>
+            <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10" />
+              <path d="M8 14s1.5 2 4 2 4-2 4-2" />
+              <line x1="9" y1="9" x2="9.01" y2="9" />
+              <line x1="15" y1="9" x2="15.01" y2="9" />
+            </svg>
+          </div>
 
-            <div class="message-content">
-              <div class="message-text">{{ message.content }}</div>
+          <div class="message-content">
+            <div class="message-text">{{ message.content }}</div>
 
-              <div v-if="message.sources" class="message-sources">
-                <div class="sources-title">参考来源:</div>
-                <div class="sources-list">
-                  <div
-                    v-for="(source, index) in message.sources"
-                    :key="index"
-                    class="source-item"
-                  >
-                    <svg class="source-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
-                      <polyline points="13 2 13 9 20 9" />
-                    </svg>
-                    <span>{{ source.name }}</span>
-                  </div>
+            <div v-if="message.sources" class="message-sources">
+              <div class="sources-title">参考来源</div>
+              <div class="sources-list">
+                <div
+                  v-for="(source, index) in message.sources"
+                  :key="index"
+                  class="source-item"
+                >
+                  <svg class="source-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
+                    <polyline points="13 2 13 9 20 9" />
+                  </svg>
+                  <span>{{ source.name }}</span>
                 </div>
               </div>
-
-              <div class="message-time">{{ formatTime(message.timestamp) }}</div>
             </div>
+
+            <div class="message-time">{{ formatTime(message.timestamp) }}</div>
           </div>
+        </div>
 
-          <div v-if="isLoading" class="message assistant">
-            <div class="message-avatar">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10" />
-                <path d="M8 14s1.5 2 4 2 4-2 4-2" />
-                <line x1="9" y1="9" x2="9.01" y2="9" />
-                <line x1="15" y1="9" x2="15.01" y2="9" />
-              </svg>
-            </div>
-            <div class="message-content">
-              <div class="typing-indicator">
-                <span></span>
-                <span></span>
-                <span></span>
-              </div>
+        <div v-if="isLoading" class="message assistant">
+          <div class="message-avatar">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10" />
+              <path d="M8 14s1.5 2 4 2 4-2 4-2" />
+              <line x1="9" y1="9" x2="9.01" y2="9" />
+              <line x1="15" y1="9" x2="15.01" y2="9" />
+            </svg>
+          </div>
+          <div class="message-content">
+            <div class="typing-indicator">
+              <span></span>
+              <span></span>
+              <span></span>
             </div>
           </div>
         </div>
       </div>
+    </div>
 
-      <div class="chat-input-container">
-        <form class="chat-input-form" @submit.prevent="sendMessage">
-          <input
-            v-model="inputMessage"
-            type="text"
-            class="chat-input"
-            placeholder="输入你的问题..."
-            :disabled="isLoading"
-          />
-          <button
-            type="submit"
-            class="send-button"
-            :disabled="!inputMessage.trim() || isLoading"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="22" y1="2" x2="11" y2="13" />
-              <polygon points="22 2 15 22 11 13 2 9 22 2" />
-            </svg>
-          </button>
-        </form>
-      </div>
+    <!-- 输入区域 -->
+    <div class="input-section">
+      <form class="input-form" @submit.prevent="sendMessage">
+        <input
+          v-model="inputMessage"
+          type="text"
+          class="message-input"
+          placeholder="输入你的问题..."
+          :disabled="isLoading"
+        />
+        <button
+          type="submit"
+          class="send-btn"
+          :disabled="!inputMessage.trim() || isLoading"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="22" y1="2" x2="11" y2="13" />
+            <polygon points="22 2 15 22 11 13 2 9 22 2" />
+          </svg>
+        </button>
+      </form>
     </div>
   </div>
 </template>
 
 <style scoped>
 .chat-page {
-  height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-lg);
-}
-
-.chat-wrapper {
-  display: grid;
-  grid-template-rows: auto 1fr auto;
   height: 100%;
-  width: 100%;
-  max-width: 1000px;
-  background: var(--surface-1);
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border);
-  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 32px;
+  gap: 24px;
 }
 
-.chat-header {
-  padding: var(--space-xl);
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
+/* 头部 */
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.header-info {
+  display: grid;
+  gap: 4px;
 }
 
 .title {
-  font-size: clamp(1.5rem, 4vw, 2rem);
+  font-size: 24px;
   font-weight: 600;
-  margin-bottom: var(--space-sm);
-  letter-spacing: -0.02em;
   color: var(--text-primary);
+  margin: 0;
 }
 
 .subtitle {
+  font-size: 14px;
   color: var(--text-secondary);
-  font-size: 15px;
+  margin: 0;
 }
 
-.chat-content {
+/* 对话容器 */
+.chat-container {
+  flex: 1;
   overflow-y: auto;
-  padding: var(--space-xl);
-  background: var(--surface-0);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 24px;
 }
-
+/* 空状态 */
 .empty-state {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   height: 100%;
-  gap: var(--space-md);
+  gap: 16px;
 }
 
 .empty-icon {
   width: 64px;
   height: 64px;
-  color: var(--text-tertiary);
-  opacity: 0.5;
+  color: var(--text-secondary);
+  opacity: 0.4;
 }
 
 .empty-text {
   font-size: 18px;
-  color: var(--text-primary);
   font-weight: 500;
+  color: var(--text-primary);
+  margin: 0;
 }
 
 .empty-hint {
   font-size: 14px;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
+  margin: 0;
 }
 
+/* 消息列表 */
 .messages {
   display: flex;
   flex-direction: column;
-  gap: var(--space-lg);
+  gap: 24px;
 }
 
 .message {
   display: grid;
-  grid-template-columns: 40px 1fr;
-  gap: var(--space-md);
+  grid-template-columns: 36px 1fr;
+  gap: 12px;
+  align-items: start;
 }
 
 .message-avatar {
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -255,37 +260,39 @@ const formatTime = (date) => {
 }
 
 .message.user .message-avatar {
-  background: var(--primary);
+  background: var(--accent);
   color: #FFFFFF;
 }
 
 .message.assistant .message-avatar {
-  background: var(--surface-3);
-  color: var(--primary);
+  background: var(--surface-2);
+  color: var(--accent);
+  border: 1px solid var(--border);
 }
 
 .message-avatar svg {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
 }
 
 .message-content {
   display: flex;
   flex-direction: column;
-  gap: var(--space-sm);
+  gap: 12px;
 }
 
 .message-text {
-  padding: var(--space-md);
-  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  border-radius: 8px;
   font-size: 15px;
   line-height: 1.6;
+  word-wrap: break-word;
 }
 
 .message.user .message-text {
-  background: rgba(56, 189, 248, 0.1);
+  background: var(--accent-light);
   color: var(--text-primary);
-  border: 1px solid var(--primary);
+  border: 1px solid var(--accent);
 }
 
 .message.assistant .message-text {
@@ -294,62 +301,60 @@ const formatTime = (date) => {
   border: 1px solid var(--border);
 }
 
+/* 参考来源 */
 .message-sources {
-  margin-top: var(--space-sm);
+  display: grid;
+  gap: 8px;
 }
 
 .sources-title {
   font-size: 13px;
-  color: var(--text-tertiary);
-  margin-bottom: var(--space-xs);
+  font-weight: 500;
+  color: var(--text-secondary);
 }
 
 .sources-list {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-xs);
+  gap: 8px;
 }
 
 .source-item {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 12px;
-  background: var(--surface-3);
+  padding: 6px 12px;
+  background: var(--surface-1);
   border: 1px solid var(--border);
-  border-radius: var(--radius-full);
+  border-radius: 6px;
   font-size: 13px;
   color: var(--text-secondary);
-  transition: all 0.2s;
-}
-
-.source-item:hover {
-  background: var(--surface-4);
-  border-color: var(--primary);
+  cursor: pointer;
 }
 
 .source-icon {
   width: 14px;
   height: 14px;
-  color: var(--primary);
+  color: var(--accent);
 }
 
 .message-time {
   font-size: 12px;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
 }
 
+/* 输入中动画 */
 .typing-indicator {
   display: flex;
   gap: 6px;
-  padding: var(--space-md);
+  padding: 14px 16px;
 }
 
 .typing-indicator span {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--text-tertiary);
+  background: var(--text-secondary);
   animation: typing 1.4s infinite;
 }
 
@@ -364,32 +369,32 @@ const formatTime = (date) => {
 @keyframes typing {
   0%, 60%, 100% {
     opacity: 0.3;
-    transform: translateY(0);
   }
   30% {
     opacity: 1;
-    transform: translateY(-8px);
   }
 }
 
-.chat-input-container {
-  padding: var(--space-lg) var(--space-xl);
-  background: var(--surface-2);
-  border-top: 1px solid var(--border);
+/* 输入区域 */
+.input-section {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
 }
 
-.chat-input-form {
+.input-form {
   display: grid;
   grid-template-columns: 1fr auto;
-  gap: var(--space-md);
+  gap: 12px;
   align-items: center;
 }
 
-.chat-input {
-  padding: 14px var(--space-lg);
-  background: var(--surface-1);
-  border: 1.5px solid var(--border);
-  border-radius: var(--radius-full);
+.message-input {
+  padding: 12px 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
   color: var(--text-primary);
   font-size: 15px;
   font-family: var(--font-sans);
@@ -397,51 +402,41 @@ const formatTime = (date) => {
   transition: all 0.2s;
 }
 
-.chat-input::placeholder {
-  color: var(--text-tertiary);
+.message-input::placeholder {
+  color: var(--text-secondary);
 }
 
-.chat-input:focus {
-  border-color: var(--primary);
-  background: var(--surface-0);
-  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.1);
+.message-input:focus {
+  border-color: var(--accent);
+  background: var(--surface-1);
 }
 
-.chat-input:disabled {
+.message-input:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.send-button {
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  background: var(--primary);
+.send-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  background: var(--accent);
   border: none;
   color: #FFFFFF;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.2s;
   flex-shrink: 0;
+  transition: opacity 0.2s;
 }
 
-.send-button:hover:not(:disabled) {
-  background: var(--primary-hover);
-  transform: scale(1.05);
-}
-
-.send-button:active:not(:disabled) {
-  transform: scale(0.95);
-}
-
-.send-button:disabled {
+.send-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.send-button svg {
+.send-btn svg {
   width: 20px;
   height: 20px;
 }
