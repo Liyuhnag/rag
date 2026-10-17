@@ -3,12 +3,17 @@ import { ref, computed } from 'vue'
 import Toast from './Toast.vue'
 import Confirm from './Confirm.vue'
 import Pagination from './Pagination.vue'
+import UploadPanel from './UploadPanel.vue'
 import IconFilePdf from '../icons/IconFilePdf.vue'
 import IconFileMarkdown from '../icons/IconFileMarkdown.vue'
 import IconFileWord from '../icons/IconFileWord.vue'
 import IconFileText from '../icons/IconFileText.vue'
 import IconFileExcel from '../icons/IconFileExcel.vue'
 import IconFileCsv from '../icons/IconFileCsv.vue'
+import { useUploadManager } from '../composables/useUploadManager.js'
+
+// 使用上传管理器
+const { addUploadTask } = useUploadManager()
 
 // 文件图标映射
 const fileIconMap = {
@@ -216,8 +221,7 @@ const confirmState = ref({
 
 // 显示上传对话框
 const showUploadDialog = ref(false)
-const uploadingFiles = ref([])
-const uploadProgress = ref({})
+const selectedFiles = ref([])
 
 const showToast = (type, message) => {
   toastState.value = {
@@ -258,39 +262,30 @@ const openUploadDialog = () => {
 }
 
 const closeUploadDialog = () => {
-  if (uploadingFiles.value.some(f => f.status === 'uploading')) {
-    showConfirm(
-      '确认关闭',
-      '还有文件正在上传中，确定要关闭吗？',
-      'warning',
-      () => {
-        showUploadDialog.value = false
-        uploadingFiles.value = []
-      }
-    )
-  } else {
-    showUploadDialog.value = false
-    uploadingFiles.value = []
-  }
+  showUploadDialog.value = false
+  selectedFiles.value = []
 }
 
 const handleFileInput = (e) => {
-  const selectedFiles = Array.from(e.target.files)
-  addFiles(selectedFiles)
+  const files = Array.from(e.target.files)
+  addFilesToSelection(files)
 }
 
-const addFiles = (newFiles) => {
-  newFiles.forEach(file => {
-    if (!uploadingFiles.value.find(f => f.name === file.name)) {
-      uploadingFiles.value.push({
+const addFilesToSelection = (files) => {
+  files.forEach(file => {
+    if (!selectedFiles.value.find(f => f.name === file.name)) {
+      selectedFiles.value.push({
         id: Date.now() + Math.random(),
+        file: file,
         name: file.name,
-        size: formatFileSize(file.size),
-        status: 'pending',
-        file: file
+        size: formatFileSize(file.size)
       })
     }
   })
+}
+
+const removeSelectedFile = (id) => {
+  selectedFiles.value = selectedFiles.value.filter(f => f.id !== id)
 }
 
 const formatFileSize = (bytes) => {
@@ -307,53 +302,17 @@ const getFileType = (filename) => {
 }
 
 const uploadFiles = async () => {
-  if (uploadingFiles.value.length === 0) {
+  if (selectedFiles.value.length === 0) {
     showToast('warning', '请先选择要上传的文件')
     return
   }
 
-  for (const fileItem of uploadingFiles.value) {
-    if (fileItem.status === 'pending') {
-      fileItem.status = 'uploading'
-      uploadProgress.value[fileItem.id] = 0
+  // 将选中的文件添加到上传管理器
+  selectedFiles.value.forEach(item => {
+    addUploadTask(item.file)
+  })
 
-      // 模拟上传进度
-      await new Promise(resolve => {
-        const interval = setInterval(() => {
-          uploadProgress.value[fileItem.id] += 10
-          if (uploadProgress.value[fileItem.id] >= 100) {
-            clearInterval(interval)
-            fileItem.status = 'completed'
-
-            // 添加到文件列表
-            allFiles.value.unshift({
-              id: Date.now() + Math.random(),
-              name: fileItem.name,
-              type: getFileType(fileItem.name),
-              size: fileItem.size,
-              chunks: Math.floor(Math.random() * 50) + 5,
-              status: 'completed',
-              uploadedAt: new Date().toLocaleString('zh-CN', {
-                year: 'numeric',
-                month: '2-digit',
-                day: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit'
-              }),
-              url: null
-            })
-
-            // 重置到第一页
-            currentPage.value = 1
-
-            resolve()
-          }
-        }, 200)
-      })
-    }
-  }
-
-  showToast('success', `成功上传 ${uploadingFiles.value.length} 个文件`)
+  showToast('success', `已添加 ${selectedFiles.value.length} 个文件到上传队列`)
   closeUploadDialog()
 }
 
@@ -381,10 +340,6 @@ const previewFile = (file) => {
   } else {
     showToast('warning', '该文件暂不支持预览')
   }
-}
-
-const removeUploadingFile = (id) => {
-  uploadingFiles.value = uploadingFiles.value.filter(f => f.id !== id)
 }
 </script>
 
@@ -515,21 +470,16 @@ const removeUploadingFile = (id) => {
           </label>
 
           <!-- 待上传文件列表 -->
-          <div v-if="uploadingFiles.length > 0" class="uploading-list">
-            <div v-for="file in uploadingFiles" :key="file.id" class="uploading-item">
+          <div v-if="selectedFiles.length > 0" class="uploading-list">
+            <div v-for="file in selectedFiles" :key="file.id" class="uploading-item">
               <div class="uploading-info">
                 <span class="uploading-name">{{ file.name }}</span>
                 <span class="uploading-size">{{ file.size }}</span>
               </div>
 
-              <div v-if="file.status === 'uploading'" class="uploading-progress">
-                <div class="progress-bar" :style="{ width: uploadProgress[file.id] + '%' }"></div>
-              </div>
-
               <button
-                v-if="file.status === 'pending'"
                 class="remove-btn"
-                @click="removeUploadingFile(file.id)"
+                @click="removeSelectedFile(file.id)"
               >
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <line x1="18" y1="6" x2="6" y2="18" />
@@ -546,6 +496,9 @@ const removeUploadingFile = (id) => {
         </div>
       </div>
     </div>
+
+    <!-- 上传任务面板 -->
+    <UploadPanel />
 
     <!-- Toast 提示 -->
     <Toast
@@ -917,18 +870,6 @@ const removeUploadingFile = (id) => {
   color: var(--text-secondary);
   flex-shrink: 0;
   margin-left: 12px;
-}
-
-.uploading-progress {
-  height: 4px;
-  background: var(--surface-3);
-  border-radius: 4px;
-  overflow: hidden;
-}
-
-.progress-bar {
-  height: 100%;
-  background: var(--primary);
 }
 
 .remove-btn {

@@ -60,6 +60,46 @@ export function deleteDocument(documentId) {
 }
 
 /**
+ * 下载文档
+ * @param {string} fileUrl - 文件 URL
+ * @param {string} fileName - 文件名
+ * @returns {Promise<void>}
+ */
+export async function downloadDocument(fileUrl, fileName) {
+  try {
+    // 使用 fetch 获取文件
+    const response = await fetch(fileUrl, {
+      method: 'GET',
+      mode: 'cors'
+    })
+
+    if (!response.ok) {
+      throw new Error(`下载失败 (${response.status})`)
+    }
+
+    // 获取 Blob 数据
+    const blob = await response.blob()
+
+    // 创建下载链接
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = fileName
+    link.style.display = 'none'
+
+    // 触发下载
+    document.body.appendChild(link)
+    link.click()
+
+    // 清理
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
+  } catch (error) {
+    throw new Error(error.message || '下载文件失败')
+  }
+}
+
+/**
  * 使用 XMLHttpRequest 上传文件（支持进度）
  * @param {string} url - 上传路径
  * @param {FormData} formData - 表单数据
@@ -113,4 +153,13 @@ function uploadWithProgress(url, formData, onProgress) {
     xhr.timeout = UPLOAD_TIMEOUT
     xhr.send(formData)
   })
+}
+
+/**
+ * 查询任务状态
+ * @param {string} taskId - 任务 ID
+ * @returns {Promise<Object>}
+ */
+export function getTaskStatus(taskId) {
+  return get(`/tasks/${taskId}`)
 }

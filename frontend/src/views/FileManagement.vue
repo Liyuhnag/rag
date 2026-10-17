@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { getDocuments, uploadDocument, deleteDocument } from '../api'
+import { getDocuments, uploadDocument, deleteDocument, downloadDocument } from '../api'
 import Toast from '../components/Toast.vue'
 import Confirm from '../components/Confirm.vue'
 import Pagination from '../components/Pagination.vue'
@@ -284,22 +284,19 @@ const closePreview = () => {
   previewFile.value = null
 }
 
-const handleDownload = (file) => {
+const handleDownload = async (file) => {
   if (!file.url) {
     showToast('warning', '文件下载链接不可用')
     return
   }
 
-  // 创建隐藏的 a 标签触发浏览器下载
-  const link = document.createElement('a')
-  link.href = file.url
-  link.download = file.name // 指定下载文件名
-  link.target = '_blank' // 跨域情况下的备用方案
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-
-  showToast('success', '开始下载文件')
+  try {
+    showToast('info', '正在准备下载...')
+    await downloadDocument(file.url, file.name)
+    showToast('success', '文件下载成功')
+  } catch (error) {
+    showToast('error', error.message || '文件下载失败')
+  }
 }
 
 // === 删除文件 ===
