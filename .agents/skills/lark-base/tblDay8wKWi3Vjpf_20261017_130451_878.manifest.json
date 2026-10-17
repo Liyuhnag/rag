@@ -1,0 +1,155 @@
+{
+  "manifest_version": "v1",
+  "format": "ndjson",
+  "base_token": "JVnnbUcNEaSkvqs7XhTc8ZbKnjf",
+  "table_id": "tblDay8wKWi3Vjpf",
+  "rev": 47,
+  "timezone": "Asia/Shanghai",
+  "query_context": {
+    "record_scope": "selected_record_ids",
+    "requested_record_count": 1
+  },
+  "records_count": 1,
+  "page_count": 1,
+  "has_more": false,
+  "record_file": "/Applications/rag/.agents/skills/lark-base/tblDay8wKWi3Vjpf_20261017_130451_878.ndjson",
+  "record_file_size_bytes": 382,
+  "manifest_file": "/Applications/rag/.agents/skills/lark-base/tblDay8wKWi3Vjpf_20261017_130451_878.manifest.json",
+  "columns": {
+    "Git分支": {
+      "field_id": "fldX6tcYve",
+      "field_type": "text",
+      "physical_type": "string|null",
+      "stats": {
+        "null_count": 1,
+        "max_length": 0
+      },
+      "hint": "All values are empty; type inference may be ambiguous. Avoid analyzing this column unless required."
+    },
+    "PR链接": {
+      "field_id": "fldRmmU7QJ",
+      "field_type": "text",
+      "physical_type": "string|null",
+      "stats": {
+        "null_count": 0,
+        "max_length": 38
+      },
+      "example": "https://github.com/Liyuhnag/rag/pull/1"
+    },
+    "record_id": {
+      "physical_type": "string",
+      "stats": {
+        "max_length": 16
+      },
+      "example": "reczz28OM0mgYqgl"
+    },
+    "优先级": {
+      "field_id": "fldA45j55o",
+      "field_type": "select",
+      "physical_type": "array<string>",
+      "stats": {
+        "empty_count": 0,
+        "max_length": 1,
+        "avg_length": 1
+      },
+      "example": [
+        "P1-高"
+      ]
+    },
+    "创建时间": {
+      "field_id": "fldSq8uac4",
+      "field_type": "datetime",
+      "physical_type": "string|null",
+      "stats": {
+        "null_count": 0,
+        "min": "2026-10-17T12:58:26.000+08:00",
+        "max": "2026-10-17T12:58:26.000+08:00"
+      },
+      "example": "2026-10-17T12:58:26.000+08:00"
+    },
+    "大需求": {
+      "field_id": "fldFaD2Rgc",
+      "field_type": "text",
+      "physical_type": "string|null",
+      "stats": {
+        "null_count": 0,
+        "max_length": 6
+      },
+      "example": "前端架构优化"
+    },
+    "完成时间": {
+      "field_id": "fld0GN28aJ",
+      "field_type": "datetime",
+      "physical_type": "string|null",
+      "stats": {
+        "null_count": 1
+      },
+      "hint": "All values are empty; type inference may be ambiguous. Avoid analyzing this column unless required."
+    },
+    "小需求": {
+      "field_id": "fldHa1Fnn4",
+      "field_type": "text",
+      "physical_type": "string|null",
+      "stats": {
+        "null_count": 0,
+        "max_length": 19
+      },
+      "example": "添加Vue Router并重构页面结构"
+    },
+    "技术文档": {
+      "field_id": "fldWoU8ivv",
+      "field_type": "text",
+      "physical_type": "string|null",
+      "stats": {
+        "null_count": 1,
+        "max_length": 0
+      },
+      "hint": "All values are empty; type inference may be ambiguous. Avoid analyzing this column unless required."
+    },
+    "状态": {
+      "field_id": "fldKQxUxGF",
+      "field_type": "select",
+      "physical_type": "array<string>",
+      "stats": {
+        "empty_count": 0,
+        "max_length": 1,
+        "avg_length": 1
+      },
+      "example": [
+        "已完成"
+      ]
+    },
+    "类型": {
+      "field_id": "fld9djWaSB",
+      "field_type": "select",
+      "physical_type": "array<string>",
+      "stats": {
+        "empty_count": 0,
+        "max_length": 1,
+        "avg_length": 1
+      },
+      "example": [
+        "前端"
+      ]
+    },
+    "负责人": {
+      "field_id": "fld39vvvEM",
+      "field_type": "text",
+      "physical_type": "string|null",
+      "stats": {
+        "null_count": 1,
+        "max_length": 0
+      },
+      "hint": "All values are empty; type inference may be ambiguous. Avoid analyzing this column unless required."
+    },
+    "预计工时(天)": {
+      "field_id": "fldvjrTskh",
+      "field_type": "number",
+      "physical_type": "number|null",
+      "stats": {
+        "null_count": 1
+      },
+      "hint": "All values are empty; type inference may be ambiguous. Avoid analyzing this column unless required."
+    }
+  }
+}

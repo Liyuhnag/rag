@@ -47,12 +47,12 @@ const route = useRoute()
 
 <style>
 :root {
-  /* 深色主题色彩系统 */
-  --surface-0: #05070C;
-  --surface-1: #0A0D12;
-  --surface-2: #0F131C;
-  --surface-3: #161D2B;
-  --surface-4: #1E2636;
+  /* 淡色主题色彩系统 */
+  --surface-0: #F8FAFC;
+  --surface-1: #FFFFFF;
+  --surface-2: #F1F5F9;
+  --surface-3: #E2E8F0;
+  --surface-4: #CBD5E1;
 
   /* 主题色 */
   --primary: #38BDF8;
@@ -60,14 +60,14 @@ const route = useRoute()
   --primary-active: #0284C7;
 
   /* 文字层级 */
-  --text-primary: #E2E8F0;
-  --text-secondary: #94A3B8;
-  --text-tertiary: #64748B;
-  --text-disabled: #475569;
+  --text-primary: #1E293B;
+  --text-secondary: #64748B;
+  --text-tertiary: #94A3B8;
+  --text-disabled: #CBD5E1;
 
   /* 边框与分割线 */
-  --border: rgba(255, 255, 255, 0.1);
-  --divider: rgba(255, 255, 255, 0.05);
+  --border: #E2E8F0;
+  --divider: #F1F5F9;
 
   /* 状态色 */
   --success: #10B981;
@@ -91,10 +91,10 @@ const route = useRoute()
   --radius-circle: 50%;
 
   /* 阴影系统 */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
-  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.3);
-  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.4);
-  --shadow-xl: 0 20px 25px rgba(0, 0, 0, 0.5);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.07);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
+  --shadow-xl: 0 20px 25px rgba(0, 0, 0, 0.15);
 
   /* 字体系统 */
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;

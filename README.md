@@ -15,7 +15,7 @@ rag/
 │   │   └── main.js
 │   ├── package.json
 │   └── vite.config.js
-├── backend/           # 后端项目 (待开发)
+├── backend/           # 后端项目 (FastAPI + uv)
 ├── docs/             # 项目文档
 ├── CLAUDE.md         # AI Agent 开发文档
 ├── AGENT.md          # Git 工作流和规范
@@ -30,10 +30,11 @@ rag/
 - **样式**: 原生 CSS + CSS Grid
 - **主题**: 深色主题 + 天蓝色 accent (#38BDF8)
 
-### 后端（待开发）
-- 文本向量化服务
-- 检索服务
-- API 接口
+### 后端
+- **Web 框架**: FastAPI
+- **环境管理**: uv（Python 3.12）
+- **已提供**: 文档与对话的 API 契约、参数校验
+- **服务占位**: 文档存储、检索和模型生成待实现
 
 ## 快速开始
 
@@ -47,12 +48,15 @@ npm run dev
 
 访问 http://localhost:5173
 
-### 后端开发（待实现）
+### 后端开发
 
 ```bash
 cd backend
-# 待补充
+uv sync --all-groups
+uv run uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
+
+访问 http://127.0.0.1:8000/docs
 
 ## Git 分支规范
 
