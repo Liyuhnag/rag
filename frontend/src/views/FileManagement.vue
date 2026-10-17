@@ -266,13 +266,16 @@ const showPreview = ref(false)
 const previewFile = ref(null)
 
 const handlePreview = (file) => {
+  if (!file.previewable) {
+    showToast('info', '该文件不支持在线预览，请下载查看')
+    return
+  }
+
   if (file.previewUrl) {
     previewFile.value = file
     showPreview.value = true
-  } else if (file.url) {
-    showToast('info', '该文件不支持预览，请下载查看')
   } else {
-    showToast('warning', '文件链接不可用')
+    showToast('warning', '预览链接不可用')
   }
 }
 
@@ -363,17 +366,18 @@ const loadFiles = async () => {
       id: doc.id,
       name: doc.name,
       type: doc.type,
-      size: formatFileSize(doc.size_bytes),
-      chunks: doc.chunk_count,
+      size: formatFileSize(doc.sizeBytes),
+      chunks: doc.chunkCount,
       status: doc.status.toLowerCase(),
-      uploadedAt: formatDateTime(doc.uploaded_at),
-      operator: doc.operator,
-      url: null, // TODO: 后端需要添加原始文件 URL
-      previewUrl: null // TODO: 后端需要添加预览 URL
+      uploadedAt: formatDateTime(doc.uploadedAt),
+      operator: doc.operator || 'Unknown',
+      url: doc.fileUrl,
+      previewUrl: doc.previewUrl,
+      previewable: doc.previewable
     }))
 
-    totalItems.value = response.pagination.total_items
-    totalPages.value = response.pagination.total_pages
+    totalItems.value = response.pagination.totalItems
+    totalPages.value = response.pagination.totalPages
   } catch (error) {
     showToast('error', error.message || '加载文件列表失败')
     allFiles.value = []
@@ -462,7 +466,13 @@ onMounted(() => {
             <div class="cell cell-chunks">{{ file.chunks }}</div>
             <div class="cell cell-time">{{ file.uploadedAt }}</div>
             <div class="cell cell-actions">
-              <button class="btn-action" @click="handlePreview(file)" title="预览">
+              <button
+                class="btn-action"
+                :class="{ 'btn-disabled': !file.previewable }"
+                :disabled="!file.previewable"
+                @click="handlePreview(file)"
+                :title="file.previewable ? '预览' : '不支持预览'"
+              >
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                   <path d="M8 3C4.5 3 1.7 5.6 1 8c.7 2.4 3.5 5 7 5s6.3-2.6 7-5c-.7-2.4-3.5-5-7-5z" stroke="currentColor" stroke-width="1.5"/>
                   <circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.5"/>
@@ -758,6 +768,11 @@ onMounted(() => {
   background: var(--surface-0);
   color: var(--text-secondary);
   cursor: pointer;
+}
+
+.btn-action.btn-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .btn-delete:hover {
