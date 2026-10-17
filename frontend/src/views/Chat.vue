@@ -81,16 +81,6 @@ const formatTime = (date) => {
           class="message"
           :class="message.type"
         >
-          <div class="message-avatar">
-            <span v-if="message.type === 'user'">U</span>
-            <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10" />
-              <path d="M8 14s1.5 2 4 2 4-2 4-2" />
-              <line x1="9" y1="9" x2="9.01" y2="9" />
-              <line x1="15" y1="9" x2="15.01" y2="9" />
-            </svg>
-          </div>
-
           <div class="message-content">
             <div class="message-text">{{ message.content }}</div>
 
@@ -116,14 +106,6 @@ const formatTime = (date) => {
         </div>
 
         <div v-if="isLoading" class="message assistant">
-          <div class="message-avatar">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10" />
-              <path d="M8 14s1.5 2 4 2 4-2 4-2" />
-              <line x1="9" y1="9" x2="9.01" y2="9" />
-              <line x1="15" y1="9" x2="15.01" y2="9" />
-            </svg>
-          </div>
           <div class="message-content">
             <div class="typing-indicator">
               <span></span>
@@ -241,44 +223,26 @@ const formatTime = (date) => {
 }
 
 .message {
-  display: grid;
-  grid-template-columns: 36px 1fr;
-  gap: 12px;
-  align-items: start;
-}
-
-.message-avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 600;
-  font-size: 14px;
-  flex-shrink: 0;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.message.user .message-avatar {
-  background: var(--accent);
-  color: #FFFFFF;
+/* 用户消息：右对齐 */
+.message.user {
+  align-items: flex-end;
 }
 
-.message.assistant .message-avatar {
-  background: var(--surface-2);
-  color: var(--accent);
-  border: 1px solid var(--border);
-}
-
-.message-avatar svg {
-  width: 18px;
-  height: 18px;
+/* AI 消息：左对齐 */
+.message.assistant {
+  align-items: flex-start;
 }
 
 .message-content {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  max-width: 75%;
 }
 
 .message-text {
@@ -290,9 +254,9 @@ const formatTime = (date) => {
 }
 
 .message.user .message-text {
-  background: var(--accent-light);
-  color: var(--text-primary);
-  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #FFFFFF;
+  border: none;
 }
 
 .message.assistant .message-text {
