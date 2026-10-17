@@ -13,7 +13,7 @@ from api.documents import router as document_router
 from api.health import router as health_router
 from config import Settings
 from config import load_settings
-from services.chat_service import ChatService
+from services.chat.service import ChatService
 from services.common import connect_storage
 
 logger = logging.getLogger("rag.api")

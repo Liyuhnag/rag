@@ -4,7 +4,7 @@
 from fastapi import Request
 
 from config import Settings
-from services.chat_service import ChatService
+from services.chat.service import ChatService
 
 
 def get_settings(request: Request) -> Settings:
