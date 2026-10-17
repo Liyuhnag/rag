@@ -332,7 +332,7 @@ const formatTime = (date) => {
 }
 
 .message.user .message-text {
-  background: var(--accent);
+  background: var(--primary);
   color: #FFFFFF;
   border: none;
   border-radius: 12px 12px 2px 12px;
@@ -379,7 +379,7 @@ const formatTime = (date) => {
 .source-icon {
   width: 14px;
   height: 14px;
-  color: var(--accent);
+  color: var(--primary);
 }
 
 .message-time {
@@ -451,7 +451,7 @@ const formatTime = (date) => {
 }
 
 .message-input:focus {
-  border-color: var(--accent);
+  border-color: var(--primary);
   background: var(--surface-1);
 }
 
@@ -464,7 +464,7 @@ const formatTime = (date) => {
   width: 44px;
   height: 44px;
   border-radius: 8px;
-  background: var(--accent);
+  background: var(--primary);
   border: none;
   color: #FFFFFF;
   cursor: pointer;
