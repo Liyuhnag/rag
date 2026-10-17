@@ -468,6 +468,11 @@ onMounted(() => {
                   <circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.5"/>
                 </svg>
               </button>
+              <button class="btn-action" @click="handleDownload(file)" title="下载">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M8 2v8M5 7l3 3 3-3M3 14h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
               <button class="btn-action btn-delete" @click="handleDelete(file)" title="删除">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                   <path d="M3 4h10M6 4V3h4v1M6 7v4M10 7v4M4 4l.5 8h7l.5-8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
