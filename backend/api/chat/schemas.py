@@ -7,7 +7,7 @@ from enum import Enum
 from pydantic import Field
 from pydantic import field_validator
 
-from models.common import APIModel
+from api.common.schemas import APIModel
 
 
 class ChatRole(str, Enum):

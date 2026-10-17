@@ -244,7 +244,7 @@ rag/                                # 仓库根目录
 
 **Alert 组件规范：**
 ```vue
-<Alert 
+<Alert
   :type="'success' | 'error' | 'warning' | 'info'"
   :message="提示文字"
   :show="布尔值"

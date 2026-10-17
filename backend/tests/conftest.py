@@ -6,20 +6,18 @@ from fastapi.testclient import TestClient
 
 from config import Settings
 from main import create_app
+from tests.memory import MemoryDocumentRepository
+from tests.memory import open_memory_storage
+from tests.memory import use_memory_records
 
 
 @pytest.fixture
-def upload_dir(tmp_path):
-    return tmp_path / "uploads"
-
-
-@pytest.fixture
-def client(upload_dir):
+def client(monkeypatch: pytest.MonkeyPatch):
     settings = Settings(
         max_upload_bytes=1024,
-        upload_dir=upload_dir,
         cors_origins=("http://localhost:5173",),
     )
-    application = create_app(settings)
+    use_memory_records(monkeypatch, MemoryDocumentRepository())
+    application = create_app(settings, open_memory_storage)
     with TestClient(application) as test_client:
         yield test_client

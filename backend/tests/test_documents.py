@@ -1,17 +1,13 @@
 # -*- coding: utf-8 -*-
-"""文档接口。服务尚未实现，合法请求在校验后返回 501。"""
+"""文档接口。上传写入存储，检索和生成仍未接入。"""
 
-from api.uploads import normalize_filename
+from api.documents.validators import normalize_filename
 
 
-def _upload(client, name, content, operator=None):
-    data = None
-    if operator is not None:
-        data = {"operator": operator}
+def _upload(client, name, content):
     return client.post(
         "/api/documents",
         files={"file": (name, content, "application/octet-stream")},
-        data=data,
     )
 
 
@@ -20,18 +16,47 @@ def test_normalize_filename_keeps_basename():
     assert normalize_filename("手册.pdf") == "手册.pdf"
 
 
-def test_list_documents_is_not_ready(client):
+def test_upload_stores_document(client):
+    content = b"%PDF-1.4 sample"
+    response = _upload(client, "手册.pdf", content)
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["name"] == "手册.pdf"
+    assert body["type"] == "pdf"
+    assert body["sizeBytes"] == len(content)
+    assert body["chunkCount"] == 0
+    assert body["status"] == "UPLOADED"
+    assert body["id"]
+    assert body["uploadedAt"]
+
+
+def test_list_returns_uploaded_document(client):
+    _upload(client, "note.txt", b"hello")
+
     response = client.get("/api/documents")
 
-    assert response.status_code == 501
-    assert response.json()["error"]["code"] == "NOT_IMPLEMENTED"
+    assert response.status_code == 200
+    body = response.json()
+    assert body["pagination"]["totalItems"] == 1
+    assert body["pagination"]["totalPages"] == 1
+    assert body["data"][0]["name"] == "note.txt"
 
 
-def test_upload_is_not_ready_after_validation(client):
-    response = _upload(client, "手册.pdf", b"%PDF-1.4 sample", operator="张三")
+def test_get_and_delete_uploaded_document(client):
+    created = _upload(client, "note.txt", b"hello").json()
+    document_id = created["id"]
 
-    assert response.status_code == 501
-    assert response.json()["error"]["message"] == "文档服务尚未接入"
+    fetched = client.get(f"/api/documents/{document_id}")
+    assert fetched.status_code == 200
+    assert fetched.json()["name"] == "note.txt"
+
+    deleted = client.delete(f"/api/documents/{document_id}")
+    assert deleted.status_code == 204
+
+    missing = client.get(f"/api/documents/{document_id}")
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "NOT_FOUND"
 
 
 def test_upload_rejects_unsupported_type(client):
@@ -65,18 +90,18 @@ def test_upload_requires_file(client):
     assert "traceback" not in response.text.lower()
 
 
-def test_get_document_is_not_ready(client):
+def test_get_missing_document(client):
     response = client.get("/api/documents/missing")
 
-    assert response.status_code == 501
-    assert response.json()["error"]["code"] == "NOT_IMPLEMENTED"
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "NOT_FOUND"
 
 
-def test_delete_document_is_not_ready(client):
+def test_delete_missing_document(client):
     response = client.delete("/api/documents/missing")
 
-    assert response.status_code == 501
-    assert response.json()["error"]["code"] == "NOT_IMPLEMENTED"
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "NOT_FOUND"
 
 
 def test_list_rejects_invalid_page_size(client):

@@ -1,0 +1,236 @@
+<title>聊天界面优化设计文档</title>
+
+<h1>📋 项目信息</h1>
+<ul>
+<li><b>需求名称</b>：聊天界面优化</li>
+<li><b>开发时间</b>：2026-10-17</li>
+<li><b>负责人</b>：ahanali</li>
+<li><b>Git分支</b>：feat/chat-interface-optimization</li>
+<li><b>PR链接</b>：<a href="https://github.com/Liyuhnag/rag/pull/2">https://github.com/Liyuhnag/rag/pull/2</a></li>
+</ul>
+
+<h1>🎯 需求背景</h1>
+<p>原有聊天界面存在以下问题：</p>
+<ol>
+<li>布局不统一，与文件管理页面样式差异大</li>
+<li>消息展示不清晰，缺少左右对话布局</li>
+<li>没有头像设计，视觉单调</li>
+<li>整体UI不够专业，缺少层次感</li>
+</ol>
+
+<h1>🎨 设计方案</h1>
+
+<h2>整体布局</h2>
+<p>采用三段式布局结构：</p>
+<ul>
+<li><b>头部区域</b>：标题 + 副标题</li>
+<li><b>对话内容区</b>：独立白色卡片容器</li>
+<li><b>输入区域</b>：底部固定的输入卡片</li>
+</ul>
+<p>与文件管理页面保持一致的 32px padding。</p>
+
+<h2>消息布局</h2>
+
+<h3>用户消息（右侧）</h3>
+<ul>
+<li>位置：右对齐</li>
+<li>头像：蓝色渐变背景 + 白色用户图标</li>
+<li>气泡：蓝色背景（<span background-color="blue">--primary</span>），右下角带尖角</li>
+<li>最大宽度：70%</li>
+</ul>
+
+<h3>AI 消息（左侧）</h3>
+<ul>
+<li>位置：左对齐</li>
+<li>头像：浅灰渐变背景 + 蓝色层叠图标</li>
+<li>气泡：浅灰背景（--surface-2），左下角带尖角</li>
+<li>参考来源：显示文档名和页码</li>
+<li>最大宽度：70%</li>
+</ul>
+
+<h2>头像设计</h2>
+<p>采用圆形渐变头像 + SVG 图标：</p>
+
+<p><b>用户头像</b></p>
+<pre lang="css"><code>background: linear-gradient(135deg, #38BDF8 0%, #0EA5E9 100%);
+border: 2px solid #38BDF8;
+color: #FFFFFF;</code></pre>
+
+<p><b>AI 头像</b></p>
+<pre lang="css"><code>background: linear-gradient(135deg, #F1F5F9 0%, #E2E8F0 100%);
+border: 2px solid #E2E8F0;
+color: #38BDF8;</code></pre>
+
+<h2>颜色系统</h2>
+<p>使用淡色主题，关键颜色变量：</p>
+
+<table>
+<thead>
+<tr>
+<th><p>变量名</p></th>
+<th><p>颜色值</p></th>
+<th><p>用途</p></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><p>--primary</p></td>
+<td><p>#38BDF8</p></td>
+<td><p>用户消息背景、按钮</p></td>
+</tr>
+<tr>
+<td><p>--surface-0</p></td>
+<td><p>#F8FAFC</p></td>
+<td><p>页面背景</p></td>
+</tr>
+<tr>
+<td><p>--surface-1</p></td>
+<td><p>#FFFFFF</p></td>
+<td><p>卡片背景</p></td>
+</tr>
+<tr>
+<td><p>--surface-2</p></td>
+<td><p>#F1F5F9</p></td>
+<td><p>AI消息背景</p></td>
+</tr>
+<tr>
+<td><p>--border</p></td>
+<td><p>#E2E8F0</p></td>
+<td><p>边框颜色</p></td>
+</tr>
+<tr>
+<td><p>--text-primary</p></td>
+<td><p>#1E293B</p></td>
+<td><p>主要文字</p></td>
+</tr>
+<tr>
+<td><p>--text-secondary</p></td>
+<td><p>#64748B</p></td>
+<td><p>次要文字</p></td>
+</tr>
+</tbody>
+</table>
+
+<h1>💡 关键技术点</h1>
+
+<h2>1. 消息气泡尖角效果</h2>
+<p>通过 border-radius 实现：</p>
+<pre lang="css"><code>/* 用户消息：右下角尖角 */
+.message.user .message-text {
+  border-radius: 12px 12px 2px 12px;
+}
+
+/* AI 消息：左下角尖角 */
+.message.assistant .message-text {
+  border-radius: 12px 12px 12px 2px;
+}</code></pre>
+
+<h2>2. 消息左右布局</h2>
+<p>使用 Flexbox 的 flex-direction 控制：</p>
+<pre lang="css"><code>/* 用户消息：反向排列（头像在右） */
+.message.user {
+  flex-direction: row-reverse;
+}
+
+/* AI 消息：正常排列（头像在左） */
+.message.assistant {
+  flex-direction: row;
+}</code></pre>
+
+<h2>3. 响应式布局</h2>
+<p>采用 Flexbox 垂直布局，聊天容器自适应剩余高度：</p>
+<pre lang="css"><code>.chat-page {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  padding: 32px;
+}
+
+.chat-container {
+  flex: 1;
+  overflow-y: auto;
+}</code></pre>
+
+<h1>📂 文件结构</h1>
+<pre><code>frontend/src/views/
+└── Chat.vue          # 聊天界面主组件（350+ 行）
+    ├── &lt;script setup&gt;
+    │   ├── messages - 消息列表
+    │   ├── sendMessage() - 发送消息
+    │   └── formatTime() - 时间格式化
+    ├── &lt;template&gt;
+    │   ├── 头部区域
+    │   ├── 对话容器
+    │   │   ├── 空状态
+    │   │   └── 消息列表
+    │   │       ├── 消息头像
+    │   │       ├── 消息内容
+    │   │       └── 参考来源
+    │   └── 输入区域
+    └── &lt;style scoped&gt;
+        ├── 布局样式
+        ├── 消息样式
+        └── 输入框样式</code></pre>
+
+<h1>✅ 完成情况</h1>
+<ul>
+<li><checkbox done="true">重新设计页面布局</checkbox></li>
+<li><checkbox done="true">实现左右对话布局</checkbox></li>
+<li><checkbox done="true">添加精致头像设计</checkbox></li>
+<li><checkbox done="true">优化消息气泡样式</checkbox></li>
+<li><checkbox done="true">添加消息尖角效果</checkbox></li>
+<li><checkbox done="true">统一配色方案</checkbox></li>
+<li><checkbox done="true">修正颜色变量（--accent → --primary）</checkbox></li>
+<li><checkbox done="true">添加测试数据</checkbox></li>
+</ul>
+
+<h1>🎯 效果展示</h1>
+
+<h2>主要特点</h2>
+<ol>
+<li>✨ 专业的对话界面设计</li>
+<li>🎨 清晰的视觉层次</li>
+<li>💬 直观的左右对话布局</li>
+<li>🌈 统一的淡色主题</li>
+<li>🎭 精致的渐变头像</li>
+</ol>
+
+<h2>用户体验提升</h2>
+<ul>
+<li>消息区分更明显（左右布局 + 颜色区分）</li>
+<li>视觉更专业（渐变头像 + 气泡尖角）</li>
+<li>布局更一致（与文件管理页面统一）</li>
+<li>交互更清晰（空状态提示 + 加载状态）</li>
+</ul>
+
+<h1>🔗 相关资源</h1>
+<ul>
+<li><b>GitHub PR</b>：<a href="https://github.com/Liyuhnag/rag/pull/2">https://github.com/Liyuhnag/rag/pull/2</a></li>
+<li><b>飞书任务</b>：<a href="https://ocn0mresg7ps.feishu.cn/base/JVnnbUcNEaSkvqs7XhTc8ZbKnjf?table=tblDay8wKWi3Vjpf&view=vewhWaSvDl">需求管理表格</a></li>
+<li><b>Git分支</b>：feat/chat-interface-optimization</li>
+</ul>
+
+<h1>📝 注意事项</h1>
+
+<h2>颜色变量使用</h2>
+<callout emoji="⚠️" background-color="light-orange" border-color="orange">
+<p>使用 <span background-color="blue">--primary</span> 而不是 --accent：</p>
+<ul>
+<li>用户消息背景</li>
+<li>发送按钮背景</li>
+<li>输入框焦点边框</li>
+<li>参考来源图标</li>
+</ul>
+</callout>
+
+<h2>后续优化方向</h2>
+<ol>
+<li>添加消息时间戳分组显示</li>
+<li>支持消息复制功能</li>
+<li>添加代码块高亮显示</li>
+<li>支持 Markdown 渲染</li>
+<li>添加消息加载动画</li>
+</ol>
+
+<hr/>
+<p align="center"><em>文档创建时间：2026-10-17</em><br/><em>最后更新：2026-10-17</em></p>

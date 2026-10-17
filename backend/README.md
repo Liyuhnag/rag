@@ -22,11 +22,22 @@ uv run pytest
 
 ## 环境变量
 
+配置放在 `backend/.env`，进程启动时读取。已存在的环境变量不会被 `.env` 覆盖。示例见 `.env.example`。
+
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `MAX_UPLOAD_BYTES` | `20971520` | 单个文件上限，20MB |
-| `UPLOAD_DIR` | `backend/data/uploads` | 原始文件目录 |
 | `CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | 允许的前端来源，逗号分隔 |
+| `S3_ENDPOINT` | 无 | S3 地址，例如 `http://127.0.0.1:8333` |
+| `S3_REGION` | `us-east-1` | 签名区域 |
+| `S3_ACCESS_KEY_ID` | 无 | 也可使用 `AWS_ACCESS_KEY_ID` |
+| `S3_SECRET_ACCESS_KEY` | 无 | 也可使用 `AWS_SECRET_ACCESS_KEY` |
+| `S3_BUCKET` | 无 | 上传使用的桶 |
+| `MYSQL_HOST` | `127.0.0.1` | 文档记录库地址 |
+| `MYSQL_PORT` | `3306` | 文档记录库端口 |
+| `MYSQL_USER` | 无 | 数据库用户 |
+| `MYSQL_PASSWORD` | 无 | 数据库密码 |
+| `MYSQL_DATABASE` | 无 | 数据库名 |
 
 ## 接口
 
@@ -44,12 +55,12 @@ uv run pytest
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | `GET` | `/api/health` | 健康检查 |
-| `GET` | `/api/documents` | 校验分页参数。服务占位期间返回 `501` |
-| `POST` | `/api/documents` | 校验文件后调用文档服务。服务占位期间返回 `501` |
-| `GET` | `/api/documents/{id}` | 调用文档服务。服务占位期间返回 `501` |
-| `DELETE` | `/api/documents/{id}` | 调用文档服务。服务占位期间返回 `501` |
+| `GET` | `/api/documents` | 分页返回已上传文档 |
+| `POST` | `/api/documents` | 校验文件后写入对象存储，并保存文档记录 |
+| `GET` | `/api/documents/{id}` | 返回一条文档记录 |
+| `DELETE` | `/api/documents/{id}` | 删除文档记录和对象 |
 | `POST` | `/api/chat` | 校验问题后返回 `501`，检索生成尚未接入 |
 
 允许的扩展名：`pdf`、`md`、`markdown`、`doc`、`docx`、`txt`、`xls`、`xlsx`、`csv`。
 
-列表查询参数为 `page`、`pageSize`、`sortBy`、`sortOrder`。上传表单字段为 `file`，可选 `operator`。这些成功响应的字段结构已经写在 OpenAPI 里。
+列表查询参数为 `page`、`pageSize`、`sortBy`、`sortOrder`。上传表单字段为 `file`。这些成功响应的字段结构已经写在 OpenAPI 里。

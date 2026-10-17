@@ -36,10 +36,6 @@ class ErrorResponse(APIModel):
     error: ErrorBody
 
 
-class HealthResponse(BaseModel):
-    status: str
-
-
 def error_payload(
     code: str,
     message: str,
@@ -48,3 +44,17 @@ def error_payload(
     body = ErrorBody(code=code, message=message, details=details)
     response = ErrorResponse(error=body)
     return response.model_dump(by_alias=True, exclude_none=True)
+
+
+def paginate(page: int, page_size: int, total_items: int) -> Pagination:
+    """把页码和总数收成统一的分页对象。"""
+    if total_items:
+        total_pages = (total_items + page_size - 1) // page_size
+    else:
+        total_pages = 0
+    return Pagination(
+        page=page,
+        page_size=page_size,
+        total_items=total_items,
+        total_pages=total_pages,
+    )

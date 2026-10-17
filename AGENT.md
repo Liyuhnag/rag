@@ -646,7 +646,7 @@ rag/                                # 仓库根目录
 
 **列宽分配（基于 fr 弹性单位）：**
 ```css
-grid-template-columns: 
+grid-template-columns:
   3fr      /* 文件名（最宽） */
   0.8fr    /* 类型 */
   0.8fr    /* 大小 */

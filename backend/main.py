@@ -2,27 +2,34 @@
 """FastAPI 应用入口。"""
 
 import logging
+from collections.abc import Callable
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.chat import router as chat_router
+from api.common.errors import register_exception_handlers
 from api.documents import router as document_router
-from api.errors import register_exception_handlers
 from api.health import router as health_router
 from config import Settings
 from config import load_settings
-from services.chat_service import ChatService
-from services.document_store import DocumentStore
+from services.chat.service import ChatService
+from services.common import connect_storage
 
 logger = logging.getLogger("rag.api")
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    open_storage: Callable[[Settings], None] | None = None,
+) -> FastAPI:
     active = load_settings() if settings is None else settings
+    if open_storage is None:
+        connect_storage(active)
+    else:
+        open_storage(active)
     application = FastAPI(title="RAG API", version="0.1.0")
     application.state.settings = active
-    application.state.document_store = DocumentStore(active.upload_dir)
     application.state.chat_service = ChatService()
     register_exception_handlers(application)
     application.add_middleware(
@@ -44,11 +51,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(health_router, prefix="/api")
     application.include_router(document_router, prefix="/api")
     application.include_router(chat_router, prefix="/api")
-    logger.debug("RAG API ready, upload dir %s", active.upload_dir)
+    logger.debug("RAG API ready")
     return application
 
 
-app = create_app()
+def __getattr__(name: str) -> FastAPI:
+    """uvicorn 读取 main:app 时再连接存储，避免导入模块就建连。"""
+    if name == "app":
+        application = create_app()
+        globals()["app"] = application
+        return application
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 if __name__ == "__main__":
@@ -56,7 +69,7 @@ if __name__ == "__main__":
 
     uvicorn.run(
         "main:app",
-        host="127.0.0.1",
+        host="0.0.0.0",
         port=8000,
         reload=True,
     )
