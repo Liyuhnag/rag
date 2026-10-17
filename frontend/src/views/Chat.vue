@@ -1,10 +1,32 @@
 <script setup>
-import { ref, nextTick } from 'vue'
+import { ref, nextTick, onMounted } from 'vue'
 
 const messages = ref([])
 const inputMessage = ref('')
 const isLoading = ref(false)
 const chatContainer = ref(null)
+
+// 添加模拟对话数据
+onMounted(() => {
+  messages.value = [
+    {
+      id: 1,
+      type: 'user',
+      content: 'hello',
+      timestamp: new Date()
+    },
+    {
+      id: 2,
+      type: 'assistant',
+      content: '这是对 "hello" 的回答。在实际系统中，这里会显示基于向量检索的结果。系统会从知识库中找到最相关的文档片段，并基于这些内容生成回答。',
+      sources: [
+        { name: '文档A.pdf', page: 3 },
+        { name: '文档B.txt', page: 1 }
+      ],
+      timestamp: new Date()
+    }
+  ]
+})
 
 const sendMessage = async () => {
   if (!inputMessage.value.trim() || isLoading.value) return
