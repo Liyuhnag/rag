@@ -1,9 +1,8 @@
 <script setup>
-import { ref } from 'vue'
-import FileUpload from './components/FileUpload.vue'
-import ChatInterface from './components/ChatInterface.vue'
+import { useRouter, useRoute } from 'vue-router'
 
-const currentView = ref('upload')
+const router = useRouter()
+const route = useRoute()
 </script>
 
 <template>
@@ -15,69 +14,91 @@ const currentView = ref('upload')
       </div>
 
       <nav class="nav">
-        <button
+        <router-link
+          to="/files"
           class="nav-item"
-          :class="{ active: currentView === 'upload' }"
-          @click="currentView = 'upload'"
+          :class="{ active: route.path === '/files' }"
         >
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-            <polyline points="17 8 12 3 7 8" />
-            <line x1="12" y1="3" x2="12" y2="15" />
+            <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
+            <polyline points="13 2 13 9 20 9" />
           </svg>
-          <span>文件上传</span>
-        </button>
+          <span>文件管理</span>
+        </router-link>
 
-        <button
+        <router-link
+          to="/chat"
           class="nav-item"
-          :class="{ active: currentView === 'chat' }"
-          @click="currentView = 'chat'"
+          :class="{ active: route.path === '/chat' }"
         >
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
           </svg>
-          <span>聊天检索</span>
-        </button>
+          <span>知识检索</span>
+        </router-link>
       </nav>
     </aside>
 
     <main class="main-content">
-      <FileUpload v-if="currentView === 'upload'" />
-      <ChatInterface v-else />
+      <router-view />
     </main>
   </div>
 </template>
 
 <style>
 :root {
-  --surface-0: #FAFBFC;
+  /* 淡色主题色彩系统 */
+  --surface-0: #F8FAFC;
   --surface-1: #FFFFFF;
-  --surface-2: #F5F7FA;
-  --surface-3: #EBF0F5;
-  --surface-4: #E1E8EF;
+  --surface-2: #F1F5F9;
+  --surface-3: #E2E8F0;
+  --surface-4: #CBD5E1;
 
-  --accent: #0EA5E9;
-  --accent-light: #E0F2FE;
-  --accent-dim: #075985;
+  /* 主题色 */
+  --primary: #38BDF8;
+  --primary-hover: #0EA5E9;
+  --primary-active: #0284C7;
 
-  --text-primary: #0F172A;
-  --text-secondary: #475569;
-  --text-dim: #94A3B8;
+  /* 文字层级 */
+  --text-primary: #1E293B;
+  --text-secondary: #64748B;
+  --text-tertiary: #94A3B8;
+  --text-disabled: #CBD5E1;
 
+  /* 边框与分割线 */
   --border: #E2E8F0;
+  --divider: #F1F5F9;
 
+  /* 状态色 */
+  --success: #10B981;
+  --warning: #F59E0B;
+  --error: #EF4444;
+  --info: #3B82F6;
+
+  /* 间距系统 */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+
+  /* 圆角系统 */
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
   --radius-full: 999px;
+  --radius-circle: 50%;
 
-  --spacing-xs: 8px;
-  --spacing-sm: 12px;
-  --spacing-md: 16px;
-  --spacing-lg: 24px;
-  --spacing-xl: 32px;
+  /* 阴影系统 */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.07);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
+  --shadow-xl: 0 20px 25px rgba(0, 0, 0, 0.15);
 
-  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  /* 字体系统 */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+  --font-mono: 'SF Mono', 'Monaco', 'Cascadia Code', monospace;
 }
 
 * {
@@ -91,11 +112,13 @@ body {
   background: var(--surface-0);
   color: var(--text-primary);
   line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 .app {
   display: grid;
-  grid-template-columns: 240px 1fr;
+  grid-template-columns: 280px 1fr;
   height: 100vh;
   overflow: hidden;
 }
@@ -105,21 +128,21 @@ body {
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  padding: var(--spacing-lg);
+  padding: var(--space-xl);
 }
 
 .logo {
   display: flex;
   align-items: center;
-  gap: var(--spacing-sm);
-  margin-bottom: var(--spacing-xl);
+  gap: 12px;
+  margin-bottom: var(--space-2xl);
 }
 
 .logo-icon {
   width: 36px;
   height: 36px;
-  border-radius: var(--radius-md);
-  background: linear-gradient(135deg, #0EA5E9, #38BDF8);
+  border-radius: var(--radius-sm);
+  background: var(--primary);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -137,22 +160,23 @@ body {
 .nav {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-xs);
+  gap: var(--space-sm);
 }
 
 .nav-item {
   display: flex;
   align-items: center;
-  gap: var(--spacing-sm);
-  padding: var(--spacing-sm) var(--spacing-md);
+  gap: 12px;
+  padding: 12px 16px;
   background: transparent;
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   color: var(--text-secondary);
   font-size: 14px;
+  font-weight: 500;
   cursor: pointer;
+  text-decoration: none;
   transition: all 0.2s;
-  text-align: left;
 }
 
 .nav-item:hover {
@@ -161,17 +185,37 @@ body {
 }
 
 .nav-item.active {
-  background: var(--accent-light);
-  color: var(--accent-dim);
+  background: rgba(56, 189, 248, 0.15);
+  color: var(--primary);
 }
 
 .nav-icon {
   width: 20px;
   height: 20px;
+  flex-shrink: 0;
 }
 
 .main-content {
   overflow-y: auto;
   background: var(--surface-0);
+}
+
+/* Scrollbar 样式 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--surface-1);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--surface-3);
+  border-radius: var(--radius-sm);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--surface-4);
 }
 </style>
