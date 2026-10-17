@@ -62,6 +62,7 @@ async def upload_document(
     表单字段 file 为文件。
     请求只保存临时文件并返回任务，对象存储和文档记录由任务写入。
     空文件返回 422，超过大小限制返回 413。
+    等待中的任务达到上限返回 429，任务队列查不到返回 503。
     """
     filename = normalize_filename(file.filename)
     file_type = extract_file_type(filename)
@@ -69,7 +70,12 @@ async def upload_document(
         content = await read_upload(file, settings.max_upload_bytes)
     finally:
         await file.close()
-    task = accept_upload(filename, file_type, content)
+    task = accept_upload(
+        filename,
+        file_type,
+        content,
+        settings.task_queue_limit,
+    )
     return to_task_response(task)
 
 

@@ -64,6 +64,34 @@ def test_get_and_delete_uploaded_document(client):
     assert missing.json()["error"]["code"] == "NOT_FOUND"
 
 
+def test_upload_rejects_when_queue_is_full(client, monkeypatch):
+    import task.upload as upload
+
+    monkeypatch.setattr(upload, "_waiting_count", lambda: 200)
+    response = _upload(client, "note.txt", b"hello")
+
+    assert response.status_code == 429
+    assert response.json()["error"]["code"] == "QUEUE_FULL"
+    listed = client.get("/api/documents")
+    assert listed.json()["pagination"]["totalItems"] == 0
+
+
+def test_upload_rejects_when_queue_unavailable(client, monkeypatch):
+    import task.upload as upload
+    from services.common.exceptions import BrokerUnavailable
+
+    def unavailable() -> int:
+        raise BrokerUnavailable("任务队列不可用")
+
+    monkeypatch.setattr(upload, "_waiting_count", unavailable)
+    response = _upload(client, "note.txt", b"hello")
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "BROKER_UNAVAILABLE"
+    listed = client.get("/api/documents")
+    assert listed.json()["pagination"]["totalItems"] == 0
+
+
 def test_upload_rejects_unsupported_type(client):
     response = _upload(client, "virus.exe", b"MZ")
 

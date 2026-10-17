@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 
 
 DEFAULT_MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+DEFAULT_TASK_QUEUE_LIMIT = 200
 ALLOWED_FILE_TYPES = frozenset(
     {
         "pdf",
@@ -70,6 +71,7 @@ class Settings:
     mysql_database: str = ""
     file_base_url: str = ""
     redis_url: str = "redis://127.0.0.1:6379/0"
+    task_queue_limit: int = DEFAULT_TASK_QUEUE_LIMIT
 
 
 def load_settings() -> Settings:
@@ -92,6 +94,16 @@ def load_settings() -> Settings:
     redis_url = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0").strip()
     if not redis_url:
         raise RuntimeError("REDIS_URL 不能为空")
+    raw_queue_limit = os.getenv(
+        "TASK_QUEUE_LIMIT",
+        str(DEFAULT_TASK_QUEUE_LIMIT),
+    )
+    try:
+        task_queue_limit = int(raw_queue_limit)
+    except ValueError as exc:
+        raise RuntimeError("TASK_QUEUE_LIMIT 必须是整数") from exc
+    if task_queue_limit < 1:
+        raise RuntimeError("TASK_QUEUE_LIMIT 必须大于 0")
 
     raw_port = os.getenv("MYSQL_PORT", "3306").strip()
     try:
@@ -122,4 +134,5 @@ def load_settings() -> Settings:
         mysql_database=_required("MYSQL_DATABASE"),
         file_base_url=file_base_url,
         redis_url=redis_url,
+        task_queue_limit=task_queue_limit,
     )

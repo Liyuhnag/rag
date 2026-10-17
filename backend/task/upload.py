@@ -9,11 +9,22 @@ from uuid import uuid4
 
 from model.task import ProcessingTask
 from model.task import orm as task_orm
+from services.common.exceptions import BrokerUnavailable
+from services.common.exceptions import QueueFull
 from task.document import process_document
 
+_QUEUE_NAME = "celery"
+_QUEUE_TIMEOUT_SECONDS = 1
 
-def accept_upload(name: str, file_type: str, content: bytes) -> ProcessingTask:
+
+def accept_upload(
+    name: str,
+    file_type: str,
+    content: bytes,
+    queue_limit: int,
+) -> ProcessingTask:
     """把文件落到临时路径并提交处理任务。"""
+    _ensure_room(queue_limit)
     task_id = uuid4().hex
     now = datetime.now(timezone.utc)
     path = _temp_path(task_id)
@@ -34,6 +45,32 @@ def accept_upload(name: str, file_type: str, content: bytes) -> ProcessingTask:
     process_document.delay(task_id)
     stored = task_orm.get(task_id)
     return stored if stored is not None else task
+
+
+def _ensure_room(queue_limit: int) -> None:
+    """等待消息达到上限，或队列查不到时，拒绝新的上传。"""
+    if _waiting_count() >= queue_limit:
+        raise QueueFull("处理任务过多，请稍后再试")
+
+
+def _waiting_count() -> int:
+    """celery 列表里还没被 worker 取走的消息数。"""
+    import redis
+    from redis.exceptions import RedisError
+
+    from config import load_settings
+
+    client = redis.Redis.from_url(
+        load_settings().redis_url,
+        socket_connect_timeout=_QUEUE_TIMEOUT_SECONDS,
+        socket_timeout=_QUEUE_TIMEOUT_SECONDS,
+    )
+    try:
+        return int(client.llen(_QUEUE_NAME))
+    except RedisError as exc:
+        raise BrokerUnavailable("任务队列不可用") from exc
+    finally:
+        client.close()
 
 
 def _temp_path(task_id: str) -> Path:

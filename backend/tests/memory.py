@@ -120,6 +120,13 @@ class MemoryTaskRepository:
         )
 
 
+def use_open_queue(monkeypatch: pytest.MonkeyPatch) -> None:
+    """测试里把等待队列看成空的，不连接 Redis。"""
+    import task.upload as upload
+
+    monkeypatch.setattr(upload, "_waiting_count", lambda: 0)
+
+
 def use_inline_tasks() -> None:
     """在请求里把任务跑完，不连接 Redis。"""
     celery_app.conf.task_always_eager = True

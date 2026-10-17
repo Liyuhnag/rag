@@ -16,3 +16,19 @@ class StorageError(Exception):
     def __init__(self, message: str) -> None:
         super().__init__(message)
         self.message = message
+
+
+class QueueFull(Exception):
+    """等待中的任务已达到上限。"""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+class BrokerUnavailable(Exception):
+    """任务队列暂时查不到。"""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message

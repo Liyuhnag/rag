@@ -43,6 +43,7 @@ uv run pytest
 | `MYSQL_PASSWORD` | 无 | 数据库密码 |
 | `MYSQL_DATABASE` | 无 | 数据库名 |
 | `REDIS_URL` | `redis://127.0.0.1:6379/0` | Celery 队列地址 |
+| `TASK_QUEUE_LIMIT` | `200` | 等待中的任务达到此数量时拒绝新上传 |
 | `FLOWER_BASIC_AUTH` | 无 | Flower 登录，格式 `用户名:密码` |
 | `FLOWER_ADDRESS` | `0.0.0.0` | Flower 监听地址 |
 | `FLOWER_PORT` | `5555` | Flower 端口 |
@@ -64,7 +65,7 @@ uv run pytest
 | --- | --- | --- |
 | `GET` | `/api/health` | 健康检查 |
 | `GET` | `/api/documents` | 分页返回已上传文档 |
-| `POST` | `/api/documents` | 校验文件后提交异步处理，返回任务 |
+| `POST` | `/api/documents` | 校验文件后提交异步处理，返回任务。队列已满返回 429，队列不可用返回 503 |
 | `GET` | `/api/tasks/{id}` | 返回异步任务状态；完成后带有文档 ID |
 | `GET` | `/api/documents/{id}` | 返回一条文档记录 |
 | `DELETE` | `/api/documents/{id}` | 删除文档记录和对象 |
