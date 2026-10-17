@@ -81,6 +81,17 @@ const formatTime = (date) => {
           class="message"
           :class="message.type"
         >
+          <div class="message-avatar">
+            <svg v-if="message.type === 'user'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+              <circle cx="12" cy="7" r="4" />
+            </svg>
+            <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2L2 7l10 5 10-5-10-5z" />
+              <path d="M2 17l10 5 10-5M2 12l10 5 10-5" />
+            </svg>
+          </div>
+
           <div class="message-content">
             <div class="message-text">{{ message.content }}</div>
 
@@ -106,6 +117,12 @@ const formatTime = (date) => {
         </div>
 
         <div v-if="isLoading" class="message assistant">
+          <div class="message-avatar">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2L2 7l10 5 10-5-10-5z" />
+              <path d="M2 17l10 5 10-5M2 12l10 5 10-5" />
+            </svg>
+          </div>
           <div class="message-content">
             <div class="typing-indicator">
               <span></span>
@@ -224,30 +241,69 @@ const formatTime = (date) => {
 
 .message {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  gap: 12px;
+  align-items: flex-start;
 }
 
 /* 用户消息：右对齐 */
 .message.user {
-  align-items: flex-end;
+  flex-direction: row-reverse;
 }
 
 /* AI 消息：左对齐 */
 .message.assistant {
-  align-items: flex-start;
+  flex-direction: row;
+}
+
+/* 头像样式 */
+.message-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: 2px solid;
+}
+
+.message.user .message-avatar {
+  background: linear-gradient(135deg, #38BDF8 0%, #0EA5E9 100%);
+  border-color: #38BDF8;
+  color: #FFFFFF;
+}
+
+.message.assistant .message-avatar {
+  background: linear-gradient(135deg, #F1F5F9 0%, #E2E8F0 100%);
+  border-color: #E2E8F0;
+  color: #38BDF8;
+}
+
+.message-avatar svg {
+  width: 20px;
+  height: 20px;
 }
 
 .message-content {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-width: 75%;
+  max-width: 70%;
+}
+
+/* 用户消息内容对齐 */
+.message.user .message-content {
+  align-items: flex-end;
+}
+
+/* AI 消息内容对齐 */
+.message.assistant .message-content {
+  align-items: flex-start;
 }
 
 .message-text {
   padding: 14px 16px;
-  border-radius: 8px;
+  border-radius: 12px;
   font-size: 15px;
   line-height: 1.6;
   word-wrap: break-word;
@@ -257,12 +313,14 @@ const formatTime = (date) => {
   background: var(--accent);
   color: #FFFFFF;
   border: none;
+  border-radius: 12px 12px 2px 12px;
 }
 
 .message.assistant .message-text {
   background: var(--surface-2);
   color: var(--text-primary);
   border: 1px solid var(--border);
+  border-radius: 12px 12px 12px 2px;
 }
 
 /* 参考来源 */
