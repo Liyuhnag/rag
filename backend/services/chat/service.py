@@ -3,7 +3,7 @@
 
 from typing import NoReturn
 
-from services.exceptions import FeatureNotReady
+from services.common.exceptions import FeatureNotReady
 
 
 class ChatService:

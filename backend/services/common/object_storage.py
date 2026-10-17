@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 from urllib.request import Request
 from urllib.request import urlopen
 
-from services.exceptions import StorageError
+from services.common.exceptions import StorageError
 
 
 class ObjectStorage:

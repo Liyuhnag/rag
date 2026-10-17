@@ -8,7 +8,7 @@ from pathlib import Path
 import pymysql
 from pymysql.err import Error as MySQLError
 
-from services.exceptions import StorageError
+from services.common.exceptions import StorageError
 
 
 _SCHEMA_SQL = (

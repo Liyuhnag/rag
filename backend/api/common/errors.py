@@ -10,8 +10,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from api.common.schemas import error_payload
-from services.exceptions import FeatureNotReady
-from services.exceptions import StorageError
+from services.common.exceptions import FeatureNotReady
+from services.common.exceptions import StorageError
 
 logger = logging.getLogger("rag.api")
 

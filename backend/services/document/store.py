@@ -12,7 +12,7 @@ from model.document import orm as document_orm
 from services.common.object_storage import bucket
 from services.common.object_storage import client
 from services.common.object_storage import file_base_url
-from services.exceptions import StorageError
+from services.common.exceptions import StorageError
 
 
 CONTENT_TYPES = {
