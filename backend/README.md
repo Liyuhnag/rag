@@ -64,4 +64,4 @@ uv run pytest
 
 允许的扩展名：`pdf`、`md`、`markdown`、`doc`、`docx`、`txt`、`xls`、`xlsx`、`csv`。
 
-列表查询参数为 `page`、`pageSize`、`sortBy`、`sortOrder`。上传表单字段为 `file`，可选 `operator`。这些成功响应的字段结构已经写在 OpenAPI 里。
+列表查询参数为 `page`、`pageSize`、`sortBy`、`sortOrder`。上传表单字段为 `file`。这些成功响应的字段结构已经写在 OpenAPI 里。

@@ -9,7 +9,6 @@ from dotenv import load_dotenv
 
 
 DEFAULT_MAX_UPLOAD_BYTES = 20 * 1024 * 1024
-DEFAULT_OPERATOR = "当前用户"
 ALLOWED_FILE_TYPES = frozenset(
     {
         "pdf",
@@ -70,6 +69,7 @@ class Settings:
     mysql_user: str = ""
     mysql_password: str = ""
     mysql_database: str = ""
+    file_base_url: str = ""
 
 
 def load_settings() -> Settings:
@@ -96,6 +96,7 @@ def load_settings() -> Settings:
         storage_backend=backend,
         s3_region=os.getenv("S3_REGION", "us-east-1").strip() or "us-east-1",
         mysql_host=os.getenv("MYSQL_HOST", "127.0.0.1").strip() or "127.0.0.1",
+        file_base_url=os.getenv("FILE_BASE_URL", "").strip().rstrip("/"),
     )
     if backend == "memory":
         return settings
@@ -128,4 +129,5 @@ def load_settings() -> Settings:
         mysql_user=_required("MYSQL_USER"),
         mysql_password=_required("MYSQL_PASSWORD"),
         mysql_database=_required("MYSQL_DATABASE"),
+        file_base_url=settings.file_base_url,
     )

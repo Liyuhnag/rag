@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """对话服务占位。检索和模型生成由后续实现补上。"""
 
-from models.chat import ChatResponse
+from typing import NoReturn
+
 from services.exceptions import FeatureNotReady
 
 
@@ -12,6 +13,6 @@ class ChatService:
         self,
         question: str,
         conversation_id: str | None,
-    ) -> ChatResponse:
+    ) -> NoReturn:
         del question, conversation_id
         raise FeatureNotReady("检索生成尚未接入")

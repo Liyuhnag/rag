@@ -9,7 +9,7 @@ from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from models.common import error_payload
+from api.common.schemas import error_payload
 from services.exceptions import FeatureNotReady
 from services.exceptions import StorageError
 

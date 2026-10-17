@@ -7,13 +7,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.chat import router as chat_router
+from api.common.errors import register_exception_handlers
 from api.documents import router as document_router
-from api.errors import register_exception_handlers
 from api.health import router as health_router
 from config import Settings
 from config import load_settings
 from services.chat_service import ChatService
-from services.document_store import build_document_store
+from services.document import build_document_store
 
 logger = logging.getLogger("rag.api")
 

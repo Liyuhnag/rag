@@ -4,10 +4,10 @@
 from fastapi import APIRouter
 from fastapi import Depends
 
-from api.deps import get_chat_service
-from models.chat import ChatRequest
-from models.chat import ChatResponse
-from models.common import ErrorResponse
+from api.chat.schemas import ChatRequest
+from api.chat.schemas import ChatResponse
+from api.common.deps import get_chat_service
+from api.common.schemas import ErrorResponse
 from services.chat_service import ChatService
 
 router = APIRouter(tags=["chat"])

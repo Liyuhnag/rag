@@ -1,17 +1,13 @@
 # -*- coding: utf-8 -*-
 """文档接口。上传写入存储，检索和生成仍未接入。"""
 
-from api.uploads import normalize_filename
+from api.documents.validators import normalize_filename
 
 
-def _upload(client, name, content, operator=None):
-    data = None
-    if operator is not None:
-        data = {"operator": operator}
+def _upload(client, name, content):
     return client.post(
         "/api/documents",
         files={"file": (name, content, "application/octet-stream")},
-        data=data,
     )
 
 
@@ -22,7 +18,7 @@ def test_normalize_filename_keeps_basename():
 
 def test_upload_stores_document(client):
     content = b"%PDF-1.4 sample"
-    response = _upload(client, "手册.pdf", content, operator="张三")
+    response = _upload(client, "手册.pdf", content)
 
     assert response.status_code == 201
     body = response.json()
@@ -31,16 +27,8 @@ def test_upload_stores_document(client):
     assert body["sizeBytes"] == len(content)
     assert body["chunkCount"] == 0
     assert body["status"] == "UPLOADED"
-    assert body["operator"] == "张三"
     assert body["id"]
     assert body["uploadedAt"]
-
-
-def test_upload_uses_default_operator(client):
-    response = _upload(client, "note.txt", b"hello")
-
-    assert response.status_code == 201
-    assert response.json()["operator"] == "当前用户"
 
 
 def test_list_returns_uploaded_document(client):
