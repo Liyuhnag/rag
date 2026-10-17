@@ -25,8 +25,6 @@ class Document:
     size_bytes: int
     chunk_count: int
     status: DocumentStatus
-    # 本次没有做身份验证，所以operator 不需要
-    # operator: str
     uploaded_at: datetime
     updated_at: datetime
     object_key: str

@@ -333,7 +333,6 @@ const uploadFiles = async () => {
               size: fileItem.size,
               chunks: Math.floor(Math.random() * 50) + 5,
               status: 'completed',
-              operator: '当前用户', // TODO: 从用户信息获取
               uploadedAt: new Date().toLocaleString('zh-CN', {
                 year: 'numeric',
                 month: '2-digit',

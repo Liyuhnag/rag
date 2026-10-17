@@ -6,7 +6,6 @@ CREATE TABLE IF NOT EXISTS documents (
     size_bytes BIGINT NOT NULL COMMENT '文件字节数',
     chunk_count INT NOT NULL COMMENT '分块数，未解析时为 0',
     status VARCHAR(32) NOT NULL COMMENT 'UPLOADED、PROCESSING、READY、FAILED',
-    operator VARCHAR(64) NOT NULL DEFAULT '' COMMENT '上传人，身份验证接入前留空',
     object_key VARCHAR(768) NOT NULL COMMENT '对象存储键',
     file_url VARCHAR(1024) NOT NULL COMMENT '原始文件链接',
     previewable TINYINT(1) NOT NULL COMMENT '是否可预览',
