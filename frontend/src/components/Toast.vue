@@ -46,13 +46,24 @@ const handleClose = () => {
   clearTimeout(timer)
   emit('close')
 }
+
+const iconMap = {
+  success: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z',
+  error: 'M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z',
+  warning: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z',
+  info: 'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'
+}
 </script>
 
 <template>
   <Transition name="toast">
     <div v-if="show" class="toast-container">
       <div class="toast" :class="`toast-${type}`">
-        <div class="toast-indicator" :class="`indicator-${type}`"></div>
+        <div class="toast-icon" :class="`icon-${type}`">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path :d="iconMap[type]" />
+          </svg>
+        </div>
 
         <div class="toast-content">
           <p class="toast-message">{{ message }}</p>
@@ -85,30 +96,39 @@ const handleClose = () => {
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   display: grid;
-  grid-template-columns: 4px 1fr auto;
-  gap: 16px;
+  grid-template-columns: 40px 1fr auto;
+  gap: 12px;
   padding: 16px;
-  padding-left: 0;
+  align-items: center;
 }
 
-.toast-indicator {
-  border-radius: 8px 0 0 8px;
+.toast-icon {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.indicator-success {
-  background: var(--success);
+.toast-icon svg {
+  width: 24px;
+  height: 24px;
 }
 
-.indicator-error {
-  background: var(--error);
+.icon-success {
+  color: var(--success);
 }
 
-.indicator-warning {
-  background: var(--warning);
+.icon-error {
+  color: var(--error);
 }
 
-.indicator-info {
-  background: var(--info);
+.icon-warning {
+  color: var(--warning);
+}
+
+.icon-info {
+  color: var(--info);
 }
 
 .toast-content {
