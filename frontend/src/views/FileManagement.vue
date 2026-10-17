@@ -285,11 +285,21 @@ const closePreview = () => {
 }
 
 const handleDownload = (file) => {
-  if (file.url) {
-    window.open(file.url, '_blank')
-  } else {
-    showToast('warning', '文件链接不可用')
+  if (!file.url) {
+    showToast('warning', '文件下载链接不可用')
+    return
   }
+
+  // 创建隐藏的 a 标签触发浏览器下载
+  const link = document.createElement('a')
+  link.href = file.url
+  link.download = file.name // 指定下载文件名
+  link.target = '_blank' // 跨域情况下的备用方案
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+
+  showToast('success', '开始下载文件')
 }
 
 // === 删除文件 ===
