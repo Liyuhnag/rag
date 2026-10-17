@@ -1,41 +1,106 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import Toast from './Toast.vue'
 import Confirm from './Confirm.vue'
+import Pagination from './Pagination.vue'
+import IconFilePdf from '../icons/IconFilePdf.vue'
+import IconFileMarkdown from '../icons/IconFileMarkdown.vue'
+import IconFileWord from '../icons/IconFileWord.vue'
+import IconFileText from '../icons/IconFileText.vue'
+import IconFileExcel from '../icons/IconFileExcel.vue'
+import IconFileCsv from '../icons/IconFileCsv.vue'
 
-// 文件列表（模拟数据）
-const files = ref([
-  {
-    id: 1,
-    name: 'RAG技术文档.pdf',
-    type: 'pdf',
-    size: '2.5 MB',
-    chunks: 45,
-    status: 'completed',
-    uploadedAt: '2026-10-15 14:30',
-    url: null // 预留预览 URL
-  },
-  {
-    id: 2,
-    name: '向量数据库介绍.md',
-    type: 'md',
-    size: '156 KB',
-    chunks: 12,
-    status: 'completed',
-    uploadedAt: '2026-10-14 09:15',
-    url: null
-  },
-  {
-    id: 3,
-    name: '项目需求文档.docx',
-    type: 'docx',
-    size: '1.2 MB',
-    chunks: 28,
-    status: 'completed',
-    uploadedAt: '2026-10-13 16:20',
-    url: null
+// 文件图标映射
+const fileIconMap = {
+  pdf: IconFilePdf,
+  md: IconFileMarkdown,
+  markdown: IconFileMarkdown,
+  doc: IconFileWord,
+  docx: IconFileWord,
+  txt: IconFileText,
+  xls: IconFileExcel,
+  xlsx: IconFileExcel,
+  csv: IconFileCsv
+}
+
+// 文件类型颜色映射
+const fileTypeColors = {
+  pdf: '#EF4444',
+  md: '#3B82F6',
+  markdown: '#3B82F6',
+  doc: '#2563EB',
+  docx: '#2563EB',
+  txt: '#64748B',
+  xls: '#10B981',
+  xlsx: '#10B981',
+  csv: '#10B981'
+}
+
+// 生成模拟数据
+const generateMockFiles = () => {
+  const fileTypes = ['pdf', 'md', 'docx', 'txt', 'xlsx', 'csv']
+  const fileNames = [
+    'RAG技术文档', '向量数据库介绍', '项目需求文档', 'API接口设计',
+    '用户手册', '系统架构说明', '测试报告', '产品规格书',
+    '开发指南', '部署文档', '性能测试报告', '安全审计报告',
+    '数据字典', '业务流程图', '技术选型方案', '代码规范'
+  ]
+  const operators = ['张三', '李四', '王五', '赵六', '钱七']
+
+  const files = []
+  for (let i = 1; i <= 67; i++) {
+    const type = fileTypes[Math.floor(Math.random() * fileTypes.length)]
+    const baseName = fileNames[Math.floor(Math.random() * fileNames.length)]
+    files.push({
+      id: i,
+      name: `${baseName}_v${i}.${type}`,
+      type: type,
+      size: `${(Math.random() * 5 + 0.1).toFixed(1)} MB`,
+      chunks: Math.floor(Math.random() * 50) + 5,
+      status: 'completed',
+      operator: operators[Math.floor(Math.random() * operators.length)],
+      uploadedAt: `2026-10-${String(Math.floor(Math.random() * 17) + 1).padStart(2, '0')} ${String(Math.floor(Math.random() * 24)).padStart(2, '0')}:${String(Math.floor(Math.random() * 60)).padStart(2, '0')}`,
+      url: null
+    })
   }
-])
+  return files.sort((a, b) => b.id - a.id)
+}
+
+// 所有文件列表（模拟数据）
+const allFiles = ref(generateMockFiles())
+
+// 分页状态
+const currentPage = ref(1)
+const pageSize = ref(20)
+
+// 计算总页数
+const totalPages = computed(() => {
+  return Math.ceil(allFiles.value.length / pageSize.value)
+})
+
+// 当前页的文件列表
+const files = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  const end = start + pageSize.value
+  return allFiles.value.slice(start, end)
+})
+
+// 页面变化处理
+const handlePageChange = (page) => {
+  currentPage.value = page
+}
+
+// 获取文件图标组件
+const getFileIcon = (type) => {
+  const lowerType = type.toLowerCase()
+  return fileIconMap[lowerType] || IconFileText
+}
+
+// 获取文件类型颜色
+const getFileColor = (type) => {
+  const lowerType = type.toLowerCase()
+  return fileTypeColors[lowerType] || '#64748B'
+}
 
 // Toast 状态
 const toastState = ref({
@@ -165,13 +230,14 @@ const uploadFiles = async () => {
             fileItem.status = 'completed'
 
             // 添加到文件列表
-            files.value.unshift({
+            allFiles.value.unshift({
               id: Date.now() + Math.random(),
               name: fileItem.name,
               type: getFileType(fileItem.name),
               size: fileItem.size,
               chunks: Math.floor(Math.random() * 50) + 5,
               status: 'completed',
+              operator: '当前用户', // TODO: 从用户信息获取
               uploadedAt: new Date().toLocaleString('zh-CN', {
                 year: 'numeric',
                 month: '2-digit',
@@ -181,6 +247,9 @@ const uploadFiles = async () => {
               }),
               url: null
             })
+
+            // 重置到第一页
+            currentPage.value = 1
 
             resolve()
           }
@@ -199,8 +268,13 @@ const deleteFile = (file) => {
     `确定要删除文件"${file.name}"吗？此操作不可恢复。`,
     'danger',
     () => {
-      files.value = files.value.filter(f => f.id !== file.id)
+      allFiles.value = allFiles.value.filter(f => f.id !== file.id)
       showToast('success', '文件已删除')
+
+      // 如果当前页没有数据且不是第一页，回到上一页
+      if (files.value.length === 0 && currentPage.value > 1) {
+        currentPage.value--
+      }
     }
   )
 }
@@ -225,7 +299,7 @@ const removeUploadingFile = (id) => {
     <div class="header">
       <div class="header-info">
         <h2 class="title">文件管理</h2>
-        <p class="subtitle">共 {{ files.length }} 个文件</p>
+        <p class="subtitle">共 {{ allFiles.length }} 个文件</p>
       </div>
 
       <button class="upload-btn" @click="openUploadDialog">
@@ -245,6 +319,7 @@ const removeUploadingFile = (id) => {
         <div class="col-type">类型</div>
         <div class="col-size">大小</div>
         <div class="col-chunks">分块数</div>
+        <div class="col-operator">操作人</div>
         <div class="col-time">上传时间</div>
         <div class="col-actions">操作</div>
       </div>
@@ -252,34 +327,44 @@ const removeUploadingFile = (id) => {
       <div class="list-body">
         <div v-for="file in files" :key="file.id" class="file-row">
           <div class="col-name">
-            <div class="file-icon" :class="`icon-${file.type}`">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
-                <polyline points="13 2 13 9 20 9" />
-              </svg>
+            <div class="file-icon" :style="{ color: getFileColor(file.type) }">
+              <component :is="getFileIcon(file.type)" />
             </div>
             <span class="file-name">{{ file.name }}</span>
           </div>
 
           <div class="col-type">
-            <span class="file-type-badge">{{ file.type.toUpperCase() }}</span>
+            <span class="file-type-badge" :style="{
+              color: getFileColor(file.type),
+              background: `${getFileColor(file.type)}15`,
+              borderColor: `${getFileColor(file.type)}30`
+            }">
+              {{ file.type.toUpperCase() }}
+            </span>
           </div>
 
           <div class="col-size">{{ file.size }}</div>
 
           <div class="col-chunks">{{ file.chunks }} 个</div>
 
+          <div class="col-operator">
+            <div class="operator-info">
+              <div class="operator-avatar">{{ file.operator.charAt(0) }}</div>
+              <span>{{ file.operator }}</span>
+            </div>
+          </div>
+
           <div class="col-time">{{ file.uploadedAt }}</div>
 
           <div class="col-actions">
-            <button class="action-btn" @click="previewFile(file)">
+            <button class="action-btn" @click="previewFile(file)" title="预览">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
                 <circle cx="12" cy="12" r="3" />
               </svg>
             </button>
 
-            <button class="action-btn" @click="deleteFile(file)">
+            <button class="action-btn delete" @click="deleteFile(file)" title="删除">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="3 6 5 6 21 6" />
                 <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
@@ -289,6 +374,15 @@ const removeUploadingFile = (id) => {
         </div>
       </div>
     </div>
+
+    <!-- 分页 -->
+    <Pagination
+      :current-page="currentPage"
+      :total-pages="totalPages"
+      :total-items="allFiles.length"
+      :page-size="pageSize"
+      @page-change="handlePageChange"
+    />
 
     <!-- 上传对话框 -->
     <div v-if="showUploadDialog" class="dialog-overlay" @click="closeUploadDialog">
@@ -441,7 +535,7 @@ const removeUploadingFile = (id) => {
 .list-header,
 .file-row {
   display: grid;
-  grid-template-columns: 2fr 100px 120px 120px 180px 120px;
+  grid-template-columns: 2fr 100px 100px 100px 140px 150px 100px;
   gap: 16px;
   padding: 16px 20px;
   align-items: center;
@@ -502,11 +596,34 @@ const removeUploadingFile = (id) => {
 .file-type-badge {
   display: inline-block;
   padding: 4px 8px;
-  background: var(--surface-2);
-  color: var(--text-secondary);
+  border: 1px solid;
   border-radius: 4px;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 600;
+}
+
+.col-operator {
+  color: var(--text-secondary);
+}
+
+.operator-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.operator-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #FFFFFF;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
 }
 
 .col-size,
@@ -532,6 +649,19 @@ const removeUploadingFile = (id) => {
   align-items: center;
   justify-content: center;
   padding: 0;
+  transition: all 0.2s;
+}
+
+.action-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: rgba(56, 189, 248, 0.1);
+}
+
+.action-btn.delete:hover {
+  border-color: var(--error);
+  color: var(--error);
+  background: rgba(239, 68, 68, 0.1);
 }
 
 .action-btn svg {
