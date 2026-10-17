@@ -137,3 +137,37 @@ class S3ObjectStorage(ObjectStorage):
 
 def _sign(key: bytes, message: str) -> bytes:
     return hmac.new(key, message.encode(), hashlib.sha256).digest()
+
+
+_storage: dict[str, object] = {
+    "objects": None,
+    "bucket": "",
+    "file_base_url": "",
+}
+
+
+def configure(
+    objects: ObjectStorage,
+    bucket: str,
+    file_base_url: str,
+) -> None:
+    """保存对象存储客户端、桶和文件链接前缀。"""
+    _storage["objects"] = objects
+    _storage["bucket"] = bucket
+    _storage["file_base_url"] = file_base_url
+
+
+def client() -> ObjectStorage:
+    """返回当前对象存储客户端。尚未配置时失败。"""
+    objects = _storage["objects"]
+    if not isinstance(objects, ObjectStorage):
+        raise StorageError("对象存储不可用")
+    return objects
+
+
+def bucket() -> str:
+    return str(_storage["bucket"])
+
+
+def file_base_url() -> str:
+    return str(_storage["file_base_url"])

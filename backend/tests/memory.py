@@ -6,8 +6,8 @@ import pytest
 from config import Settings
 from model.document import Document
 from model.document import orm as document_orm
-from services.document import configure
-from services.document.object_storage import ObjectStorage
+from services.common.object_storage import ObjectStorage
+from services.common.object_storage import configure
 
 
 class MemoryObjectStorage(ObjectStorage):
