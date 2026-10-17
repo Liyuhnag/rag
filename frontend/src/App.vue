@@ -50,32 +50,19 @@ const currentView = ref('upload')
 
 <style>
 :root {
-  --surface-0: #FAFBFC;
+  --surface-0: #F8FAFC;
   --surface-1: #FFFFFF;
-  --surface-2: #F5F7FA;
-  --surface-3: #EBF0F5;
-  --surface-4: #E1E8EF;
+  --surface-2: #F1F5F9;
+  --surface-3: #E2E8F0;
 
-  --accent: #0EA5E9;
+  --accent: #38BDF8;
   --accent-light: #E0F2FE;
-  --accent-dim: #075985;
 
-  --text-primary: #0F172A;
-  --text-secondary: #475569;
+  --text-primary: #1E293B;
+  --text-secondary: #64748B;
   --text-dim: #94A3B8;
 
   --border: #E2E8F0;
-
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-full: 999px;
-
-  --spacing-xs: 8px;
-  --spacing-sm: 12px;
-  --spacing-md: 16px;
-  --spacing-lg: 24px;
-  --spacing-xl: 32px;
 
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
 }
@@ -95,7 +82,7 @@ body {
 
 .app {
   display: grid;
-  grid-template-columns: 240px 1fr;
+  grid-template-columns: 280px 1fr;
   height: 100vh;
   overflow: hidden;
 }
@@ -105,21 +92,21 @@ body {
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  padding: var(--spacing-lg);
+  padding: 24px;
 }
 
 .logo {
   display: flex;
   align-items: center;
-  gap: var(--spacing-sm);
-  margin-bottom: var(--spacing-xl);
+  gap: 12px;
+  margin-bottom: 32px;
 }
 
 .logo-icon {
   width: 36px;
   height: 36px;
-  border-radius: var(--radius-md);
-  background: linear-gradient(135deg, #0EA5E9, #38BDF8);
+  border-radius: 8px;
+  background: var(--accent);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -137,32 +124,26 @@ body {
 .nav {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-xs);
+  gap: 8px;
 }
 
 .nav-item {
   display: flex;
   align-items: center;
-  gap: var(--spacing-sm);
-  padding: var(--spacing-sm) var(--spacing-md);
+  gap: 12px;
+  padding: 12px 16px;
   background: transparent;
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: 8px;
   color: var(--text-secondary);
   font-size: 14px;
   cursor: pointer;
-  transition: all 0.2s;
   text-align: left;
-}
-
-.nav-item:hover {
-  background: var(--surface-2);
-  color: var(--text-primary);
 }
 
 .nav-item.active {
   background: var(--accent-light);
-  color: var(--accent-dim);
+  color: var(--accent);
 }
 
 .nav-icon {
