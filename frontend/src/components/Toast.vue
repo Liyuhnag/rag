@@ -56,22 +56,22 @@ const iconMap = {
 </script>
 
 <template>
-  <Transition name="alert">
-    <div v-if="show" class="alert-overlay" @click="handleClose">
-      <div class="alert-container" :class="`alert-${type}`" @click.stop>
-        <div class="alert-indicator" :class="`indicator-${type}`"></div>
+  <Transition name="toast">
+    <div v-if="show" class="toast-container">
+      <div class="toast" :class="`toast-${type}`">
+        <div class="toast-indicator" :class="`indicator-${type}`"></div>
 
-        <div class="alert-icon" :class="`icon-${type}`">
+        <div class="toast-icon" :class="`icon-${type}`">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path :d="iconMap[type]" />
           </svg>
         </div>
 
-        <div class="alert-content">
-          <p class="alert-message">{{ message }}</p>
+        <div class="toast-content">
+          <p class="toast-message">{{ message }}</p>
         </div>
 
-        <button class="alert-close" @click="handleClose">
+        <button class="toast-close" @click="handleClose">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="18" y1="6" x2="6" y2="18" />
             <line x1="6" y1="6" x2="18" y2="18" />
@@ -83,25 +83,20 @@ const iconMap = {
 </template>
 
 <style scoped>
-.alert-overlay {
+.toast-container {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.4);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 9999;
 }
 
-.alert-container {
+.toast {
   min-width: 320px;
   max-width: 480px;
   background: var(--surface-1);
   border-radius: 8px;
-  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   display: grid;
   grid-template-columns: 4px 40px 1fr auto;
   gap: 12px;
@@ -109,7 +104,7 @@ const iconMap = {
   padding-left: 0;
 }
 
-.alert-indicator {
+.toast-indicator {
   border-radius: 8px 0 0 8px;
 }
 
@@ -129,7 +124,7 @@ const iconMap = {
   background: var(--info);
 }
 
-.alert-icon {
+.toast-icon {
   width: 24px;
   height: 24px;
   display: flex;
@@ -138,7 +133,7 @@ const iconMap = {
   align-self: center;
 }
 
-.alert-icon svg {
+.toast-icon svg {
   width: 24px;
   height: 24px;
 }
@@ -159,20 +154,20 @@ const iconMap = {
   color: var(--info);
 }
 
-.alert-content {
+.toast-content {
   display: flex;
   align-items: center;
   min-height: 24px;
 }
 
-.alert-message {
+.toast-message {
   font-size: 14px;
   color: var(--text-primary);
   line-height: 1.5;
   margin: 0;
 }
 
-.alert-close {
+.toast-close {
   width: 24px;
   height: 24px;
   border: none;
@@ -186,18 +181,23 @@ const iconMap = {
   padding: 0;
 }
 
-.alert-close svg {
+.toast-close svg {
   width: 16px;
   height: 16px;
 }
 
-.alert-enter-active,
-.alert-leave-active {
-  transition: opacity 0.2s;
+.toast-enter-active,
+.toast-leave-active {
+  transition: all 0.3s;
 }
 
-.alert-enter-from,
-.alert-leave-to {
+.toast-enter-from {
   opacity: 0;
+  transform: translateY(-20px);
+}
+
+.toast-leave-to {
+  opacity: 0;
+  transform: translateY(-20px);
 }
 </style>

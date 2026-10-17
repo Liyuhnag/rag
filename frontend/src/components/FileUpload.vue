@@ -1,6 +1,7 @@
 <script setup>
 import { ref } from 'vue'
-import Alert from './Alert.vue'
+import Toast from './Toast.vue'
+import Confirm from './Confirm.vue'
 
 // 文件列表（模拟数据）
 const files = ref([
@@ -36,11 +37,20 @@ const files = ref([
   }
 ])
 
-// Alert 状态
-const alertState = ref({
+// Toast 状态
+const toastState = ref({
   show: false,
   type: 'info',
   message: ''
+})
+
+// Confirm 状态
+const confirmState = ref({
+  show: false,
+  title: '确认操作',
+  message: '',
+  type: 'warning',
+  onConfirm: null
 })
 
 // 显示上传对话框
@@ -48,16 +58,38 @@ const showUploadDialog = ref(false)
 const uploadingFiles = ref([])
 const uploadProgress = ref({})
 
-const showAlert = (type, message) => {
-  alertState.value = {
+const showToast = (type, message) => {
+  toastState.value = {
     show: true,
     type,
     message
   }
 }
 
-const closeAlert = () => {
-  alertState.value.show = false
+const closeToast = () => {
+  toastState.value.show = false
+}
+
+const showConfirm = (title, message, type, onConfirm) => {
+  confirmState.value = {
+    show: true,
+    title,
+    message,
+    type,
+    onConfirm
+  }
+}
+
+const closeConfirm = () => {
+  confirmState.value.show = false
+  confirmState.value.onConfirm = null
+}
+
+const handleConfirm = () => {
+  if (confirmState.value.onConfirm) {
+    confirmState.value.onConfirm()
+  }
+  closeConfirm()
 }
 
 const openUploadDialog = () => {
@@ -65,8 +97,20 @@ const openUploadDialog = () => {
 }
 
 const closeUploadDialog = () => {
-  showUploadDialog.value = false
-  uploadingFiles.value = []
+  if (uploadingFiles.value.some(f => f.status === 'uploading')) {
+    showConfirm(
+      '确认关闭',
+      '还有文件正在上传中，确定要关闭吗？',
+      'warning',
+      () => {
+        showUploadDialog.value = false
+        uploadingFiles.value = []
+      }
+    )
+  } else {
+    showUploadDialog.value = false
+    uploadingFiles.value = []
+  }
 }
 
 const handleFileInput = (e) => {
@@ -103,7 +147,7 @@ const getFileType = (filename) => {
 
 const uploadFiles = async () => {
   if (uploadingFiles.value.length === 0) {
-    showAlert('warning', '请先选择要上传的文件')
+    showToast('warning', '请先选择要上传的文件')
     return
   }
 
@@ -145,26 +189,28 @@ const uploadFiles = async () => {
     }
   }
 
-  showAlert('success', `成功上传 ${uploadingFiles.value.length} 个文件`)
+  showToast('success', `成功上传 ${uploadingFiles.value.length} 个文件`)
   closeUploadDialog()
 }
 
 const deleteFile = (file) => {
-  showAlert('warning', `确定要删除文件"${file.name}"吗？`)
-  // TODO: 实现确认后删除逻辑
-  // 临时实现：3秒后自动删除
-  setTimeout(() => {
-    files.value = files.value.filter(f => f.id !== file.id)
-    showAlert('success', '文件已删除')
-  }, 3000)
+  showConfirm(
+    '确认删除',
+    `确定要删除文件"${file.name}"吗？此操作不可恢复。`,
+    'danger',
+    () => {
+      files.value = files.value.filter(f => f.id !== file.id)
+      showToast('success', '文件已删除')
+    }
+  )
 }
 
 const previewFile = (file) => {
   if (file.url) {
     // TODO: 集成文件预览组件库
-    showAlert('info', '文件预览功能开发中...')
+    showToast('info', '文件预览功能开发中...')
   } else {
-    showAlert('warning', '该文件暂不支持预览')
+    showToast('warning', '该文件暂不支持预览')
   }
 }
 
@@ -308,12 +354,22 @@ const removeUploadingFile = (id) => {
       </div>
     </div>
 
-    <!-- Alert 组件 -->
-    <Alert
-      :type="alertState.type"
-      :message="alertState.message"
-      :show="alertState.show"
-      @close="closeAlert"
+    <!-- Toast 提示 -->
+    <Toast
+      :type="toastState.type"
+      :message="toastState.message"
+      :show="toastState.show"
+      @close="closeToast"
+    />
+
+    <!-- Confirm 确认框 -->
+    <Confirm
+      :title="confirmState.title"
+      :message="confirmState.message"
+      :type="confirmState.type"
+      :show="confirmState.show"
+      @confirm="handleConfirm"
+      @cancel="closeConfirm"
     />
   </div>
 </template>

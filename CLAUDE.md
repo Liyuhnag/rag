@@ -266,7 +266,62 @@ rag/                                # 仓库根目录
 - 不使用 hover 效果
 - 不使用过渡动画
 - 简洁直接的交互反馈
-- **所有提示使用自定义 Alert 组件，禁用浏览器原生弹窗**
+
+#### Toast 提示框（页面顶部）
+- 位置：页面顶部居中，距离顶部 20px
+- 用途：成功、失败、警告、信息提示
+- 交互：自动消失（默认 3 秒），可手动关闭
+- 场景：上传成功、操作失败、信息通知等
+- 样式特征：
+  - 左侧色条指示类型
+  - 图标 + 文字 + 关闭按钮
+  - 从顶部滑入动画
+
+**Toast 使用规范**
+```vue
+<Toast
+  type="success"      <!-- success | error | warning | info -->
+  message="操作成功"
+  :show="true"
+  :duration="3000"    <!-- 自动关闭时间，毫秒 -->
+  @close="handleClose"
+/>
+```
+
+#### Confirm 确认框（页面正中）
+- 位置：页面正中，遮罩背景
+- 用途：需要用户确认的重要操作
+- 交互：必须用户选择"确认"或"取消"
+- 场景：删除文件、取消上传、退出登录等
+- 样式特征：
+  - 顶部大图标指示类型
+  - 标题 + 描述文字
+  - 取消 + 确认按钮
+  - 缩放进入动画
+  - 半透明遮罩
+
+**Confirm 使用规范**
+```vue
+<Confirm
+  title="确认删除"
+  message="确定要删除该文件吗？此操作不可恢复。"
+  type="danger"       <!-- warning | danger | info -->
+  :show="true"
+  confirmText="确认"
+  cancelText="取消"
+  @confirm="handleConfirm"
+  @cancel="handleCancel"
+/>
+```
+
+**重要规范**
+- ❌ **禁止使用浏览器原生弹窗**：`alert()`、`confirm()`、`prompt()`
+- ✅ **提示类消息使用 Toast**：成功/失败提示、信息通知
+- ✅ **确认类操作使用 Confirm**：删除、取消、退出等重要操作
+- ✅ **位置严格区分**：Toast 在顶部，Confirm 在中央
+- ✅ **类型选择**：
+  - Toast: `success`（成功）、`error`（失败）、`warning`（警告）、`info`（信息）
+  - Confirm: `warning`（警告操作）、`danger`（危险操作）、`info`（信息确认）
 
 ## 开发指南
 
