@@ -58,6 +58,22 @@ uv run uvicorn main:app --reload --host 127.0.0.1 --port 8000
 
 访问 http://127.0.0.1:8000/docs
 
+## 检查
+
+提交前安装 pre-commit，之后每次提交会检查文件格式，并在相关目录有改动时运行后端检查和前端构建：
+
+```bash
+uvx pre-commit install
+```
+
+手动跑一遍：
+
+```bash
+uvx pre-commit run --all-files
+```
+
+推送到 `feature`、`main` 或打开 Pull Request 时，GitHub Actions 会执行同样的后端检查、后端测试和前端构建。`main` 上的前端构建会保留 7 天构建产物。仓库还没有生产部署环境，所以流水线到构建产物为止。
+
 ## Git 分支规范
 
 ⚠️ **重要：请严格遵守分支规范**

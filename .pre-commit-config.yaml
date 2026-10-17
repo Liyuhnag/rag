@@ -1,0 +1,35 @@
+exclude: ^\.agents/
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: check-case-conflict
+
+  - repo: local
+    hooks:
+      - id: backend-ruff
+        name: backend ruff
+        entry: uv run --directory backend ruff check .
+        language: system
+        pass_filenames: false
+        files: ^backend/
+      - id: backend-pytest
+        name: backend pytest
+        entry: uv run --directory backend pytest -q
+        language: system
+        pass_filenames: false
+        files: ^backend/
+      - id: frontend-build
+        name: frontend build
+        entry: npm --prefix frontend run build
+        language: system
+        pass_filenames: false
+        files: ^frontend/
