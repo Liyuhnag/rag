@@ -14,6 +14,7 @@ from services.common.object_storage import ObjectStorage
 from services.common.object_storage import configure
 from model.task import ProcessingTask
 from model.task import orm as task_orm
+from task.celery_app import celery_app
 
 
 class MemoryObjectStorage(ObjectStorage):
@@ -117,6 +118,12 @@ class MemoryTaskRepository:
             error_message=message[:1024],
             updated_at=datetime.now(timezone.utc),
         )
+
+
+def use_inline_tasks() -> None:
+    """在请求里把任务跑完，不连接 Redis。"""
+    celery_app.conf.task_always_eager = True
+    celery_app.conf.task_eager_propagates = True
 
 
 def use_memory_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
