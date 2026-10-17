@@ -2,7 +2,7 @@
 """任务接口的响应。"""
 
 from api.common.schemas import APIModel
-from task.record import ProcessingTask
+from model.task import ProcessingTask
 
 
 class TaskResponse(APIModel):

@@ -7,8 +7,8 @@ from pathlib import Path
 from tempfile import gettempdir
 from uuid import uuid4
 
-from task import record
-from task.record import ProcessingTask
+from model.task import ProcessingTask
+from model.task import orm as task_orm
 from task.runner import submit
 
 
@@ -30,9 +30,9 @@ def accept_upload(name: str, file_type: str, content: bytes) -> ProcessingTask:
         created_at=now,
         updated_at=now,
     )
-    record.insert(task)
+    task_orm.insert(task)
     submit(task_id)
-    stored = record.get(task_id)
+    stored = task_orm.get(task_id)
     return stored if stored is not None else task
 
 

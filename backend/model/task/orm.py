@@ -1,28 +1,13 @@
 # -*- coding: utf-8 -*-
 """processing_tasks 表的 SQL。"""
 
-from dataclasses import dataclass
 from datetime import datetime
+from datetime import timezone
 
 from model.common.database import as_aware
 from model.common.database import as_utc
 from model.common.database import execute
-
-
-@dataclass
-class ProcessingTask:
-    """一次文档异步处理。"""
-
-    id: str
-    name: str
-    file_type: str
-    size_bytes: int
-    temp_path: str
-    status: str
-    document_id: str | None
-    error_message: str | None
-    created_at: datetime
-    updated_at: datetime
+from model.task.model import ProcessingTask
 
 
 def insert(task: ProcessingTask) -> None:
@@ -104,8 +89,6 @@ def fail(task_id: str, message: str) -> None:
 
 
 def _now() -> datetime:
-    from datetime import timezone
-
     return datetime.now(timezone.utc)
 
 

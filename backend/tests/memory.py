@@ -12,8 +12,8 @@ from model.document import Document
 from model.document import orm as document_orm
 from services.common.object_storage import ObjectStorage
 from services.common.object_storage import configure
-from task import record as task_record
-from task.record import ProcessingTask
+from model.task import ProcessingTask
+from model.task import orm as task_orm
 
 
 class MemoryObjectStorage(ObjectStorage):
@@ -122,11 +122,11 @@ class MemoryTaskRepository:
 def use_memory_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
     """让异步任务记录留在进程内。"""
     tasks = MemoryTaskRepository()
-    monkeypatch.setattr(task_record, "insert", tasks.insert)
-    monkeypatch.setattr(task_record, "get", tasks.get)
-    monkeypatch.setattr(task_record, "set_status", tasks.set_status)
-    monkeypatch.setattr(task_record, "finish", tasks.finish)
-    monkeypatch.setattr(task_record, "fail", tasks.fail)
+    monkeypatch.setattr(task_orm, "insert", tasks.insert)
+    monkeypatch.setattr(task_orm, "get", tasks.get)
+    monkeypatch.setattr(task_orm, "set_status", tasks.set_status)
+    monkeypatch.setattr(task_orm, "finish", tasks.finish)
+    monkeypatch.setattr(task_orm, "fail", tasks.fail)
 
 
 def open_memory_storage(settings: Settings) -> None:

@@ -3,8 +3,8 @@
 
 from pathlib import Path
 
+from model.task import orm as task_orm
 from services.document import store as document_store
-from task import record
 from task.celery_app import celery_app
 
 
@@ -14,11 +14,11 @@ def process_document(task_id: str) -> None:
 
     当前完成对象存储和文档入库。文本分块、向量化接在这次入库之后。
     """
-    task = record.get(task_id)
+    task = task_orm.get(task_id)
     if task is None:
         return
     path = Path(task.temp_path)
-    record.set_status(task_id, "STORING")
+    task_orm.set_status(task_id, "STORING")
     try:
         document = document_store.add(
             task.name,
@@ -26,8 +26,8 @@ def process_document(task_id: str) -> None:
             path.read_bytes(),
         )
     except Exception as exc:
-        record.fail(task_id, str(exc) or "处理失败")
+        task_orm.fail(task_id, str(exc) or "处理失败")
         raise
     finally:
         path.unlink(missing_ok=True)
-    record.finish(task_id, document.id)
+    task_orm.finish(task_id, document.id)
