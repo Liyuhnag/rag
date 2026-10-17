@@ -269,11 +269,21 @@ rag/                                # 仓库根目录
 
 #### 图标管理
 所有图标统一使用 SVG 组件，存放在 `frontend/src/icons/` 目录：
+
+**通用图标**
 - `IconSuccess.vue` - 成功图标（打勾圆圈）
 - `IconError.vue` - 错误图标（叉号圆圈）
 - `IconWarning.vue` - 警告图标（感叹号三角形）
 - `IconInfo.vue` - 信息图标（感叹号圆圈）
 - `IconClose.vue` - 关闭图标（叉号）
+
+**文件类型图标**
+- `IconFilePdf.vue` - PDF 文件图标（红色）
+- `IconFileWord.vue` - Word 文档图标（蓝色）
+- `IconFileExcel.vue` - Excel 表格图标（绿色）
+- `IconFileMarkdown.vue` - Markdown 文件图标（紫色）
+- `IconFileCsv.vue` - CSV 文件图标（橙色）
+- `IconFileText.vue` - 纯文本文件图标（灰色）
 
 #### Toast 提示框（页面顶部）
 - 位置：页面顶部居中，距离顶部 20px
@@ -333,6 +343,62 @@ rag/                                # 仓库根目录
 - ✅ **类型选择**：
   - Toast: `success`（成功）、`error`（失败）、`warning`（警告）、`info`（信息）
   - Confirm: `warning`（警告操作）、`danger`（危险操作）、`info`（信息确认）
+
+#### Pagination 分页组件
+用于文件列表、搜索结果等长列表的分页展示。
+
+**分页组件规范**
+```vue
+<Pagination
+  :currentPage="1"
+  :totalPages="10"
+  :totalItems="95"
+  @page-change="handlePageChange"
+/>
+```
+
+**功能特性：**
+- 上一页/下一页按钮
+- 页码快速跳转（首页、末页、当前页周围）
+- 总数统计显示
+- 自动禁用边界按钮
+- 页码省略显示（超过 7 页时）
+
+**显示逻辑：**
+- 总页数 ≤ 7：显示所有页码
+- 总页数 > 7：显示首页、末页、当前页及其周围页码，其他用 "..." 省略
+- 当前页高亮显示（主题色背景）
+
+#### 文件管理列表
+文件管理界面展示用户上传的文档，支持分页浏览和文件操作。
+
+**列表结构：**
+```
+文件名 | 类型 | 大小 | 分块数 | 上传时间 | 操作人 | 操作
+```
+
+**列宽分配（Grid）：**
+```css
+grid-template-columns: 2fr 100px 100px 100px 140px 150px 100px;
+```
+
+**文件类型徽章样式：**
+- PDF - 红色边框 `#EF4444`
+- Word - 蓝色边框 `#3B82F6`
+- Excel - 绿色边框 `#10B981`
+- Markdown - 紫色边框 `#A855F7`
+- CSV - 橙色边框 `#F59E0B`
+- Text - 灰色边框 `#6B7280`
+
+**操作人显示：**
+- 圆形头像（28px）：显示用户名首字母
+- 头像颜色：主题色背景 `#38BDF8`
+- 旁边显示完整用户名
+
+**操作按钮：**
+- 删除按钮：hover 时红色边框和背景
+- 按钮尺寸：32x32px
+- 图标尺寸：16x16px
 
 ## 开发指南
 
