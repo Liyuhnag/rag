@@ -15,7 +15,7 @@ from api.tasks import router as task_router
 from config import Settings
 from config import load_settings
 from services.chat.service import ChatService
-from services.common import connect_storage
+from services.common.connect import connect_storage
 
 logger = logging.getLogger("rag.api")
 

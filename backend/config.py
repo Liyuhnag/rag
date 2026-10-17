@@ -69,6 +69,7 @@ class Settings:
     mysql_password: str = ""
     mysql_database: str = ""
     file_base_url: str = ""
+    redis_url: str = "redis://127.0.0.1:6379/0"
 
 
 def load_settings() -> Settings:
@@ -88,6 +89,9 @@ def load_settings() -> Settings:
     s3_region = os.getenv("S3_REGION", "us-east-1").strip() or "us-east-1"
     mysql_host = os.getenv("MYSQL_HOST", "127.0.0.1").strip() or "127.0.0.1"
     file_base_url = os.getenv("FILE_BASE_URL", "").strip().rstrip("/")
+    redis_url = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0").strip()
+    if not redis_url:
+        raise RuntimeError("REDIS_URL 不能为空")
 
     raw_port = os.getenv("MYSQL_PORT", "3306").strip()
     try:
@@ -117,4 +121,5 @@ def load_settings() -> Settings:
         mysql_password=_required("MYSQL_PASSWORD"),
         mysql_database=_required("MYSQL_DATABASE"),
         file_base_url=file_base_url,
+        redis_url=redis_url,
     )

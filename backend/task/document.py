@@ -5,8 +5,10 @@ from pathlib import Path
 
 from services.document import store as document_store
 from task import record
+from task.celery_app import celery_app
 
 
+@celery_app.task(name="rag.process_document", ignore_result=True)
 def process_document(task_id: str) -> None:
     """执行一条文档处理任务。
 
