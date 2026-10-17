@@ -27,7 +27,7 @@ uv run pytest
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `MAX_UPLOAD_BYTES` | `20971520` | 单个文件上限，20MB |
-| `CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | 允许的前端来源，逗号分隔 |
+| `CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173,http://ahanali.devcloud.woa.com:5173` | 允许的前端来源，逗号分隔 |
 | `S3_ENDPOINT` | 无 | S3 地址，例如 `http://127.0.0.1:8333` |
 | `S3_REGION` | `us-east-1` | 签名区域 |
 | `S3_ACCESS_KEY_ID` | 无 | 也可使用 `AWS_ACCESS_KEY_ID` |

@@ -19,3 +19,14 @@ def test_health_allows_frontend_origin(client):
     assert response.headers["access-control-allow-origin"] == (
         "http://localhost:5173"
     )
+
+
+def test_health_allows_devcloud_frontend(client):
+    response = client.get(
+        "/api/health",
+        headers={"Origin": "http://ahanali.devcloud.woa.com:5173"},
+    )
+
+    assert response.headers["access-control-allow-origin"] == (
+        "http://ahanali.devcloud.woa.com:5173"
+    )

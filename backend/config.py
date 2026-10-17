@@ -28,7 +28,8 @@ _ENV_FILE = Path(__file__).resolve().parent / ".env"
 def _cors_origins_from_env() -> tuple[str, ...]:
     raw = os.getenv(
         "CORS_ORIGINS",
-        "http://localhost:5173,http://127.0.0.1:5173",
+        "http://localhost:5173,http://127.0.0.1:5173,"
+        "http://ahanali.devcloud.woa.com:5173",
     )
     return tuple(item.strip() for item in raw.split(",") if item.strip())
 
@@ -57,6 +58,7 @@ class Settings:
     cors_origins: tuple[str, ...] = (
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "http://ahanali.devcloud.woa.com:5173",
     )
     s3_endpoint: str = ""
     s3_region: str = "us-east-1"
