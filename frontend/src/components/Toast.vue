@@ -1,5 +1,10 @@
 <script setup>
 import { watch, onMounted } from 'vue'
+import IconSuccess from '../icons/IconSuccess.vue'
+import IconError from '../icons/IconError.vue'
+import IconWarning from '../icons/IconWarning.vue'
+import IconInfo from '../icons/IconInfo.vue'
+import IconClose from '../icons/IconClose.vue'
 
 const props = defineProps({
   type: {
@@ -47,11 +52,11 @@ const handleClose = () => {
   emit('close')
 }
 
-const iconMap = {
-  success: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z',
-  error: 'M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z',
-  warning: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z',
-  info: 'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'
+const iconComponents = {
+  success: IconSuccess,
+  error: IconError,
+  warning: IconWarning,
+  info: IconInfo
 }
 </script>
 
@@ -59,21 +64,14 @@ const iconMap = {
   <Transition name="toast">
     <div v-if="show" class="toast-container">
       <div class="toast" :class="`toast-${type}`">
-        <div class="toast-icon" :class="`icon-${type}`">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path :d="iconMap[type]" />
-          </svg>
-        </div>
+        <component :is="iconComponents[type]" class="toast-icon" :class="`icon-${type}`" />
 
         <div class="toast-content">
           <p class="toast-message">{{ message }}</p>
         </div>
 
         <button class="toast-close" @click="handleClose">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="18" y1="6" x2="6" y2="18" />
-            <line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
+          <IconClose />
         </button>
       </div>
     </div>
@@ -103,14 +101,6 @@ const iconMap = {
 }
 
 .toast-icon {
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.toast-icon svg {
   width: 24px;
   height: 24px;
 }
@@ -151,16 +141,8 @@ const iconMap = {
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   align-self: start;
   padding: 0;
-}
-
-.toast-close svg {
-  width: 16px;
-  height: 16px;
 }
 
 .toast-enter-active,

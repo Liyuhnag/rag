@@ -267,6 +267,14 @@ rag/                                # 仓库根目录
 - 不使用过渡动画
 - 简洁直接的交互反馈
 
+#### 图标管理
+所有图标统一使用 SVG 组件，存放在 `frontend/src/icons/` 目录：
+- `IconSuccess.vue` - 成功图标（打勾圆圈）
+- `IconError.vue` - 错误图标（叉号圆圈）
+- `IconWarning.vue` - 警告图标（感叹号三角形）
+- `IconInfo.vue` - 信息图标（感叹号圆圈）
+- `IconClose.vue` - 关闭图标（叉号）
+
 #### Toast 提示框（页面顶部）
 - 位置：页面顶部居中，距离顶部 20px
 - 用途：成功、失败、警告、信息提示
