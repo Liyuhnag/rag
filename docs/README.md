@@ -9,6 +9,10 @@
 
 ## 设计文档
 
+### 全流程（分享版）
+
+- [从文件到答案：RAG 全流程](./design/end-to-end-pipeline.md)
+
 ### 索引阶段（第一部分）
 
 - [设计文档集说明](./design/indexing/README.md)

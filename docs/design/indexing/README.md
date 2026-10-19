@@ -63,6 +63,7 @@
 
 ## 6. 相关文档
 
+- 全流程分享版：[../end-to-end-pipeline.md](../end-to-end-pipeline.md)
 - 检索阶段设计文档集：[../retrieval/README.md](../retrieval/README.md)
 - 项目文档入口：[docs/README.md](../../README.md)
 - 开发环境说明：[backend/README.md](../../../backend/README.md)
