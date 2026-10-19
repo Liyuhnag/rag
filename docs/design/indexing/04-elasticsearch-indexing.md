@@ -1,12 +1,62 @@
-# Elasticsearch 索引设计
+# Elasticsearch 索引详细设计
 
-- 日期：2026-10-19
-- 状态：待评审
-- 所属阶段：索引阶段 4/4
-- 上游：[文档解析设计](./2026-10-19-document-parsing-design.md)、[向量化与 Milvus 存储设计](./2026-10-19-vectorization-milvus-design.md)
-- 配套：混合召回接口
+| 项目 | 内容 |
+| --- | --- |
+| 文档编号 | RAG-IDX-040 |
+| 文档版本 | V0.9（评审稿） |
+| 文档状态 | 评审中 |
+| 密级 | 内部 |
+| 编制 | 架构组 |
+| 评审 | 研发团队 |
+| 批准 | 项目负责人 |
+| 编制日期 | 2026-10-19 |
+| 适用范围 | 索引阶段——Elasticsearch 索引、中文分词、BM25 查询与混合召回 |
 
-## 1. 目标
+## 修订记录
+
+| 版本 | 日期 | 修订人 | 修订说明 |
+| --- | --- | --- | --- |
+| V0.9 | 2026-10-19 | 架构组 | 初稿，提交研发团队评审。 |
+
+## 1. 概述
+
+### 1.1 编写目的
+
+本文档定义 Elasticsearch 索引结构、中文分词配置、批量写入、关键词查询、混合召回和索引生命周期，作为关键词检索模块开发、测试和运维的依据。
+
+### 1.2 适用范围
+
+本文档适用于：
+
+- Elasticsearch 单节点部署和 IK 插件配置；
+- `document_chunks` 索引 mapping 和写入；
+- 中文 BM25 查询和高亮；
+- 向量召回与关键词召回的 RRF 融合；
+- 索引重建、删除和一致性检查。
+
+本文档不覆盖向量生成和 Milvus 写入；后者见向量化与 Milvus 存储详细设计。
+
+### 1.3 术语与缩略语
+
+| 术语 | 说明 |
+| --- | --- |
+| IK | Elasticsearch 中文分词插件。 |
+| BM25 | Elasticsearch 默认的相关性评分算法。 |
+| Mapping | 索引字段类型和分析器定义。 |
+| Alias | 指向一个或多个索引的别名，用于无缝重建。 |
+| Bulk | Elasticsearch 批量写入接口。 |
+| RRF | Reciprocal Rank Fusion，倒数排名融合。 |
+| 高亮 | 在查询结果中标记命中关键词的片段。 |
+
+### 1.4 设计依据
+
+- [RAG 文档索引阶段总体设计](./00-overview.md)
+- [文档解析详细设计](./02-document-parsing.md)
+- [向量化与 Milvus 存储详细设计](./03-vectorization-milvus.md)
+- Elasticsearch 8.x 官方文档
+- IK 分词插件文档
+
+### 1.5 设计目标
 
 为同一份 chunk 建立 Elasticsearch 关键词索引：
 
@@ -75,19 +125,7 @@ document_chunks -> document_chunks_v1
   "settings": {
     "number_of_shards": 1,
     "number_of_replicas": 0,
-    "refresh_interval": "30s",
-    "analysis": {
-      "analyzer": {
-        "ik_max": {
-          "type": "custom",
-          "tokenizer": "ik_max_word"
-        },
-        "ik_smart": {
-          "type": "custom",
-          "tokenizer": "ik_smart"
-        }
-      }
-    }
+    "refresh_interval": "30s"
   }
 }
 ```
@@ -97,7 +135,7 @@ document_chunks -> document_chunks_v1
 - 单分片足够当前数据量；
 - 开发环境 0 副本，生产至少 1 副本；
 - 批量写入期间可临时把 `refresh_interval` 设为 `-1`，完成后恢复；
-- IK 插件提供 `ik_max_word` 和 `ik_smart` tokenizer。
+- IK 插件提供 `ik_max_word` 和 `ik_smart` analyzer。
 
 ### 4.3 Mapping
 
@@ -113,7 +151,7 @@ document_chunks -> document_chunks_v1
       "file_type": {"type": "keyword"},
       "document_name": {
         "type": "text",
-        "analyzer": "ik_max",
+        "analyzer": "ik_max_word",
         "search_analyzer": "ik_smart",
         "fields": {
           "keyword": {"type": "keyword", "ignore_above": 256}
@@ -121,7 +159,7 @@ document_chunks -> document_chunks_v1
       },
       "content": {
         "type": "text",
-        "analyzer": "ik_max",
+        "analyzer": "ik_max_word",
         "search_analyzer": "ik_smart",
         "fields": {
           "smart": {
@@ -132,7 +170,7 @@ document_chunks -> document_chunks_v1
       },
       "heading_path": {
         "type": "text",
-        "analyzer": "ik_max",
+        "analyzer": "ik_max_word",
         "search_analyzer": "ik_smart"
       },
       "locator": {"type": "keyword"},
@@ -162,7 +200,7 @@ document_chunks -> document_chunks_v1
 | `token_count` | integer | 统计 |
 | `created_at` | date | 时间过滤 |
 
-不存储向量；向量在 Milvus。
+`document_name` 来自 `documents.name`，由索引任务写入；不存储向量，向量在 Milvus。
 
 ### 4.4 动态字段
 
@@ -185,7 +223,7 @@ MySQL document_chunks 写入成功
   -> 更新 document_tasks.result_json.es_indexed = true
 ```
 
-ES 写入和 Milvus 写入可以在同一个索引任务内顺序执行，也可以并行；本期采用顺序执行，便于错误定位。
+ES 写入和 Milvus 写入可以在同一个索引任务内顺序执行，也可以并行；本阶段采用顺序执行，便于错误定位。
 
 ### 5.2 Bulk 参数
 
@@ -294,7 +332,7 @@ ES 写入和 Milvus 写入可以在同一个索引任务内顺序执行，也可
 - 查询时 `ik_smart` 粒度更粗，减少噪声；
 - 对短查询（2-4 字）可以增加 `match_phrase`；
 - 对长查询可以降低 `minimum_should_match`；
-- 同义词、停用词作为后续优化，不在本期实现。
+- 同义词、停用词作为后续优化，不在本阶段实现。
 
 ### 6.3 排序
 
@@ -489,24 +527,34 @@ score(d) = Σ_i 1 / (k + rank_i(d))
 
 ## 13. 验收标准
 
-- ES 单节点 + IK 正常启动；
-- chunk 可以按 `_id=chunk_id` 幂等写入；
-- 中文关键词查询能召回相关内容；
-- 文档、版本、文件类型过滤正确；
-- 高亮字段可用于前端展示；
-- 混合召回返回 top 10，包含 `vector_rank`、`keyword_rank` 和 `score`；
-- ES 不可用时检索降级为向量召回；
-- 重新索引不产生重复文档；
-- 10 万 chunk 的 BM25 查询延迟可接受（目标 < 200ms）。
+| 验收编号 | 验收项 | 验证方式 |
+| --- | --- | --- |
+| AC-ES-01 | ES 单节点 + IK 正常启动 | 部署验证 |
+| AC-ES-02 | chunk 可以按 `_id=chunk_id` 幂等写入 | 集成测试 |
+| AC-ES-03 | 中文关键词查询能召回相关内容 | 集成测试 |
+| AC-ES-04 | 文档、版本、文件类型过滤正确 | 接口测试 |
+| AC-ES-05 | 高亮字段可用于前端展示 | 接口测试 |
+| AC-ES-06 | 混合召回返回 top 10，包含 `vector_rank`、`keyword_rank` 和 `score` | 集成测试 |
+| AC-ES-07 | ES 不可用时检索降级为向量召回 | 故障注入测试 |
+| AC-ES-08 | 重新索引不产生重复文档 | 集成测试 |
+| AC-ES-09 | 10 万 chunk 的 BM25 查询延迟可接受（目标 < 200ms） | 性能测试 |
 
-## 14. 风险
+## 14. 风险与应对措施
 
-| 风险 | 应对 |
-| --- | --- |
-| IK 插件版本不匹配 | 固定 ES/IK 版本，镜像内安装，启动时验证 |
-| 中文分词效果不佳 | 用真实文档评估，后续加同义词/自定义词典 |
-| ES 内存不足 | heap 1-2GB，单节点限额，监控 GC |
-| 索引膨胀 | 只存必要字段，`_source` 保留 content 和元数据 |
-| 单节点故障 | 本期接受；生产前升级多节点或增加快照 |
-| mapping 变更 | 使用别名和新索引重建，不原地修改 |
-| 与 Milvus 数据不一致 | 以 MySQL 为准，定期抽样校验，支持重建 |
+| 风险编号 | 风险描述 | 影响 | 应对措施 |
+| --- | --- | --- | --- |
+| R-ES-01 | IK 插件版本不匹配 | ES 启动失败或中文分词异常 | 固定 ES/IK 版本，镜像内安装，启动时验证 |
+| R-ES-02 | 中文分词效果不佳 | 关键词召回质量下降 | 用真实文档评估，后续增加同义词和自定义词典 |
+| R-ES-03 | ES 内存不足 | 查询变慢或节点不稳定 | heap 1-2GB，单节点限额，监控 GC |
+| R-ES-04 | 索引膨胀 | 磁盘占用过高 | 只存必要字段，`_source` 保留 content 和元数据 |
+| R-ES-05 | 单节点故障 | 关键词检索不可用 | 本阶段接受；生产前升级多节点或增加快照 |
+| R-ES-06 | mapping 变更 | 需要重建索引 | 使用别名和新索引重建，不原地修改 |
+| R-ES-07 | 与 Milvus 数据不一致 | 召回结果缺失或重复 | 以 MySQL 为准，定期抽样校验，支持重建 |
+
+## 15. 评审记录
+
+| 评审日期 | 评审版本 | 评审人 | 评审意见 | 处理结果 |
+| --- | --- | --- | --- | --- |
+|  | V0.9 | 研发团队 |  |  |
+
+评审通过后，本文档版本升级为 V1.0，并作为 Elasticsearch 索引模块实施的基线版本。

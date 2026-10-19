@@ -1,12 +1,61 @@
-# 大文件上传设计
+# 大文件上传详细设计
 
-- 日期：2026-10-19
-- 状态：待评审
-- 所属阶段：索引阶段 1/4
-- 上游：无
-- 下游：[文档解析设计](./2026-10-19-document-parsing-design.md)
+| 项目 | 内容 |
+| --- | --- |
+| 文档编号 | RAG-IDX-010 |
+| 文档版本 | V0.9（评审稿） |
+| 文档状态 | 评审中 |
+| 密级 | 内部 |
+| 编制 | 架构组 |
+| 评审 | 研发团队 |
+| 批准 | 项目负责人 |
+| 编制日期 | 2026-10-19 |
+| 适用范围 | 索引阶段——大文件上传、分片续传、上传会话管理 |
 
-## 1. 目标
+## 修订记录
+
+| 版本 | 日期 | 修订人 | 修订说明 |
+| --- | --- | --- | --- |
+| V0.9 | 2026-10-19 | 架构组 | 初稿，提交研发团队评审。 |
+
+## 1. 概述
+
+### 1.1 编写目的
+
+本文档定义大文件上传的接口契约、数据模型、对象存储交互、断点续传机制、前端交互、异常处理和验收标准，作为上传模块开发、测试和联调的依据。
+
+### 1.2 适用范围
+
+本文档适用于：
+
+- FastAPI 上传接口和对象存储适配层；
+- Celery 上传完成后的任务创建；
+- 前端上传队列、分片调度和续传交互；
+- SeaweedFS S3 Multipart Upload 的联调和验收。
+
+本文档不覆盖文档解析、向量化和检索；这些内容见下游子设计。
+
+### 1.3 术语与缩略语
+
+| 术语 | 说明 |
+| --- | --- |
+| Multipart Upload | S3 分片上传协议，分片上传完成后由对象存储合并为单对象。 |
+| Part | Multipart Upload 中的一个分片，编号从 1 开始。 |
+| ETag | 对象存储返回的分片实体标识，完成上传时必须提交。 |
+| `ListParts` | S3 接口，列出已上传分片，本项目作为分片状态权威来源。 |
+| 文件指纹 | 由文件名、大小、修改时间和首尾内容计算的 SHA-256，用于匹配续传。 |
+| `upload_id` | 上传会话标识。 |
+| `document_id` | 文档标识，在上传初始化阶段预生成。 |
+
+### 1.4 设计依据
+
+- [RAG 文档索引阶段总体设计](./00-overview.md)
+- [文档解析详细设计](./02-document-parsing.md)
+- SeaweedFS S3 Multipart Upload API
+- boto3 S3 客户端文档
+- 项目现有上传接口、配置和前端上传队列实现
+
+### 1.5 设计目标
 
 把当前“20MB、全量读内存、单请求上传”的链路替换为：
 
@@ -78,7 +127,7 @@ DELETE /api/uploads/{upload_id}
 
 `CompleteMultipartUpload` 由 SeaweedFS 完成合并，应用层拿到的就是一个完整对象。下载、预览、后续解析都按单对象处理，不需要应用层合并分片。
 
-## 5. 为什么不用 Redis bitmap
+## 5. 上传状态存储选型
 
 Redis bitmap 只能表示“第 N 片是否上传过”，不能保存：
 
@@ -147,6 +196,8 @@ ALTER TABLE documents
 UPLOADED / PARSING / CHUNKING / INDEXING / READY / FAILED
 ```
 
+上传完成时写入现有字段：`name`、`file_type`、`size_bytes`、`object_key`、`file_url`、`chunk_count = 0`、`uploaded_at`、`updated_at`；新增字段按本节定义写入。
+
 ### 6.3 `document_tasks`
 
 上传完成时创建，供后续解析和索引阶段更新：
@@ -165,7 +216,7 @@ CREATE TABLE IF NOT EXISTS document_tasks (
     created_at DATETIME(6) NOT NULL,
     updated_at DATETIME(6) NOT NULL,
     PRIMARY KEY (id),
-    KEY idx_document_tasks_document (document_id),
+    UNIQUE KEY uk_document_tasks_document_version (document_id, version),
     KEY idx_document_tasks_status_updated (status, updated_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ```
@@ -290,7 +341,7 @@ GET /api/uploads/{upload_id}
 }
 ```
 
-`uploaded_parts` 来自 `ListParts`，按 `part_number` 升序。分片数量超过 1000 时分页查询，本期 300MB/8MiB 最多 38 片，一次返回即可。
+`uploaded_parts` 来自 `ListParts`，按 `part_number` 升序。分片数量超过 1000 时分页查询，本阶段 300MB/8MiB 最多 38 片，一次返回即可。
 
 `POST /api/uploads/init` 返回的 `uploaded_parts` 是分片编号数组，只用于让前端跳过已上传分片；ETag 和分片大小通过 `GET /api/uploads/{upload_id}` 获取。
 
@@ -407,7 +458,7 @@ documents/{document_id}/source/{normalized_filename}
 - 对象存储中只有一个完整对象；
 - 下载、预览、解析都按单对象读取；
 - 分片 part 不再作为普通对象存在，不能单独下载；
-- 如果后续要“分块存储原始文件”，属于另一个需求，不在本期范围。
+- 如果后续要“分块存储原始文件”，属于另一个需求，不在本阶段范围。
 
 ## 9. 断点续传
 
@@ -683,22 +734,32 @@ Celery beat 每小时执行：
 
 ## 16. 验收标准
 
-- 300MB 文件通过 8MiB 分片上传成功；
-- 刷新页面后重新选择同一文件可以跳过已上传分片；
-- 上传完成后对象存储只有一个完整对象；
-- API 进程内存不随文件大小线性增长；
-- 分片失败可以单独重试；
-- 取消上传后 Multipart Upload 被 abort；
-- 过期会话被定时清理；
-- 旧 `POST /api/documents` 兼容入口仍可用于小文件；
-- 前端真实显示上传进度，并在上传完成后切换到解析/索引进度。
+| 验收编号 | 验收项 | 验证方式 |
+| --- | --- | --- |
+| AC-UPLOAD-01 | 300MB 文件通过 8MiB 分片上传成功 | 集成测试、手工测试 |
+| AC-UPLOAD-02 | 刷新页面后重新选择同一文件可跳过已上传分片 | 前端测试、手工测试 |
+| AC-UPLOAD-03 | 上传完成后对象存储只有一个完整对象 | 集成测试 |
+| AC-UPLOAD-04 | API 进程内存不随文件大小线性增长 | 压测、代码评审 |
+| AC-UPLOAD-05 | 分片失败可以单独重试 | 故障注入测试 |
+| AC-UPLOAD-06 | 取消上传后 Multipart Upload 被 abort | 集成测试 |
+| AC-UPLOAD-07 | 过期会话被定时清理 | 集成测试 |
+| AC-UPLOAD-08 | 旧 `POST /api/documents` 兼容入口仍可用于小文件 | 回归测试 |
+| AC-UPLOAD-09 | 前端真实显示上传进度，并在上传完成后切换到解析/索引进度 | 前端测试、手工测试 |
 
-## 17. 风险
+## 17. 风险与应对措施
 
-| 风险 | 应对 |
-| --- | --- |
-| SeaweedFS Multipart 兼容性未知 | 实现前用 boto3 做完整冒烟测试；不通过则退回“分片落本地后合并上传” |
-| boto3 与 SeaweedFS 的 path-style/签名差异 | 固定 `addressing_style=path`、`signature_version=s3v4`，用真实环境验证 |
-| 300MB 文件分片数较多 | 8MiB 分片，38 片，前端 3 并发，可接受 |
-| 浏览器指纹计算耗时 | 只读首尾 1MiB；Web Crypto 异步计算，不阻塞 UI |
-| 无鉴权 | 生产前补认证和上传会话 owner 字段 |
+| 风险编号 | 风险描述 | 影响 | 应对措施 |
+| --- | --- | --- | --- |
+| R-UPLOAD-01 | SeaweedFS Multipart 兼容性未知 | 上传链路不可用 | 实现前用 boto3 对 Create/UploadPart/ListParts/Complete/Abort 做完整冒烟测试；不通过则退回“分片落本地后合并上传” |
+| R-UPLOAD-02 | boto3 与 SeaweedFS 的 path-style/签名差异 | 分片上传或完成失败 | 固定 `addressing_style=path`、`signature_version=s3v4`，在真实环境验证 |
+| R-UPLOAD-03 | 300MB 文件分片数较多 | 上传时间延长 | 8MiB 分片、3 并发，38 片在可接受范围 |
+| R-UPLOAD-04 | 浏览器指纹计算耗时 | 页面短暂卡顿 | 只读首尾各 1MiB，使用 Web Crypto 异步计算，不阻塞 UI |
+| R-UPLOAD-05 | 当前没有鉴权 | 上传接口可被匿名访问 | 生产前补认证，并为上传会话增加 owner 字段；接口不暴露公网 |
+
+## 18. 评审记录
+
+| 评审日期 | 评审版本 | 评审人 | 评审意见 | 处理结果 |
+| --- | --- | --- | --- | --- |
+|  | V0.9 | 研发团队 |  |  |
+
+评审通过后，本文档版本升级为 V1.0，并作为上传模块实施的基线版本。

@@ -1,11 +1,71 @@
-# RAG 文档索引阶段设计总览
+# RAG 文档索引阶段总体设计
 
-- 日期：2026-10-19
-- 状态：待评审
-- 范围：大文件上传、文档解析、文本切块、向量化、Elasticsearch 索引、混合召回接口
-- 部署前提：MinerU 独立 GPU 机器；Milvus、Elasticsearch、MySQL、Redis、SeaweedFS 与后端同机；embedding 使用阿里云 DashScope
+| 项目 | 内容 |
+| --- | --- |
+| 文档编号 | RAG-IDX-000 |
+| 文档版本 | V0.9（评审稿） |
+| 文档状态 | 评审中 |
+| 密级 | 内部 |
+| 编制 | 架构组 |
+| 评审 | 研发团队 |
+| 批准 | 项目负责人 |
+| 编制日期 | 2026-10-19 |
+| 适用范围 | 索引阶段总体架构、阶段契约、数据模型、状态模型、混合召回接口 |
 
-## 1. 背景
+## 修订记录
+
+| 版本 | 日期 | 修订人 | 修订说明 |
+| --- | --- | --- | --- |
+| V0.9 | 2026-10-19 | 架构组 | 初稿，提交研发团队评审。 |
+
+## 1. 概述
+
+### 1.1 编写目的
+
+本文档定义 RAG 文档索引阶段的总体架构、阶段边界、数据契约、状态模型、部署约束和混合召回接口，作为上传、解析、向量化、Elasticsearch 索引四个子设计的上位文档，并作为研发、测试和运维团队的共同依据。
+
+### 1.2 适用范围
+
+本文档适用于以下工作：
+
+- 文档索引链路的架构评审和接口评审；
+- 各子模块的详细设计与开发拆分；
+- 联调、测试、部署和故障排查；
+- 后续检索阶段和问答阶段的接口对接。
+
+本文档不替代各子模块的详细设计文档。接口字段、数据表结构和异常处理以子文档为准；子文档与本文档冲突时，以本文档确定的阶段契约和全局状态为准，并同步修订子文档。
+
+### 1.3 术语与缩略语
+
+| 术语 | 说明 |
+| --- | --- |
+| RAG | Retrieval-Augmented Generation，检索增强生成。 |
+| Chunk | 文档切块后用于检索和 embedding 的最小文本单元。 |
+| Embedding | 将文本转换为固定维度向量的过程。 |
+| MinerU | 自建文档解析服务，负责 PDF/版式文档转 Markdown。 |
+| SeaweedFS | 对象存储，保存原始文件、解析产物和临时分段文件。 |
+| Milvus | 向量数据库，保存 chunk 向量并执行相似度检索。 |
+| Elasticsearch / ES | 关键词检索引擎，保存 chunk 正文和元数据。 |
+| BM25 | Elasticsearch 使用的关键词相关性评分算法。 |
+| RRF | Reciprocal Rank Fusion，倒数排名融合。 |
+| IK | Elasticsearch 中文分词插件。 |
+| Multipart Upload | S3 分片上传协议，由对象存储完成最终合并。 |
+| `chunk_id` | 同一 chunk 在 MySQL、ES、Milvus 中的统一标识。 |
+| `parse_version` | 文档解析版本，重新解析时递增。 |
+
+### 1.4 参考资料
+
+- [大文件上传详细设计](./01-large-file-upload.md)
+- [文档解析详细设计](./02-document-parsing.md)
+- [向量化与 Milvus 存储详细设计](./03-vectorization-milvus.md)
+- [Elasticsearch 索引详细设计](./04-elasticsearch-indexing.md)
+- SeaweedFS S3 API 文档
+- MinerU 自建服务 API 文档
+- Milvus 官方文档
+- Elasticsearch 8.x 官方文档及 IK 分词插件文档
+- 阿里云 DashScope `text-embedding-v4` 接口文档
+
+### 1.5 项目背景
 
 当前系统已经具备：
 
@@ -49,12 +109,27 @@
 
 ### 2.2 非目标
 
-- 本期不实现用户认证、多租户和文档权限；
-- 本期不实现最终答案生成和对话 UI；
-- 本期不实现 rerank 模型，只预留接口；
-- 本期不做 Elasticsearch/Milvus 集群高可用；
-- 本期不支持 OCR 之外的图片理解、视频、音频；
-- 本期不迁移历史数据，开发库直接重建。
+- 本阶段不实现用户认证、多租户和文档权限；
+- 本阶段不实现最终答案生成和对话 UI；
+- 本阶段不实现 rerank 模型，只预留接口；
+- 本阶段不做 Elasticsearch/Milvus 集群高可用；
+- 本阶段不支持 OCR 之外的图片理解、视频、音频；
+- 本阶段不迁移历史数据，开发库直接重建。
+
+### 2.3 需求与文档映射
+
+| 需求编号 | 需求描述 | 主要设计文档 |
+| --- | --- | --- |
+| REQ-IDX-001 | 单文件约 300MB，分片上传并支持断点续传 | 01 大文件上传 |
+| REQ-IDX-002 | 上传完成后异步解析 PDF/Word 为 Markdown | 02 文档解析 |
+| REQ-IDX-003 | Excel/CSV 解析为结构化 JSON 并支持检索 | 02 文档解析 |
+| REQ-IDX-004 | 解析结果按标题和 token 切块 | 03 向量化与 Milvus |
+| REQ-IDX-005 | 使用阿里云 embedding 生成 1024 维向量 | 03 向量化与 Milvus |
+| REQ-IDX-006 | 向量写入 Milvus，支持按文档/版本过滤 | 03 向量化与 Milvus |
+| REQ-IDX-007 | chunk 写入 Elasticsearch，支持中文 BM25 | 04 Elasticsearch 索引 |
+| REQ-IDX-008 | 向量与关键词两路召回，RRF 融合 | 00 总体设计、04 Elasticsearch 索引 |
+| REQ-IDX-009 | 索引过程可重试、幂等、可观测 | 00 总体设计及各子文档 |
+| REQ-IDX-010 | 删除文档时同步清理对象存储、MySQL、ES、Milvus | 00 总体设计及各子文档 |
 
 ## 3. 关键决策
 
@@ -169,7 +244,7 @@
 
 ### 5.4 检索阶段
 
-本期只实现检索服务接口，不实现最终答案生成：
+本阶段只实现检索服务接口，不实现最终答案生成：
 
 1. 用户问题通过阿里云 embedding 转为查询向量；
 2. 并行执行 Milvus top 50 和 ES BM25 top 50；
@@ -444,6 +519,24 @@ celery -A main.celery_app beat --loglevel=info
 | `ES_INDEX` | `document_chunks` | 关键词索引 |
 | `ES_BULK_SIZE` | `500` | 批量写入条数 |
 
+### 11.4 性能与容量
+
+- 上传：单文件约 300MB，约 38 个 8MiB 分片，前端默认 3 并发；API 进程不加载完整文件。
+- 解析：parse 队列默认 2 个 worker；MinerU 并发默认 2；单文档按 180 页/180MiB 拆分。
+- 索引：index 队列默认 2 个 worker；MySQL 批量 500 条，ES bulk 500 条，Milvus 批量 200 条。
+- 检索目标：BM25 top 50 目标 P95 < 200ms，向量 top 50 目标 P95 < 300ms，混合召回（不含 embedding）目标 P95 < 500ms。
+- 容量估算：10 万 chunk 的原始文本约占 100-300MB；ES 索引按 1.5-2 倍膨胀估算；Milvus 1024 维向量原始数据约 400MB，另加 HNSW 索引开销。
+- 以上为设计目标值，联调阶段根据实际文档、GPU 和网络情况校准。
+
+### 11.5 安全与合规
+
+- 当前系统没有用户认证，上传和文档接口不得直接暴露公网；生产前必须补齐认证、授权和上传会话归属。
+- 上传文件名必须经过路径穿越和非法字符清洗；对象 key 由后端生成，不接受客户端传入。
+- 分片大小、分片编号、文件总大小和文件类型必须严格校验；完成后可增加 magic bytes 校验。
+- MinerU、Milvus、Elasticsearch 只监听内网；API Key 和数据库密码通过环境变量注入，不写入代码和日志。
+- chunk 正文会发送到阿里云 DashScope；敏感文档场景切换自建 embedding 服务，并在产品文档中明确数据出境/出内网范围。
+- 解析结果解压必须防止 zip slip、zip bomb 和超大文件；临时文件按保留策略清理。
+
 ## 12. 错误处理与清理
 
 ### 12.1 重试策略
@@ -526,36 +619,46 @@ celery -A main.celery_app beat --loglevel=info
 
 ## 14. 验收标准
 
-- 300MB 文件可以分片上传，刷新后重新选择同一文件可继续；
-- 上传完成后 SeaweedFS 只有一个原始对象，下载不需要合并；
-- PDF 超过 MinerU 单文件限制时自动拆分并合并；
-- Excel/CSV 生成结构化 JSON，并可以切块检索；
-- 同一份 chunk 在 MySQL、ES、Milvus 中的 `chunk_id` 一致；
-- 向量召回和关键词召回可以并行执行，RRF 返回 top 10；
-- ES 或 Milvus 单路故障时检索可以降级；
-- 任意阶段失败都有明确错误、重试和清理策略；
-- 单元测试、集成测试和至少一次 300MB 手工测试通过。
-
-## 15. 风险与待验证
-
-| 风险 | 影响 | 应对 |
+| 验收编号 | 验收项 | 验证方式 |
 | --- | --- | --- |
-| SeaweedFS S3 Multipart 兼容性 | 上传链路不可用 | 实现前用 boto3 做 Create/UploadPart/ListParts/Complete/Abort 冒烟测试 |
-| MinerU 自建版本 API 差异 | 解析失败 | 固定镜像版本；封装 `MinerUClient`，用 mock 和真实服务各跑一遍 |
-| MinerU 状态不持久化 | job 丢失 | 检测 404 后按分段重新提交 |
-| 阿里云 embedding 限流/成本 | 索引慢或费用高 | 批量 10、并发 2、重试退避、记录 token 用量 |
-| 阿里云数据出内网 | 合规风险 | 敏感文档场景切换自建 embedding；接口层保持可替换 |
-| ES IK 插件版本不匹配 | 中文检索质量差或启动失败 | 固定 ES 版本和 IK 插件版本，镜像内安装 |
-| Milvus 资源占用 | 与 MySQL/ES 争内存 | 单机至少 16GB，Milvus 限额，必要时拆机 |
-| PDF 跨页表格被拆分 | 解析质量下降 | 分段边界按页，必要时启用 1 页重叠并在合并时去重 |
-| Excel 超大文件内存 | worker OOM | `read_only` 流式读取，限制行数/单元格数，超限拒绝 |
-| 当前没有鉴权 | 上传/文档接口可被匿名访问 | 生产前补认证；当前用不可猜测 ID，接口不暴露公网 |
+| AC-IDX-01 | 300MB 文件可以分片上传，刷新后重新选择同一文件可继续 | 集成测试、手工测试 |
+| AC-IDX-02 | 上传完成后 SeaweedFS 只有一个原始对象，下载不需要合并 | 集成测试 |
+| AC-IDX-03 | PDF 超过 MinerU 单文件限制时自动拆分并合并 | 集成测试、手工测试 |
+| AC-IDX-04 | Excel/CSV 生成结构化 JSON，并可以切块检索 | 集成测试 |
+| AC-IDX-05 | 同一份 chunk 在 MySQL、ES、Milvus 中的 `chunk_id` 一致 | 集成测试 |
+| AC-IDX-06 | 向量召回和关键词召回可以并行执行，RRF 返回 top 10 | 集成测试 |
+| AC-IDX-07 | ES 或 Milvus 单路故障时检索可以降级 | 故障注入测试 |
+| AC-IDX-08 | 任意阶段失败都有明确错误、重试和清理策略 | 代码评审、故障注入测试 |
+| AC-IDX-09 | 单元测试、集成测试和至少一次 300MB 手工测试通过 | 测试报告 |
+
+## 15. 风险与应对措施
+
+| 风险编号 | 风险描述 | 影响 | 应对措施 |
+| --- | --- | --- | --- |
+| R-IDX-01 | SeaweedFS S3 Multipart 兼容性 | 上传链路不可用 | 实现前用 boto3 对 Create/UploadPart/ListParts/Complete/Abort 做冒烟测试 |
+| R-IDX-02 | MinerU 自建版本 API 差异 | 解析失败 | 固定镜像版本；封装 `MinerUClient`，用 mock 和真实服务各跑一遍 |
+| R-IDX-03 | MinerU 状态不持久化 | job 丢失 | 检测 404 后按分段重新提交 |
+| R-IDX-04 | 阿里云 embedding 限流/成本 | 索引慢或费用高 | 批量 10、并发 2、重试退避、记录 token 用量 |
+| R-IDX-05 | 阿里云数据出内网 | 合规风险 | 敏感文档场景切换自建 embedding；接口层保持可替换 |
+| R-IDX-06 | ES IK 插件版本不匹配 | 中文检索质量差或启动失败 | 固定 ES 版本和 IK 插件版本，镜像内安装 |
+| R-IDX-07 | Milvus 资源占用 | 与 MySQL/ES 争内存 | 单机至少 16GB，Milvus 限额，必要时拆机 |
+| R-IDX-08 | PDF 跨页表格被拆分 | 解析质量下降 | 分段边界按页，必要时启用 1 页重叠并在合并时去重 |
+| R-IDX-09 | Excel 超大文件内存 | worker OOM | `read_only` 流式读取，限制行数/单元格数，超限拒绝 |
+| R-IDX-10 | 当前没有鉴权 | 上传/文档接口可被匿名访问 | 生产前补认证；当前用不可猜测 ID，接口不暴露公网 |
 
 ## 16. 子设计文档
 
-- [大文件上传设计](./2026-10-19-large-file-upload-design.md)
-- [文档解析设计](./2026-10-19-document-parsing-design.md)
-- [向量化与 Milvus 存储设计](./2026-10-19-vectorization-milvus-design.md)
-- [Elasticsearch 索引设计](./2026-10-19-elasticsearch-indexing-design.md)
+- [大文件上传详细设计](./01-large-file-upload.md)
+- [文档解析详细设计](./02-document-parsing.md)
+- [向量化与 Milvus 存储详细设计](./03-vectorization-milvus.md)
+- [Elasticsearch 索引详细设计](./04-elasticsearch-indexing.md)
 
 每个子文档包含该阶段的详细 API、数据表、错误处理、配置和测试。总览文档负责阶段之间的契约和全局状态。
+
+## 17. 评审记录
+
+| 评审日期 | 评审版本 | 评审人 | 评审意见 | 处理结果 |
+| --- | --- | --- | --- | --- |
+|  | V0.9 | 研发团队 |  |  |
+
+评审通过后，本文档版本升级为 V1.0，并作为索引阶段实施的基线版本。

@@ -1,12 +1,63 @@
-# 向量化与 Milvus 存储设计
+# 向量化与 Milvus 存储详细设计
 
-- 日期：2026-10-19
-- 状态：待评审
-- 所属阶段：索引阶段 3/4
-- 上游：[文档解析设计](./2026-10-19-document-parsing-design.md)
-- 下游：[Elasticsearch 索引设计](./2026-10-19-elasticsearch-indexing-design.md)
+| 项目 | 内容 |
+| --- | --- |
+| 文档编号 | RAG-IDX-030 |
+| 文档版本 | V0.9（评审稿） |
+| 文档状态 | 评审中 |
+| 密级 | 内部 |
+| 编制 | 架构组 |
+| 评审 | 研发团队 |
+| 批准 | 项目负责人 |
+| 编制日期 | 2026-10-19 |
+| 适用范围 | 索引阶段——文本切块、阿里云 embedding、Milvus 向量写入与检索 |
 
-## 1. 目标
+## 修订记录
+
+| 版本 | 日期 | 修订人 | 修订说明 |
+| --- | --- | --- | --- |
+| V0.9 | 2026-10-19 | 架构组 | 初稿，提交研发团队评审。 |
+
+## 1. 概述
+
+### 1.1 编写目的
+
+本文档定义文本切块、阿里云 embedding 调用、Milvus collection 设计、向量写入、版本清理和向量检索接口，作为向量化模块开发、测试和容量评估的依据。
+
+### 1.2 适用范围
+
+本文档适用于：
+
+- 解析产物到 chunk 的转换；
+- 阿里云 `text-embedding-v4` 的调用和限流处理；
+- Milvus standalone 的 collection、索引和写入；
+- 向量检索接口和过滤条件；
+- 重新解析、重新索引和模型切换。
+
+本文档不覆盖 Elasticsearch 索引写入和混合召回编排；后者见 Elasticsearch 索引详细设计。
+
+### 1.3 术语与缩略语
+
+| 术语 | 说明 |
+| --- | --- |
+| Chunk | 文档切块后的最小检索单元。 |
+| Token | 模型分词后的最小单位，用于控制 chunk 和 embedding 长度。 |
+| Embedding | 将文本转换为固定维度向量的过程。 |
+| Collection | Milvus 中具有固定 schema 和索引的向量集合。 |
+| HNSW | 一种近似最近邻向量索引结构。 |
+| COSINE | 余弦相似度度量。 |
+| Upsert | 按主键写入或覆盖向量记录。 |
+| `chunk_id` | chunk 在 MySQL、ES、Milvus 中的统一标识。 |
+
+### 1.4 设计依据
+
+- [RAG 文档索引阶段总体设计](./00-overview.md)
+- [文档解析详细设计](./02-document-parsing.md)
+- [Elasticsearch 索引详细设计](./04-elasticsearch-indexing.md)
+- 阿里云 DashScope `text-embedding-v4` 接口文档
+- Milvus 官方文档
+
+### 1.5 设计目标
 
 把解析后的 Markdown/JSON 转换为可检索的 chunk，并写入 Milvus：
 
@@ -384,7 +435,7 @@ limit = 50
 document_id == "{document_id}"
 ```
 
-如果未来需要保留多版本，可改为同时过滤 `version`，但本期只保留当前版本。
+如果未来需要保留多版本，可改为同时过滤 `version`，但本阶段只保留当前版本。
 
 ## 10. 索引编排与检查点
 
@@ -567,23 +618,33 @@ document_id in ["a1b2", "c3d4"] and version == 1 and file_type == "pdf"
 
 ## 16. 验收标准
 
-- 300MB PDF 解析出的 Markdown 可以切块并写入 MySQL/Milvus；
-- chunk_id 在 MySQL、ES、Milvus 中一致；
-- 阿里云 embedding 批量 10、失败可重试；
-- Milvus 向量检索按文档和版本过滤正确；
-- 重新索引不产生重复向量；
-- 索引失败可从中断的 batch 继续；
-- 向量召回接口返回 chunk_id、分数、页码和标题路径；
-- 10 万 chunk 的检索延迟在可接受范围（目标 < 300ms，不含 embedding）。
+| 验收编号 | 验收项 | 验证方式 |
+| --- | --- | --- |
+| AC-VEC-01 | 300MB PDF 解析出的 Markdown 可以切块并写入 MySQL/Milvus | 集成测试、手工测试 |
+| AC-VEC-02 | `chunk_id` 在 MySQL、ES、Milvus 中一致 | 集成测试 |
+| AC-VEC-03 | 阿里云 embedding 批量 10、失败可重试 | 单元测试、故障注入测试 |
+| AC-VEC-04 | Milvus 向量检索按文档和版本过滤正确 | 集成测试 |
+| AC-VEC-05 | 重新索引不产生重复向量 | 集成测试 |
+| AC-VEC-06 | 索引失败可从中断的 batch 继续 | 故障注入测试 |
+| AC-VEC-07 | 向量召回接口返回 `chunk_id`、分数、页码和标题路径 | 接口测试 |
+| AC-VEC-08 | 10 万 chunk 的检索延迟在可接受范围（目标 < 300ms，不含 embedding） | 性能测试 |
 
-## 17. 风险
+## 17. 风险与应对措施
 
-| 风险 | 应对 |
-| --- | --- |
-| 阿里云限流 | 批量 10、并发 2、退避、记录 429 |
-| 阿里云成本 | 控制 chunk 数、避免重复 embedding、记录 token 用量 |
-| 数据出内网 | 敏感场景切换自建 embedding |
-| 维度变更 | 新建 collection，全量重建，不混用 |
-| Milvus 内存占用 | 单机限额，至少 16GB 总内存，必要时拆机 |
-| Milvus 写入后不可查 | 写入后 `flush()`，检索使用 `Bounded`，测试使用 `Strong` |
-| 切块破坏语义 | 标题感知、表格整体保留、overlap、真实文档评估 |
+| 风险编号 | 风险描述 | 影响 | 应对措施 |
+| --- | --- | --- | --- |
+| R-VEC-01 | 阿里云 embedding 限流 | 索引变慢或失败 | 批量 10、并发 2、指数退避，记录 429 |
+| R-VEC-02 | 阿里云 embedding 成本 | 索引成本超预算 | 控制 chunk 数、避免重复 embedding、记录 token 用量 |
+| R-VEC-03 | 数据出内网 | 合规风险 | 敏感场景切换自建 embedding，接口层保持可替换 |
+| R-VEC-04 | embedding 维度变更 | 旧 collection 不可用 | 新建 collection，全量重建，不混用不同模型向量 |
+| R-VEC-05 | Milvus 内存占用 | 与 MySQL/ES 争内存 | 单机限额，至少 16GB 总内存，必要时拆机 |
+| R-VEC-06 | Milvus 写入后不可查 | 索引完成但检索无结果 | 写入后 `flush()`，检索使用 `Bounded`，测试使用 `Strong` |
+| R-VEC-07 | 切块破坏语义 | 召回质量下降 | 标题感知、表格整体保留、overlap，用真实文档评估 |
+
+## 18. 评审记录
+
+| 评审日期 | 评审版本 | 评审人 | 评审意见 | 处理结果 |
+| --- | --- | --- | --- | --- |
+|  | V0.9 | 研发团队 |  |  |
+
+评审通过后，本文档版本升级为 V1.0，并作为向量化模块实施的基线版本。
