@@ -22,7 +22,7 @@ ALLOWED_FILE_TYPES = frozenset(
         "csv",
     }
 )
-_ENV_FILE = Path(__file__).resolve().parent / ".env"
+ENV_FILE = Path(__file__).resolve().parent / ".env"
 
 
 def _cors_origins_from_env() -> tuple[str, ...]:
@@ -74,7 +74,7 @@ class Settings:
 
 def load_settings() -> Settings:
     """从环境变量构造配置。非法数值在启动时直接失败。"""
-    load_dotenv(_ENV_FILE, override=False)
+    load_dotenv(ENV_FILE, override=False)
     raw_max = os.getenv(
         "MAX_UPLOAD_BYTES",
         str(DEFAULT_MAX_UPLOAD_BYTES),
