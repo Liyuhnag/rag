@@ -137,35 +137,6 @@ npm run dev
 | GET | `/api/health` | 健康检查 |
 | POST | `/api/chat` | 对话接口（占位，暂返回 `501`） |
 
-### 中间件（Docker Compose）
-
-本地开发需要的 MySQL、Redis、SeaweedFS（S3 对象存储）用 compose 一键启动：
-
-```bash
-docker compose up -d        # 启动
-docker compose ps           # 查看状态
-docker compose down         # 停止（保留数据）
-docker compose down -v      # 停止并清空数据
-```
-
-| 服务 | 地址 | 说明 |
-| --- | --- | --- |
-| MySQL | `127.0.0.1:3306` | 库 `app`，账号 `app` / `rag-dev-password` |
-| Redis | `127.0.0.1:6379` | Celery broker，任务结果在 `db 1` |
-| SeaweedFS S3 | `127.0.0.1:8333` | 桶 `rag-documents` 首次启动自动创建 |
-| SeaweedFS Filer | `127.0.0.1:8888` | 文件访问地址，对应 `FILE_BASE_URL` |
-
-把 `backend/.env.example` 复制为 `backend/.env` 后，S3、MySQL 凭据改成 compose 里的本地值：
-
-```bash
-S3_ACCESS_KEY_ID=rag-admin
-S3_SECRET_ACCESS_KEY=rag-dev-secret
-MYSQL_USER=app
-MYSQL_PASSWORD=rag-dev-password
-MYSQL_DATABASE=app
-FILE_BASE_URL=http://127.0.0.1:8888
-```
-
 ## 检查
 
 提交前安装 pre-commit，之后每次提交会检查文件格式，并在相关目录有改动时运行后端检查和前端构建：
