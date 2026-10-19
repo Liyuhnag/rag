@@ -16,10 +16,18 @@ rag/
 │   ├── package.json
 │   └── vite.config.js
 ├── backend/           # 后端项目 (FastAPI + uv)
-├── docs/             # 项目文档
-├── CLAUDE.md         # AI Agent 开发文档
-├── AGENT.md          # Git 工作流和规范
-└── README.md         # 本文件
+│   ├── api/           # 路由层：documents / tasks / chat / health
+│   ├── services/      # 业务与基础设施：存储、数据库、S3 客户端
+│   ├── task/          # Celery 应用与异步任务
+│   ├── model/         # 数据访问层
+│   ├── db/schema.sql  # 表结构（启动时自动执行）
+│   └── .env.example   # 环境变量样例
+├── docker/            # 中间件配置（SeaweedFS S3 身份）
+├── docker-compose.yml # 本地中间件编排
+├── docs/              # 项目文档
+├── CLAUDE.md          # AI Agent 开发文档
+├── AGENT.md           # Git 工作流和规范
+└── README.md          # 本文件
 ```
 
 ## 技术栈
@@ -33,12 +41,81 @@ rag/
 ### 后端
 - **Web 框架**: FastAPI
 - **环境管理**: uv（Python 3.12）
-- **已提供**: 文档与对话的 API 契约、参数校验
-- **服务占位**: 文档存储、检索和模型生成待实现
+- **数据库**: MySQL 8.0（PyMySQL，启动时自动建表）
+- **队列 / 缓存**: Redis 7 + Celery
+- **对象存储**: SeaweedFS 3.99（S3 兼容，文件预览走 filer）
+- **已实现**: 异步文档上传、任务状态查询、文档列表 / 详情 / 删除
+- **待接入**: 向量化、检索和模型生成（`/api/chat` 目前返回 501）
 
 ## 快速开始
 
-### 前端开发
+### 1. 启动中间件（Docker Compose）
+
+本地开发需要的 MySQL、Redis、SeaweedFS（S3 对象存储）用 compose 一键启动：
+
+```bash
+docker compose up -d        # 启动
+docker compose ps           # 查看状态
+docker compose down         # 停止（保留数据）
+docker compose down -v      # 停止并清空数据
+```
+
+| 服务 | 地址 | 说明 |
+| --- | --- | --- |
+| MySQL | `127.0.0.1:3306` | 库 `app`，账号 `app` / `rag-dev-password` |
+| Redis | `127.0.0.1:6379` | Celery broker，任务结果在 `db 1` |
+| SeaweedFS S3 | `127.0.0.1:8333` | 桶 `rag-documents` 首次启动自动创建 |
+| SeaweedFS Filer | `127.0.0.1:8888` | 文件访问地址，对应 `FILE_BASE_URL` |
+
+首次启动后把 `backend/.env.example` 复制为 `backend/.env`，并把 S3、MySQL 凭据改成 compose 里的本地值：
+
+```bash
+S3_ACCESS_KEY_ID=rag-admin
+S3_SECRET_ACCESS_KEY=rag-dev-secret
+MYSQL_USER=app
+MYSQL_PASSWORD=rag-dev-password
+MYSQL_DATABASE=app
+FILE_BASE_URL=http://127.0.0.1:8888
+```
+
+> 以上凭据仅用于本地开发，不要用于任何线上环境。
+
+### 2. 启动后端
+
+```bash
+cd backend
+uv sync --all-groups
+uv run uvicorn main:app --reload --host 127.0.0.1 --port 8000
+```
+
+访问 http://127.0.0.1:8000/docs
+
+也可以直接用脚本入口启动（等价，默认监听 `0.0.0.0:8000` 并开启 reload）：
+
+```bash
+cd backend
+uv run python main.py
+```
+
+### 3. 启动 Celery Worker
+
+文档上传接口只负责入队，真正的入库和存储由 worker 完成（不启动 worker 时上传会停在排队状态）：
+
+```bash
+cd backend
+uv run celery -A main.celery_app worker --loglevel=info
+```
+
+需要查看任务状态时再启动 Flower：
+
+```bash
+cd backend
+uv run celery -A main.celery_app flower
+```
+
+Flower 的账号、监听地址和端口读取 `.env` 里的 `FLOWER_BASIC_AUTH`、`FLOWER_ADDRESS`、`FLOWER_PORT`，默认地址 http://127.0.0.1:5555。
+
+### 4. 前端开发
 
 ```bash
 cd frontend
@@ -48,15 +125,17 @@ npm run dev
 
 访问 http://localhost:5173
 
-### 后端开发
+## API 一览
 
-```bash
-cd backend
-uv sync --all-groups
-uv run uvicorn main:app --reload --host 127.0.0.1 --port 8000
-```
-
-访问 http://127.0.0.1:8000/docs
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/api/documents` | 上传文件，返回 `202` 和任务 ID |
+| GET | `/api/documents` | 文档列表 |
+| GET | `/api/documents/{id}` | 文档详情 |
+| DELETE | `/api/documents/{id}` | 删除文档 |
+| GET | `/api/tasks/{id}` | 查询异步任务状态 |
+| GET | `/api/health` | 健康检查 |
+| POST | `/api/chat` | 对话接口（占位，暂返回 `501`） |
 
 ### 中间件（Docker Compose）
 
@@ -99,6 +178,14 @@ uvx pre-commit install
 
 ```bash
 uvx pre-commit run --all-files
+```
+
+后端单独检查：
+
+```bash
+cd backend
+uv run ruff check
+uv run pytest
 ```
 
 推送到 `feature`、`main` 或打开 Pull Request 时，GitHub Actions 会执行同样的后端检查、后端测试和前端构建。`main` 上的前端构建会保留 7 天构建产物。仓库还没有生产部署环境，所以流水线到构建产物为止。
@@ -167,8 +254,9 @@ style: 优化输入框样式
 ### 1. 文件上传
 - 拖拽上传
 - 文件列表管理
-- 上传进度显示
-- 支持的文件类型：PDF、TXT、MD、DOCX
+- 异步处理：上传后入队，worker 写入 SeaweedFS 和 MySQL
+- 任务状态展示
+- 支持的文件类型：PDF、TXT、Markdown、DOC/DOCX、XLS/XLSX、CSV
 
 ### 2. 聊天界面
 - 实时对话
@@ -188,9 +276,13 @@ style: 优化输入框样式
 - [x] 文件上传界面
 - [x] 聊天界面
 - [x] Git 分支规范
-- [ ] 后端 API 开发
+- [x] 后端 API（上传 / 任务 / 列表 / 详情 / 删除）
+- [x] 异步任务处理（Celery + Redis）
+- [x] MySQL 持久化 + SeaweedFS 对象存储
+- [x] 本地中间件环境（Docker Compose）
 - [ ] 向量化服务
 - [ ] 检索服务
+- [ ] 聊天生成
 - [ ] 前后端联调
 
 ## License
