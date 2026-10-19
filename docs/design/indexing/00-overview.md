@@ -3,20 +3,21 @@
 | 项目 | 内容 |
 | --- | --- |
 | 文档编号 | RAG-IDX-000 |
-| 文档版本 | V0.9（评审稿） |
+| 文档版本 | V0.9.1（评审稿） |
 | 文档状态 | 评审中 |
 | 密级 | 内部 |
 | 编制 | 架构组 |
 | 评审 | 研发团队 |
 | 批准 | 项目负责人 |
 | 编制日期 | 2026-10-19 |
-| 适用范围 | 索引阶段总体架构、阶段契约、数据模型、状态模型、混合召回接口 |
+| 适用范围 | 索引阶段总体架构、阶段契约、父子分块、数据模型、状态模型、混合召回接口 |
 
 ## 修订记录
 
 | 版本 | 日期 | 修订人 | 修订说明 |
 | --- | --- | --- | --- |
 | V0.9 | 2026-10-19 | 架构组 | 初稿，提交研发团队评审。 |
+| V0.9.1 | 2026-10-19 | 架构组 | 评审前修订：补充父子分块设计，明确子块用于向量化/召回、父块作为最终返回上下文。 |
 
 ## 1. 概述
 
@@ -40,17 +41,19 @@
 | 术语 | 说明 |
 | --- | --- |
 | RAG | Retrieval-Augmented Generation，检索增强生成。 |
-| Chunk | 文档切块后用于检索和 embedding 的最小文本单元。 |
+| Parent Chunk / 父块 | 语义完整的大块，最终返回给上层模型的上下文单元。 |
+| Child Chunk / 子块 | 父块切分后的小块，embedding、BM25 和向量召回的单元。 |
+| Chunk | 文档切块后的检索单元；未特别说明时指子块。 |
 | Embedding | 将文本转换为固定维度向量的过程。 |
 | MinerU | 自建文档解析服务，负责 PDF/版式文档转 Markdown。 |
 | SeaweedFS | 对象存储，保存原始文件、解析产物和临时分段文件。 |
-| Milvus | 向量数据库，保存 chunk 向量并执行相似度检索。 |
-| Elasticsearch / ES | 关键词检索引擎，保存 chunk 正文和元数据。 |
+| Milvus | 向量数据库，保存子块向量并执行相似度检索。 |
+| Elasticsearch / ES | 关键词检索引擎，保存子块正文和元数据。 |
 | BM25 | Elasticsearch 使用的关键词相关性评分算法。 |
 | RRF | Reciprocal Rank Fusion，倒数排名融合。 |
 | IK | Elasticsearch 中文分词插件。 |
 | Multipart Upload | S3 分片上传协议，由对象存储完成最终合并。 |
-| `chunk_id` | 同一 chunk 在 MySQL、ES、Milvus 中的统一标识。 |
+| `chunk_id` | 子块在 MySQL、ES、Milvus 中的统一标识；父块使用 `parent_chunk_id`。 |
 | `parse_version` | 文档解析版本，重新解析时递增。 |
 
 ### 1.4 参考资料
@@ -102,7 +105,8 @@
 - 上传完成后由异步任务完成解析、切块、embedding、双索引；
 - PDF 通过自建 MinerU 解析为 Markdown/JSON；
 - Excel/CSV 解析为 JSON，再投影为可检索文本；
-- 同一份 chunk 同时写入 MySQL、Elasticsearch、Milvus；
+- 采用父子分块：子块用于 embedding 和召回，父块作为最终上下文；
+- 子块同时写入 MySQL、Elasticsearch、Milvus；
 - 任意一个索引失败可以重试，不重复写入；
 - 支持向量 + 关键词混合召回，返回可引用的页码/工作表位置；
 - 大文件处理不阻塞 API 进程，不把整个文件读入内存。
@@ -126,7 +130,7 @@
 | REQ-IDX-004 | 解析结果按标题和 token 切块 | 03 向量化与 Milvus |
 | REQ-IDX-005 | 使用阿里云 embedding 生成 1024 维向量 | 03 向量化与 Milvus |
 | REQ-IDX-006 | 向量写入 Milvus，支持按文档/版本过滤 | 03 向量化与 Milvus |
-| REQ-IDX-007 | chunk 写入 Elasticsearch，支持中文 BM25 | 04 Elasticsearch 索引 |
+| REQ-IDX-007 | 子块写入 Elasticsearch，支持中文 BM25 | 04 Elasticsearch 索引 |
 | REQ-IDX-008 | 向量与关键词两路召回，RRF 融合 | 00 总体设计、04 Elasticsearch 索引 |
 | REQ-IDX-009 | 索引过程可重试、幂等、可观测 | 00 总体设计及各子文档 |
 | REQ-IDX-010 | 删除文档时同步清理对象存储、MySQL、ES、Milvus | 00 总体设计及各子文档 |
@@ -140,11 +144,11 @@
 | 文件指纹 | `SHA-256(name + size + lastModified + 首尾各 1MiB)` | 刷新后重新选择文件可以匹配；避免读取 300MB 全量内容 |
 | PDF 解析 | 自建 MinerU，按页/按大小拆分，异步提交和轮询 | 自建 MinerU 仍有单文件限制，且 job 状态不持久化 |
 | Excel/CSV | 原生解析为 JSON，不经过 MinerU | MinerU 不负责结构化表格；原生解析更快、可控 |
-| 切块 | 先合并/规范化，再按标题和 token 切块 | 避免 MinerU 分段边界产生半截语义块 |
+| 父子分块 | 父块 1200-2000 token 保留完整语义，子块 300-500 token 用于 embedding 和召回 | 防止小块语义丢失；最终返回父块上下文，子块只做命中单元 |
 | Embedding | 阿里云 `text-embedding-v4`，默认 1024 维，批量 10 | 官方限制单条 8192 token、每批最多 10 条 |
 | 向量索引 | Milvus standalone，HNSW，COSINE | 本地部署、生态成熟，适合当前规模 |
 | 关键词索引 | Elasticsearch 8.x 单节点 + IK 分词 | 中文 BM25 和关键词召回需要中文分词 |
-| 混合召回 | 向量 top 50 + 关键词 top 50，RRF k=60，取 top 10 | 两路分数量纲不同，RRF 不需要分数归一化 |
+| 混合召回 | 向量子块 top 50 + 关键词子块 top 50，按父块聚合后 RRF k=60，取 top 10 父块 | 两路分数量纲不同，RRF 不需要分数归一化；父块级 RRF 保证返回粒度一致 |
 | 索引一致性 | MySQL 为源数据，ES/Milvus 为派生索引 | 换 embedding 模型或重建索引不丢原文 |
 | 任务隔离 | `parse` 和 `index` 两个 Celery 队列 | 大文件解析不能阻塞 embedding，GPU 解析和 API 调用限流互不影响 |
 
@@ -175,7 +179,7 @@
 │ Celery parse worker  │        │ Celery index worker      │
 │                      │        │                          │
 │ 1. 下载原始文件       │        │ 1. 读取 merged.md/json    │
-│ 2. 拆分 PDF/解析 Excel│        │ 2. 规范化、切 chunk      │
+│ 2. 拆分 PDF/解析 Excel│        │ 2. 规范化、父子分块      │
 │ 3. 提交 MinerU        │        │ 3. 写 MySQL chunks       │
 │ 4. 轮询、下载结果     │        │ 4. 写 ES                 │
 │ 5. 合并 MD/JSON       │        │ 5. 阿里云 embedding      │
@@ -229,17 +233,17 @@
 ### 5.3 索引阶段
 
 1. 读取 `parsed/merged.md` / `merged.json`；
-2. 规范化文本，按标题和 token 切 chunk；
-3. 写入 MySQL `document_chunks`，生成确定性 `chunk_id`；
-4. 批量写入 Elasticsearch；
-5. 调用阿里云 embedding，批量写入 Milvus；
-6. ES 和 Milvus 都完成后，文档状态置为 `READY`，写入 `chunk_count`。
+2. 规范化文本，按标题和 token 生成父块；
+3. 将每个父块切分为子块，写入 MySQL `document_chunks`，生成确定性父子 `chunk_id`；
+4. 批量写入 Elasticsearch（仅子块）；
+5. 调用阿里云 embedding（仅子块），批量写入 Milvus；
+6. ES 和 Milvus 都完成后，文档状态置为 `READY`，写入 `parent_chunk_count` 和 `chunk_count`（子块数）。
 
 产物：
 
-- MySQL chunk 记录；
-- ES 关键词索引；
-- Milvus 向量索引；
+- MySQL 父块和子块记录；
+- ES 子块关键词索引；
+- Milvus 子块向量索引；
 - 可检索文档。
 
 ### 5.4 检索阶段
@@ -247,20 +251,20 @@
 本阶段只实现检索服务接口，不实现最终答案生成：
 
 1. 用户问题通过阿里云 embedding 转为查询向量；
-2. 并行执行 Milvus top 50 和 ES BM25 top 50；
-3. 按 `chunk_id` 去重；
-4. RRF 融合，取 top 10；
-5. 可选 rerank；
-6. 返回 chunk、文档、页码/工作表位置和分数。
+2. 并行执行 Milvus 子块 top 50 和 ES BM25 子块 top 50；
+3. 子块命中按 `parent_id` 聚合，同一父块只保留每路最佳子块排名；
+4. 父块级 RRF 融合，取 top 10 父块；
+5. 可选 rerank（父块正文）；
+6. 从 MySQL 读取父块正文，返回父块、命中子块片段、文档、页码/工作表位置和分数。
 
 ## 6. 存储职责
 
 | 存储 | 职责 | 是否源数据 | 可重建 |
 | --- | --- | --- | --- |
-| MySQL | 文档元数据、上传会话、任务、chunk 正文 | 是 | 否 |
+| MySQL | 文档元数据、上传会话、任务、父块/子块正文 | 是 | 否 |
 | SeaweedFS | 原始文件、解析 MD/JSON/图片、临时分段 PDF | 是 | 否 |
-| Elasticsearch | chunk 关键词索引、高亮 | 否 | 是，从 MySQL 重建 |
-| Milvus | chunk 向量索引 | 否 | 是，重新 embedding |
+| Elasticsearch | 子块关键词索引、高亮 | 否 | 是，从 MySQL 重建 |
+| Milvus | 子块向量索引 | 否 | 是，重新 embedding |
 | Redis | Celery broker、锁、限流、MinerU 并发信号量 | 否 | 是 |
 
 ## 7. 数据模型
@@ -271,6 +275,7 @@
 documents 1 ─── N document_tasks
 documents 1 ─── N parse_jobs
 documents 1 ─── N document_chunks
+document_chunks(PARENT) 1 ─── N document_chunks(CHILD)
 upload_sessions 1 ─── 0..1 documents
 document_tasks 1 ─── N parse_jobs
 ```
@@ -280,10 +285,10 @@ document_tasks 1 ─── N parse_jobs
 | 表 | 作用 | 详细设计 |
 | --- | --- | --- |
 | `upload_sessions` | 分片上传会话 | 上传设计文档 |
-| `documents` | 文档主记录，新增页数、解析版本、解析产物 key | 总览 + 解析文档 |
+| `documents` | 文档主记录，新增页数、解析版本、解析产物 key、父块/子块数量 | 总览 + 解析文档 |
 | `document_tasks` | 文档级异步任务，保存阶段、进度、错误、检查点 | 总览 + 各阶段文档 |
 | `parse_jobs` | MinerU 分段任务 | 解析设计文档 |
-| `document_chunks` | chunk 正文和元数据，ES/Milvus 的源数据 | 向量化设计文档 |
+| `document_chunks` | 父块和子块正文、层级关系和元数据，ES/Milvus 的源数据 | 向量化设计文档 |
 
 现有 `processing_tasks` 由上传任务模型改为文档任务模型。由于项目仍处于开发阶段，直接替换为 `document_tasks`，不保留旧表数据。
 
@@ -292,10 +297,11 @@ document_tasks 1 ─── N parse_jobs
 - `upload_id`：上传会话 ID，32 位十六进制；
 - `document_id`：文档 ID，32 位十六进制，在 init 阶段预生成；
 - `task_id`：文档处理任务 ID，32 位十六进制；
-- `chunk_id`：`sha256(document_id + ":" + version + ":" + chunk_index)[:32]`；
+- `parent_chunk_id`：`sha256(document_id + ":" + version + ":PARENT:" + parent_index)[:32]`；
+- `child_chunk_id`：`sha256(document_id + ":" + version + ":CHILD:" + chunk_index)[:32]`；
 - `version`：解析版本，从 1 开始，每次重新解析递增。
 
-`chunk_id` 同时作为 MySQL 主键、ES `_id`、Milvus 主键，保证双索引可去重、可幂等重试。
+`child_chunk_id` 同时作为 MySQL 子块主键、ES `_id`、Milvus 主键，保证双索引可去重、可幂等重试；`parent_chunk_id` 用于子块聚合和最终上下文返回。
 
 首次上传完成时 `parse_version = 1`；重新解析时递增。`document_tasks` 和 `parse_jobs` 都带 `version`，唯一键包含版本，避免新旧任务互相覆盖。
 
@@ -335,8 +341,9 @@ UPLOADED -> PARSING -> CHUNKING -> INDEXING -> READY
 
 - 解析阶段：已完成页数 / 总页数，映射到 5-70；
 - 合并阶段：固定 70-80；
-- 切块阶段：已写入 chunk 数 / 总 chunk 数，映射到 80-85；
-- 索引阶段：已索引 chunk 数 / 总 chunk 数，映射到 85-100。
+- 父块生成阶段：已生成父块数 / 预计父块数，映射到 80-82；
+- 子块生成阶段：已写入子块数 / 总子块数，映射到 82-85；
+- 索引阶段：已索引子块数 / 总子块数，映射到 85-100。
 
 ### 8.4 MinerU 分段状态
 
@@ -349,21 +356,26 @@ PENDING -> SUBMITTED -> RUNNING -> DOWNLOADING -> COMPLETED
 
 ## 9. 混合召回接口
 
+> 本章定义索引阶段与检索阶段的召回契约；检索阶段的完整设计（向量检索、ES 检索、RRF 融合、rerank）见[检索阶段设计文档集](../retrieval/README.md)。
+
 ### 9.1 召回流程
 
 ```text
 query
-  ├── 阿里云 embedding -> Milvus top 50
-  └── ES multi_match -> top 50
+  ├── 阿里云 embedding -> Milvus 子块 top 50
+  └── ES multi_match -> 子块 top 50
           │
           ▼
-      按 chunk_id 去重
+      按 parent_id 聚合，同一父块只保留最佳子块排名
           │
           ▼
-      RRF: score = Σ 1 / (60 + rank_i)
+      父块级 RRF: score(parent) = Σ 1 / (60 + parent_rank_i)
           │
           ▼
-      top 10（可选 rerank）
+      top 10 父块（可选 rerank）
+          │
+          ▼
+      从 MySQL 读取父块正文，附带命中子块片段
 ```
 
 ### 9.2 过滤条件
@@ -383,25 +395,36 @@ query
   "query": "问题文本",
   "results": [
     {
-      "chunk_id": "9f2c...",
+      "parent_id": "p1a2...",
       "document_id": "a1b2...",
       "document_name": "report.pdf",
       "file_type": "pdf",
-      "content": "chunk 正文",
+      "content": "父块完整正文",
       "heading_path": "第三章 > 3.2 节",
-      "locator": "page:12",
-      "page_start": 12,
+      "locator": "page:10-12",
+      "page_start": 10,
       "page_end": 12,
       "score": 0.032,
-      "vector_rank": 3,
-      "keyword_rank": 1
+      "matched_children": [
+        {
+          "chunk_id": "c9f2...",
+          "content": "命中子块正文片段",
+          "vector_rank": 3,
+          "keyword_rank": 1,
+          "vector_score": 0.78,
+          "keyword_score": 12.4
+        }
+      ]
     }
   ],
   "degraded": false
 }
 ```
 
-`degraded=true` 表示 ES 或 Milvus 有一路不可用，结果只来自另一路。
+- 最终返回单元是父块，`content` 为父块完整正文；
+- `matched_children` 保留命中子块片段、两路排名和原始分数，用于引用和高亮；
+- 同一父块的多个命中子块合并到一个结果中，`score` 为父块级 RRF 分数；
+- `degraded=true` 表示 ES 或 Milvus 有一路不可用，结果只来自另一路。
 
 ### 9.4 检索服务接口
 
@@ -424,27 +447,28 @@ class RetrievalService:
 ### 10.1 写入顺序
 
 ```text
-MySQL document_chunks
-  -> Elasticsearch bulk
-  -> 阿里云 embedding
-  -> Milvus upsert
+MySQL document_chunks（先父块，后子块）
+  -> Elasticsearch bulk（仅子块）
+  -> 阿里云 embedding（仅子块）
+  -> Milvus upsert（仅子块）
   -> documents.status = READY
 ```
 
-- MySQL 是源数据，必须先写；
+- MySQL 是源数据，必须先写，父块先于子块写入；
 - ES 和 Milvus 是派生索引，允许重试；
 - 两边都完成后才能把文档标记为 `READY`；
-- 索引过程中文档状态为 `INDEXING`，检索层不返回该文档。
+- 索引过程中文档状态为 `INDEXING`，检索层不返回该文档；
+- 父块不写入 ES/Milvus，最终检索时按 `parent_id` 从 MySQL 读取。
 
 ### 10.2 幂等策略
 
 - 分片上传：同一 part number 重复上传直接覆盖；
 - 完成上传：`upload_sessions.status = COMPLETED` 时直接返回已有文档和任务；
-- 解析分段：`parse_jobs` 唯一键 `(document_id, part_index)`，重复提交前先查状态；
-- chunk：确定性 `chunk_id`，MySQL 唯一键、ES `_id`、Milvus 主键都使用它；
-- ES：`_bulk` 使用 `index` 操作，重复写入同一 `_id` 覆盖；
-- Milvus：按 `chunk_id` upsert；
-- 重新解析：递增 `version`，先删除旧版本的 ES 文档和 Milvus 向量，再写新版本。
+- 解析分段：`parse_jobs` 唯一键 `(document_id, version, part_index)`，重复提交前先查状态；
+- 父子 chunk：确定性 ID；MySQL 唯一键 `(document_id, version, chunk_level, chunk_index)`；
+- ES：`_bulk` 使用 `index` 操作，`_id` 为子块 ID，重复写入同一 `_id` 覆盖；
+- Milvus：按子块 ID upsert；
+- 重新解析：递增 `version`，先删除旧版本父块、子块、ES 子块文档和 Milvus 子块向量，再写新版本。
 
 ### 10.3 检查点
 
@@ -454,13 +478,16 @@ MySQL document_chunks
 {
   "page_count": 120,
   "parse_parts": 2,
+  "parent_count": 120,
   "chunk_count": 860,
   "es_indexed": true,
   "milvus_indexed_through": 640
 }
 ```
 
-任务重试时从检查点继续，避免重复调用阿里云 embedding。
+- `parent_count` 是父块数量，`chunk_count` 是子块数量；
+- ES 和 Milvus 的检查点都按子块计数；
+- 任务重试时从检查点继续，避免重复调用阿里云 embedding。
 
 ## 11. 部署与配置
 
@@ -472,7 +499,7 @@ MySQL document_chunks
 | Celery parse worker | 后端机器 | 下载、拆分、MinerU 轮询、合并 |
 | Celery index worker | 后端机器 | 切块、ES、embedding、Milvus |
 | Celery beat | 后端机器 | MinerU 轮询、上传会话清理 |
-| MySQL | 后端机器 | 元数据、任务、chunk |
+| MySQL | 后端机器 | 元数据、任务、父块/子块 |
 | Redis | 后端机器 | broker、锁、限流 |
 | SeaweedFS | 后端机器 | 原始文件、解析产物 |
 | Elasticsearch | 后端机器 | 关键词索引 |
@@ -513,19 +540,26 @@ celery -A main.celery_app beat --loglevel=info
 | `EMBEDDING_MODEL` | `text-embedding-v4` | embedding 模型 |
 | `EMBEDDING_DIM` | `1024` | 向量维度 |
 | `EMBEDDING_BATCH_SIZE` | `10` | 阿里云单批上限 |
+| `PARENT_MAX_TOKENS` | `2000` | 父块最大 token |
+| `PARENT_TARGET_TOKENS` | `1600` | 父块目标 token |
+| `CHILD_MAX_TOKENS` | `600` | 子块最大 token |
+| `CHILD_TARGET_TOKENS` | `400` | 子块目标 token |
+| `CHILD_OVERLAP_TOKENS` | `80` | 子块重叠 token |
 | `MILVUS_URI` | `http://127.0.0.1:19530` | Milvus 地址 |
 | `MILVUS_COLLECTION` | `document_chunks` | 向量集合 |
 | `ES_URL` | `http://127.0.0.1:9200` | Elasticsearch 地址 |
 | `ES_INDEX` | `document_chunks` | 关键词索引 |
 | `ES_BULK_SIZE` | `500` | 批量写入条数 |
 
+检索阶段的候选数、RRF、命中片段和 rerank 配置见[检索阶段总体设计](../retrieval/00-overview.md)第 9 节，本文档不重复定义。
+
 ### 11.4 性能与容量
 
 - 上传：单文件约 300MB，约 38 个 8MiB 分片，前端默认 3 并发；API 进程不加载完整文件。
 - 解析：parse 队列默认 2 个 worker；MinerU 并发默认 2；单文档按 180 页/180MiB 拆分。
-- 索引：index 队列默认 2 个 worker；MySQL 批量 500 条，ES bulk 500 条，Milvus 批量 200 条。
-- 检索目标：BM25 top 50 目标 P95 < 200ms，向量 top 50 目标 P95 < 300ms，混合召回（不含 embedding）目标 P95 < 500ms。
-- 容量估算：10 万 chunk 的原始文本约占 100-300MB；ES 索引按 1.5-2 倍膨胀估算；Milvus 1024 维向量原始数据约 400MB，另加 HNSW 索引开销。
+- 索引：index 队列默认 2 个 worker；MySQL 批量 500 条，ES bulk 500 条，Milvus 批量 200 条；父块和子块都写 MySQL，ES/Milvus 只写子块。
+- 检索目标：BM25 子块 top 50 目标 P95 < 200ms，向量子块 top 50 目标 P95 < 300ms，父块聚合与回查（不含 embedding）目标 P95 < 500ms。
+- 容量估算：10 万子块的原始文本约占 100-300MB；父块正文与子块正文部分重叠，MySQL 文本量按 1.3-1.5 倍估算；ES 索引按 1.5-2 倍膨胀估算；Milvus 1024 维子块向量原始数据约 400MB，另加 HNSW 索引开销。
 - 以上为设计目标值，联调阶段根据实际文档、GPU 和网络情况校准。
 
 ### 11.5 安全与合规
@@ -534,7 +568,7 @@ celery -A main.celery_app beat --loglevel=info
 - 上传文件名必须经过路径穿越和非法字符清洗；对象 key 由后端生成，不接受客户端传入。
 - 分片大小、分片编号、文件总大小和文件类型必须严格校验；完成后可增加 magic bytes 校验。
 - MinerU、Milvus、Elasticsearch 只监听内网；API Key 和数据库密码通过环境变量注入，不写入代码和日志。
-- chunk 正文会发送到阿里云 DashScope；敏感文档场景切换自建 embedding 服务，并在产品文档中明确数据出境/出内网范围。
+- 子块正文会发送到阿里云 DashScope；敏感文档场景切换自建 embedding 服务，并在产品文档中明确数据出境/出内网范围。
 - 解析结果解压必须防止 zip slip、zip bomb 和超大文件；临时文件按保留策略清理。
 
 ## 12. 错误处理与清理
@@ -561,21 +595,21 @@ celery -A main.celery_app beat --loglevel=info
 - 删除文档时同步删除：
   - 原始对象；
   - 解析产物；
-  - MySQL chunks；
-  - ES 文档；
-  - Milvus 向量；
+  - MySQL 父块和子块；
+  - ES 子块文档；
+  - Milvus 子块向量；
   - 进行中的任务标记为取消。
 
 ### 12.3 日志与观测
 
-所有日志带 `document_id`、`task_id`、`upload_id`、`parse_job_id`、`chunk_id`（适用时）。关键指标：
+所有日志带 `document_id`、`task_id`、`upload_id`、`parse_job_id`、`chunk_id`/`parent_id`（适用时）。关键指标：
 
 - 上传字节数、分片重试次数、完成耗时；
 - 解析分段数、MinerU 耗时、失败率；
-- chunk 数、embedding token 数、embedding 耗时；
+- 父块数、子块数、embedding token 数、embedding 耗时；
 - ES bulk 耗时、失败条数；
 - Milvus 写入耗时；
-- 检索两路耗时、降级次数。
+- 检索两路耗时、父块聚合耗时、降级次数。
 
 ## 13. 测试策略
 
@@ -585,8 +619,8 @@ celery -A main.celery_app beat --loglevel=info
 - 文件指纹生成；
 - PDF 拆分算法（页数、字节数、单页超限）；
 - Excel/CSV 转 JSON；
-- Markdown 切块；
-- RRF 融合和去重；
+- Markdown 父子分块（父块生成、子块切分、不跨父块）；
+- 父块聚合与父块级 RRF 融合和去重；
 - ES 查询构造；
 - 各接口参数校验。
 
@@ -615,7 +649,7 @@ celery -A main.celery_app beat --loglevel=info
 - 300MB 扫描件 PDF，页数较少但单页很大；
 - 200MB Excel，检查内存和超时；
 - 3 个 300MB 文件并发上传；
-- 10 万 chunk 的 ES/Milvus 检索延迟。
+- 10 万子块的 ES/Milvus 检索延迟与父块聚合开销。
 
 ## 14. 验收标准
 
@@ -624,12 +658,14 @@ celery -A main.celery_app beat --loglevel=info
 | AC-IDX-01 | 300MB 文件可以分片上传，刷新后重新选择同一文件可继续 | 集成测试、手工测试 |
 | AC-IDX-02 | 上传完成后 SeaweedFS 只有一个原始对象，下载不需要合并 | 集成测试 |
 | AC-IDX-03 | PDF 超过 MinerU 单文件限制时自动拆分并合并 | 集成测试、手工测试 |
-| AC-IDX-04 | Excel/CSV 生成结构化 JSON，并可以切块检索 | 集成测试 |
-| AC-IDX-05 | 同一份 chunk 在 MySQL、ES、Milvus 中的 `chunk_id` 一致 | 集成测试 |
-| AC-IDX-06 | 向量召回和关键词召回可以并行执行，RRF 返回 top 10 | 集成测试 |
-| AC-IDX-07 | ES 或 Milvus 单路故障时检索可以降级 | 故障注入测试 |
-| AC-IDX-08 | 任意阶段失败都有明确错误、重试和清理策略 | 代码评审、故障注入测试 |
-| AC-IDX-09 | 单元测试、集成测试和至少一次 300MB 手工测试通过 | 测试报告 |
+| AC-IDX-04 | Excel/CSV 生成结构化 JSON，并可以父子分块检索 | 集成测试 |
+| AC-IDX-05 | 每个子块都有唯一父块，子块 `chunk_id` 在 MySQL、ES、Milvus 中一致 | 集成测试、数据校验 |
+| AC-IDX-06 | 只对子块生成向量；父块不写入 ES/Milvus | 集成测试 |
+| AC-IDX-07 | 向量召回和关键词召回可以并行执行，按父块聚合后 RRF 返回 top 10 | 集成测试 |
+| AC-IDX-08 | 最终检索结果返回父块正文，并附带命中子块片段 | 接口测试 |
+| AC-IDX-09 | ES 或 Milvus 单路故障时检索可以降级 | 故障注入测试 |
+| AC-IDX-10 | 任意阶段失败都有明确错误、重试和清理策略 | 代码评审、故障注入测试 |
+| AC-IDX-11 | 单元测试、集成测试和至少一次 300MB 手工测试通过 | 测试报告 |
 
 ## 15. 风险与应对措施
 
@@ -645,6 +681,8 @@ celery -A main.celery_app beat --loglevel=info
 | R-IDX-08 | PDF 跨页表格被拆分 | 解析质量下降 | 分段边界按页，必要时启用 1 页重叠并在合并时去重 |
 | R-IDX-09 | Excel 超大文件内存 | worker OOM | `read_only` 流式读取，限制行数/单元格数，超限拒绝 |
 | R-IDX-10 | 当前没有鉴权 | 上传/文档接口可被匿名访问 | 生产前补认证；当前用不可猜测 ID，接口不暴露公网 |
+| R-IDX-11 | 父子关系不一致 | 子块无法聚合为父块，检索结果缺失 | 写入前校验每个子块有父块，索引完成后校验孤立子块数量为 0 |
+| R-IDX-12 | 父块过大导致上下文超限 | 上层模型无法使用完整父块 | 父块最大 2000 token，超长章节拆分为多个父块 |
 
 ## 16. 子设计文档
 

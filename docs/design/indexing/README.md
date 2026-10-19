@@ -1,16 +1,16 @@
-# RAG 文档索引阶段设计文档集
+# RAG 文档索引阶段设计文档集（第一部分）
 
 | 项目 | 内容 |
 | --- | --- |
 | 文档集编号 | RAG-IDX |
-| 文档集版本 | V0.9（评审稿） |
+| 文档集版本 | V0.9.1（评审稿） |
 | 文档集状态 | 评审中 |
 | 密级 | 内部 |
 | 编制 | 架构组 |
 | 评审 | 研发团队 |
 | 批准 | 项目负责人 |
 | 编制日期 | 2026-10-19 |
-| 适用范围 | 文档上传、解析、切块、向量化、Elasticsearch 索引及混合召回接口 |
+| 适用范围 | 文档上传、解析、父子分块、向量化、Elasticsearch 索引及混合召回接口 |
 
 ## 1. 文档集说明
 
@@ -22,17 +22,17 @@
 - 子模块详细设计定义接口、表结构、算法、异常处理、配置和验收标准；
 - 子模块之间的接口以总体设计为准；字段和实现细节以子模块为准。
 
-本阶段不包含最终答案生成、对话 UI、rerank 模型和用户权限体系。这些内容在后续阶段单独设计。
+本阶段不包含检索、最终答案生成、对话 UI、rerank 模型和用户权限体系。检索阶段（含向量检索、ES 检索、RRF 融合和 rerank）见[检索阶段设计文档集](../retrieval/README.md)。
 
 ## 2. 文档清单
 
 | 文档编号 | 文档名称 | 版本 | 状态 | 主要内容 |
 | --- | --- | --- | --- | --- |
-| RAG-IDX-000 | [索引阶段总体设计](./00-overview.md) | V0.9 | 评审中 | 总体架构、阶段契约、数据模型、状态机、混合召回接口、部署与风险 |
-| RAG-IDX-010 | [大文件上传详细设计](./01-large-file-upload.md) | V0.9 | 评审中 | S3 Multipart、上传会话、断点续传、前端交互、清理策略 |
-| RAG-IDX-020 | [文档解析详细设计](./02-document-parsing.md) | V0.9 | 评审中 | MinerU 调用、PDF 拆分、Excel/CSV 转 JSON、解析结果合并 |
-| RAG-IDX-030 | [向量化与 Milvus 存储详细设计](./03-vectorization-milvus.md) | V0.9 | 评审中 | 文本切块、阿里云 embedding、Milvus schema、向量检索 |
-| RAG-IDX-040 | [Elasticsearch 索引详细设计](./04-elasticsearch-indexing.md) | V0.9 | 评审中 | ES mapping、IK 分词、BM25、混合召回、索引生命周期 |
+| RAG-IDX-000 | [索引阶段总体设计](./00-overview.md) | V0.9.1 | 评审中 | 总体架构、阶段契约、父子分块、数据模型、状态机、混合召回接口、部署与风险 |
+| RAG-IDX-010 | [大文件上传详细设计](./01-large-file-upload.md) | V0.9.1 | 评审中 | S3 Multipart、上传会话、断点续传、前端交互、清理策略 |
+| RAG-IDX-020 | [文档解析详细设计](./02-document-parsing.md) | V0.9.1 | 评审中 | MinerU 调用、PDF 拆分、Excel/CSV 转 JSON、解析结果合并 |
+| RAG-IDX-030 | [向量化与 Milvus 存储详细设计](./03-vectorization-milvus.md) | V0.9.1 | 评审中 | 父子分块、子块 embedding、Milvus schema、子块向量检索与父块聚合 |
+| RAG-IDX-040 | [Elasticsearch 索引详细设计](./04-elasticsearch-indexing.md) | V0.9.1 | 评审中 | ES mapping、IK 分词、BM25、子块聚父块、混合召回、索引生命周期 |
 
 ## 3. 阅读顺序
 
@@ -54,6 +54,7 @@
 ## 5. 适用范围与约束
 
 - 单文件上限约 300MB；
+- 采用父子分块：父块 1200-2000 token 作为最终返回上下文，子块 300-500 token 用于 embedding 和召回；父块只存 MySQL，子块写入 MySQL、ES、Milvus；
 - MinerU 部署在独立 GPU 机器，通过内网 HTTP API 访问；
 - Milvus、Elasticsearch、MySQL、Redis、SeaweedFS 与后端同机部署；
 - embedding 使用阿里云 DashScope `text-embedding-v4`，默认 1024 维；
@@ -62,6 +63,7 @@
 
 ## 6. 相关文档
 
+- 检索阶段设计文档集：[../retrieval/README.md](../retrieval/README.md)
 - 项目文档入口：[docs/README.md](../../README.md)
 - 开发环境说明：[backend/README.md](../../../backend/README.md)
 - 数据库 schema：[backend/db/schema.sql](../../../backend/db/schema.sql)

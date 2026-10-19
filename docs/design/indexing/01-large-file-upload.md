@@ -3,7 +3,7 @@
 | 项目 | 内容 |
 | --- | --- |
 | 文档编号 | RAG-IDX-010 |
-| 文档版本 | V0.9（评审稿） |
+| 文档版本 | V0.9.1（评审稿） |
 | 文档状态 | 评审中 |
 | 密级 | 内部 |
 | 编制 | 架构组 |
@@ -17,6 +17,7 @@
 | 版本 | 日期 | 修订人 | 修订说明 |
 | --- | --- | --- | --- |
 | V0.9 | 2026-10-19 | 架构组 | 初稿，提交研发团队评审。 |
+| V0.9.1 | 2026-10-19 | 架构组 | 评审前修订：documents 表增加 parent_chunk_count，明确 chunk_count 为子块数量。 |
 
 ## 1. 概述
 
@@ -183,6 +184,7 @@ CREATE TABLE IF NOT EXISTS upload_sessions (
 ```sql
 ALTER TABLE documents
     ADD COLUMN page_count INT NOT NULL DEFAULT 0 COMMENT 'PDF 页数，非 PDF 为 0',
+    ADD COLUMN parent_chunk_count INT NOT NULL DEFAULT 0 COMMENT '父块数量（最终检索单元）',
     ADD COLUMN parse_version INT NOT NULL DEFAULT 0 COMMENT '解析版本',
     ADD COLUMN parsed_md_key VARCHAR(768) NULL COMMENT '合并后的 Markdown key',
     ADD COLUMN parsed_json_key VARCHAR(768) NULL COMMENT '合并后的 JSON key',
@@ -190,13 +192,15 @@ ALTER TABLE documents
     ADD COLUMN error_message VARCHAR(1024) NULL COMMENT '失败原因';
 ```
 
+说明：现有 `chunk_count` 字段表示子块数量（向量化和召回单元），新增 `parent_chunk_count` 表示父块数量（最终返回单元）。
+
 文档状态扩展为：
 
 ```text
 UPLOADED / PARSING / CHUNKING / INDEXING / READY / FAILED
 ```
 
-上传完成时写入现有字段：`name`、`file_type`、`size_bytes`、`object_key`、`file_url`、`chunk_count = 0`、`uploaded_at`、`updated_at`；新增字段按本节定义写入。
+上传完成时写入现有字段：`name`、`file_type`、`size_bytes`、`object_key`、`file_url`、`chunk_count = 0`（子块数）、`parent_chunk_count = 0`、`uploaded_at`、`updated_at`；新增字段按本节定义写入。
 
 ### 6.3 `document_tasks`
 

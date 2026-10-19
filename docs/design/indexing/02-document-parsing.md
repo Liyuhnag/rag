@@ -3,7 +3,7 @@
 | 项目 | 内容 |
 | --- | --- |
 | 文档编号 | RAG-IDX-020 |
-| 文档版本 | V0.9（评审稿） |
+| 文档版本 | V0.9.1（评审稿） |
 | 文档状态 | 评审中 |
 | 密级 | 内部 |
 | 编制 | 架构组 |
@@ -17,6 +17,7 @@
 | 版本 | 日期 | 修订人 | 修订说明 |
 | --- | --- | --- | --- |
 | V0.9 | 2026-10-19 | 架构组 | 初稿，提交研发团队评审。 |
+| V0.9.1 | 2026-10-19 | 架构组 | 评审前修订：documents 表增加 parent_chunk_count，明确 chunk_count 为子块数量。 |
 
 ## 1. 概述
 
@@ -543,6 +544,7 @@ CREATE TABLE IF NOT EXISTS parse_jobs (
 ```sql
 ALTER TABLE documents
     ADD COLUMN page_count INT NOT NULL DEFAULT 0,
+    ADD COLUMN parent_chunk_count INT NOT NULL DEFAULT 0,
     ADD COLUMN parse_version INT NOT NULL DEFAULT 0,
     ADD COLUMN parsed_md_key VARCHAR(768) NULL,
     ADD COLUMN parsed_json_key VARCHAR(768) NULL,
@@ -550,7 +552,7 @@ ALTER TABLE documents
     ADD COLUMN error_message VARCHAR(1024) NULL;
 ```
 
-首次上传完成时 `parse_version = 1`。重新解析时递增，并在 `document_tasks` 和 `parse_jobs` 中写入同一个版本号，避免新旧任务互相覆盖。
+`chunk_count` 表示子块数量（向量化和召回单元），`parent_chunk_count` 表示父块数量（最终返回单元）。首次上传完成时 `parse_version = 1`。重新解析时递增，并在 `document_tasks` 和 `parse_jobs` 中写入同一个版本号，避免新旧任务互相覆盖。
 
 ### 10.3 文档任务阶段
 
