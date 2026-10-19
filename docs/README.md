@@ -8,4 +8,12 @@
 - 部署文档
 - 等等
 
-文档将在开发过程中逐步补充。
+## 设计文档
+
+索引阶段设计（2026-10-19）：
+
+- [索引阶段设计总览](./superpowers/specs/2026-10-19-indexing-pipeline-design.md)
+- [大文件上传设计](./superpowers/specs/2026-10-19-large-file-upload-design.md)
+- [文档解析设计](./superpowers/specs/2026-10-19-document-parsing-design.md)
+- [向量化与 Milvus 存储设计](./superpowers/specs/2026-10-19-vectorization-milvus-design.md)
+- [Elasticsearch 索引设计](./superpowers/specs/2026-10-19-elasticsearch-indexing-design.md)
