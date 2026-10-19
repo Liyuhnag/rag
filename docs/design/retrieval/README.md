@@ -76,6 +76,7 @@ query
 ## 6. 相关文档
 
 - 全流程分享版：[../end-to-end-pipeline.md](../end-to-end-pipeline.md)
+- 生成阶段设计文档集：[../generation/README.md](../generation/README.md)
 - 索引阶段设计文档集：[../indexing/README.md](../indexing/README.md)
 - 索引阶段总体设计：[../indexing/00-overview.md](../indexing/00-overview.md)
 - 向量化与 Milvus 存储详细设计：[../indexing/03-vectorization-milvus.md](../indexing/03-vectorization-milvus.md)

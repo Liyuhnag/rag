@@ -30,3 +30,13 @@
 - [Elasticsearch 检索详细设计](./design/retrieval/02-es-retrieval.md)
 - [RRF 融合详细设计](./design/retrieval/03-rrf-fusion.md)
 - [Rerank 详细设计](./design/retrieval/04-rerank.md)
+
+### 生成阶段（第三部分）
+
+- [设计文档集说明](./design/generation/README.md)
+- [生成阶段总体设计](./design/generation/00-overview.md)
+- [查询理解与改写详细设计](./design/generation/01-query-understanding.md)
+- [上下文组装与 Prompt 设计详细设计](./design/generation/02-context-assembly.md)
+- [答案生成与流式输出详细设计](./design/generation/03-answer-generation.md)
+- [引用、校验与幻觉控制详细设计](./design/generation/04-citation-verification.md)
+- [可观测与效果评估详细设计](./design/generation/05-observability-and-evaluation.md)

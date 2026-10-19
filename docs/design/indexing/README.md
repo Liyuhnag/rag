@@ -22,7 +22,7 @@
 - 子模块详细设计定义接口、表结构、算法、异常处理、配置和验收标准；
 - 子模块之间的接口以总体设计为准；字段和实现细节以子模块为准。
 
-本阶段不包含检索、最终答案生成、对话 UI、rerank 模型和用户权限体系。检索阶段（含向量检索、ES 检索、RRF 融合和 rerank）见[检索阶段设计文档集](../retrieval/README.md)。
+本阶段不包含检索、最终答案生成、对话 UI、rerank 模型和用户权限体系。检索阶段（含向量检索、ES 检索、RRF 融合和 rerank）见[检索阶段设计文档集](../retrieval/README.md)；生成阶段（含查询理解与改写、上下文组装、答案生成、引用校验、可观测与评估）见[生成阶段设计文档集](../generation/README.md)。
 
 ## 2. 文档清单
 
@@ -65,6 +65,7 @@
 
 - 全流程分享版：[../end-to-end-pipeline.md](../end-to-end-pipeline.md)
 - 检索阶段设计文档集：[../retrieval/README.md](../retrieval/README.md)
+- 生成阶段设计文档集：[../generation/README.md](../generation/README.md)
 - 项目文档入口：[docs/README.md](../../README.md)
 - 开发环境说明：[backend/README.md](../../../backend/README.md)
 - 数据库 schema：[backend/db/schema.sql](../../../backend/db/schema.sql)
