@@ -1,0 +1,107 @@
+# 本地开发中间件：MySQL + Redis + SeaweedFS（S3 对象存储）
+#
+# 启动：docker compose up -d
+# 查看：docker compose ps
+# 停止：docker compose down        （保留数据）
+# 重置：docker compose down -v     （清空数据）
+#
+# 凭据与 backend/.env 保持一致，仅用于本地开发。生产环境请另行配置。
+
+name: rag
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: rag-mysql
+    command:
+      # PyMySQL 未带 cryptography，本地用 native password 认证
+      - --default-authentication-plugin=mysql_native_password
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: rag-root-password
+      MYSQL_DATABASE: app
+      MYSQL_USER: app
+      MYSQL_PASSWORD: rag-dev-password
+    ports:
+      - "127.0.0.1:3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - mysqladmin ping -h 127.0.0.1 -uroot -p"$$MYSQL_ROOT_PASSWORD" --silent
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: rag-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  seaweedfs:
+    image: chrislusf/seaweedfs:3.99
+    container_name: rag-seaweedfs
+    command:
+      - server
+      - -dir=/data
+      - -s3
+      - -s3.port=8333
+      - -s3.config=/etc/seaweedfs/s3.json
+    ports:
+      - "127.0.0.1:8333:8333" # S3 API，对应 S3_ENDPOINT
+      - "127.0.0.1:8888:8888" # Filer HTTP，对应 FILE_BASE_URL（文件下载/预览）
+      - "127.0.0.1:9333:9333" # Master，调试用
+    volumes:
+      - seaweedfs-data:/data
+      - ./docker/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q -O /dev/null http://127.0.0.1:9333/cluster/status
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  # 首次启动时创建 S3 桶，之后重复启动时跳过
+  seaweedfs-init:
+    image: chrislusf/seaweedfs:3.99
+    container_name: rag-seaweedfs-init
+    depends_on:
+      seaweedfs:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        attempt=0
+        until echo 's3.bucket.list' | weed shell -master=seaweedfs:9333 -filer=seaweedfs:8888 2>&1 | grep -q rag-documents; do
+          attempt=$$((attempt + 1))
+          if [ "$$attempt" -gt 30 ]; then
+            echo "创建 bucket 失败，请检查 seaweedfs 容器日志" >&2
+            exit 1
+          fi
+          echo 's3.bucket.create -name rag-documents' | weed shell -master=seaweedfs:9333 -filer=seaweedfs:8888 2>&1 || true
+          sleep 2
+        done
+        echo "bucket rag-documents 就绪"
+    restart: "no"
+
+volumes:
+  mysql-data:
+  redis-data:
+  seaweedfs-data:
