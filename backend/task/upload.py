@@ -42,7 +42,14 @@ def accept_upload(
         updated_at=now,
     )
     task_orm.insert(task)
-    process_document.delay(task_id)
+    try:
+        process_document.delay(task_id)
+    except Exception as exc:
+        current = task_orm.get(task_id)
+        if current is None or current.status == "PENDING":
+            task_orm.fail(task_id, str(exc) or "任务未能进入队列")
+            path.unlink(missing_ok=True)
+        raise
     stored = task_orm.get(task_id)
     return stored if stored is not None else task
 

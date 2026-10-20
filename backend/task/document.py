@@ -25,19 +25,22 @@ def process_document(task_id: str) -> None:
     if task is None:
         return
     path = Path(task.temp_path)
-    task_orm.set_status(task_id, "STORING")
+    if not path.is_file():
+        task_orm.fail(task_id, "临时文件不存在")
+        return
     try:
+        task_orm.set_status(task_id, "STORING")
         document = document_store.add(
             task.name,
             task.file_type,
             path.read_bytes(),
         )
+        task_orm.finish(task_id, document.id)
     except Exception as exc:
         message = "处理超时" if isinstance(exc, SoftTimeLimitExceeded) else (
             str(exc) or "处理失败"
         )
         task_orm.fail(task_id, message)
-        raise
-    finally:
         path.unlink(missing_ok=True)
-    task_orm.finish(task_id, document.id)
+        raise
+    path.unlink(missing_ok=True)

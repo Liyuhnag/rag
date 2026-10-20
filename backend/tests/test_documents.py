@@ -19,6 +19,9 @@ def test_normalize_filename_keeps_basename():
 
 
 def test_upload_stores_document(client):
+    from pathlib import Path
+    from tempfile import gettempdir
+
     content = b"%PDF-1.4 sample"
     response = _upload(client, "手册.pdf", content)
 
@@ -26,6 +29,7 @@ def test_upload_stores_document(client):
     task = response.json()
     assert task["status"] == "STORED"
     assert task["documentId"]
+    assert not (Path(gettempdir()) / "rag-uploads" / task["id"]).exists()
 
     stored = client.get(f"/api/documents/{task['documentId']}")
     assert stored.status_code == 200
@@ -93,6 +97,65 @@ def test_soft_time_limit_marks_task_failed(client, monkeypatch):
     assert reasons == ["处理超时"]
     listed = client.get("/api/documents")
     assert listed.json()["pagination"]["totalItems"] == 0
+
+
+def test_publish_failure_keeps_task_failed_without_temp_file(client, monkeypatch):
+    from pathlib import Path
+    from tempfile import gettempdir
+
+    from model.task import orm as task_orm
+    from task.document import process_document
+
+    failed = []
+    real_fail = task_orm.fail
+
+    def remember(task_id, message):
+        failed.append((task_id, message))
+        real_fail(task_id, message)
+
+    def boom(*args, **kwargs):
+        raise ConnectionError("redis down")
+
+    monkeypatch.setattr(task_orm, "fail", remember)
+    monkeypatch.setattr(process_document, "delay", boom)
+    with pytest.raises(ConnectionError):
+        _upload(client, "note.txt", b"hello")
+
+    task_id, message = failed[0]
+    assert message == "redis down"
+    assert task_orm.get(task_id).status == "FAILED"
+    assert not (Path(gettempdir()) / "rag-uploads" / task_id).exists()
+    listed = client.get("/api/documents")
+    assert listed.json()["pagination"]["totalItems"] == 0
+
+
+def test_missing_temp_file_marks_task_failed(client):
+    from datetime import datetime
+    from datetime import timezone
+
+    from model.task import ProcessingTask
+    from model.task import orm as task_orm
+    from task.document import process_document
+
+    now = datetime.now(timezone.utc)
+    task = ProcessingTask(
+        id="missing-file",
+        name="note.txt",
+        file_type="txt",
+        size_bytes=1,
+        temp_path="/tmp/rag-missing-file",
+        status="PENDING",
+        document_id=None,
+        error_message=None,
+        created_at=now,
+        updated_at=now,
+    )
+    task_orm.insert(task)
+    process_document(task.id)
+
+    stored = task_orm.get(task.id)
+    assert stored.status == "FAILED"
+    assert stored.error_message == "临时文件不存在"
 
 
 def test_upload_rejects_when_queue_is_full(client, monkeypatch):
