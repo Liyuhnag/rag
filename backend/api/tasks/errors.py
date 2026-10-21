@@ -5,4 +5,4 @@ from api.common.errors import AppError
 
 
 def not_found() -> AppError:
-    return AppError(404, "NOT_FOUND", "任务不存在")
+    return AppError(404, "TASK_NOT_FOUND", "任务不存在")

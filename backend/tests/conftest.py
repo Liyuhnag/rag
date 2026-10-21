@@ -12,14 +12,18 @@ from tests.memory import use_inline_tasks
 from tests.memory import use_open_queue
 from tests.memory import use_memory_records
 from tests.memory import use_memory_tasks
+from services.upload import store as upload_store
 
 
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch):
     settings = Settings(
         max_upload_bytes=1024,
+        max_document_bytes=100,
+        upload_chunk_bytes=4,
         cors_origins=("http://localhost:5173",),
     )
+    upload_store.reset()
     use_memory_records(monkeypatch, MemoryDocumentRepository())
     use_memory_tasks(monkeypatch)
     use_inline_tasks()

@@ -221,7 +221,7 @@ def test_get_missing_task(client):
     response = client.get("/api/tasks/missing")
 
     assert response.status_code == 404
-    assert response.json()["error"]["code"] == "NOT_FOUND"
+    assert response.json()["error"]["code"] == "TASK_NOT_FOUND"
 
 
 def test_get_missing_document(client):
