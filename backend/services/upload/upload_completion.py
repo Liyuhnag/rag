@@ -15,6 +15,7 @@ from model.upload.model import UploadSession
 from services.common.exceptions import StateConflict
 from services.common.exceptions import StorageError
 from services.common.exceptions import UploadNotFound
+from services.common.object_storage import UploadedPart
 from services.common.object_storage import client as storage_client
 from services.upload.errors import UploadError
 from services.upload.upload_shared import file_url
@@ -32,57 +33,79 @@ class CompleteResult:
 
 def complete_upload(upload_id: str) -> CompleteResult:
     """抢占完成、校验分片、合并并落库。"""
-    session = upload_orm.get(upload_id)
-    if session is None:
-        raise UploadError(404, "UPLOAD_NOT_FOUND", "上传会话不存在")
+    session = _require_session(upload_id)
     if session.status != "UPLOADING":
         return _complete_state(upload_id)
 
     now = datetime.now(timezone.utc)
     if session.expires_at <= now:
         raise UploadError(410, "UPLOAD_EXPIRED", "上传已过期")
-
     if not upload_orm.claim_completing(upload_id, now):
         return _complete_state(upload_id)
 
+    session = _require_session(upload_id)
+    uploaded = _require_complete_parts(session, now)
+    _merge_parts(session, uploaded, now)
+    return _store_completed(session, now)
+
+
+def _require_session(upload_id: str) -> UploadSession:
     session = upload_orm.get(upload_id)
     if session is None:
         raise UploadError(404, "UPLOAD_NOT_FOUND", "上传会话不存在")
+    return session
 
+
+def _require_complete_parts(
+    session: UploadSession,
+    now: datetime,
+) -> dict[int, UploadedPart]:
+    """分片必须齐全，且每片大小与约定一致。"""
     parts = parts_or_none(session)
     if parts is None:
         upload_orm.mark_failed(session.id, "分片上传已不存在", now)
         raise UploadError(410, "UPLOAD_EXPIRED", "上传已过期")
 
     uploaded = {part.part_number: part for part in parts}
-    missing = [
-        number
-        for number in range(1, session.total_parts + 1)
-        if number not in uploaded
-    ]
+    numbers = range(1, session.total_parts + 1)
+    missing = [number for number in numbers if number not in uploaded]
     if missing:
-        upload_orm.revert_to_uploading(session.id, session.claim_version, now)
-        raise UploadError(
-            409,
-            "UPLOAD_INCOMPLETE",
+        _reject_incomplete(
+            session,
+            now,
             "还有分片未上传",
             {"missingParts": missing},
         )
-
     invalid = [
         number
-        for number in range(1, session.total_parts + 1)
+        for number in numbers
         if uploaded[number].size_bytes != part_size(session, number)
     ]
     if invalid:
-        upload_orm.revert_to_uploading(session.id, session.claim_version, now)
-        raise UploadError(
-            409,
-            "UPLOAD_INCOMPLETE",
+        _reject_incomplete(
+            session,
+            now,
             "分片大小不完整",
             {"invalidParts": invalid},
         )
+    return uploaded
 
+
+def _reject_incomplete(
+    session: UploadSession,
+    now: datetime,
+    message: str,
+    details: dict[str, list[int]],
+) -> None:
+    upload_orm.revert_to_uploading(session.id, session.claim_version, now)
+    raise UploadError(409, "UPLOAD_INCOMPLETE", message, details)
+
+
+def _merge_parts(
+    session: UploadSession,
+    uploaded: dict[int, UploadedPart],
+    now: datetime,
+) -> None:
     try:
         storage_client().complete_multipart_upload(
             session.object_key,
@@ -99,9 +122,10 @@ def complete_upload(upload_id: str) -> CompleteResult:
         upload_orm.mark_failed(session.id, "分片上传已不存在", now)
         raise UploadError(410, "UPLOAD_EXPIRED", "上传已过期") from exc
 
+
+def _store_completed(session: UploadSession, now: datetime) -> CompleteResult:
     document = _completed_document(session, now)
     task = _new_task(session)
-
     try:
         upload_orm.complete_session(
             session.id,
@@ -116,7 +140,6 @@ def complete_upload(upload_id: str) -> CompleteResult:
             "UPLOAD_COMPLETING",
             "上传会话状态已变化",
         ) from exc
-
     session.status = "COMPLETED"
     session.completed_at = now
     return CompleteResult(session, task, "completed")
