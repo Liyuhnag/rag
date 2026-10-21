@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { getDocuments, uploadDocument, deleteDocument, downloadDocument } from '../api'
+import { getDocuments, deleteDocument, downloadDocument } from '../api'
 import Toast from '../components/Toast.vue'
 import Confirm from '../components/Confirm.vue'
 import Pagination from '../components/Pagination.vue'
@@ -10,6 +10,8 @@ import IconFileWord from '../icons/IconFileWord.vue'
 import IconFileText from '../icons/IconFileText.vue'
 import IconFileExcel from '../icons/IconFileExcel.vue'
 import IconFileCsv from '../icons/IconFileCsv.vue'
+import UploadPanel from '../components/UploadPanel.vue'
+import { useUploadManager } from '../composables/useUploadManager.js'
 
 // 文件图标映射
 const fileIconMap = {
@@ -23,6 +25,8 @@ const fileIconMap = {
   xlsx: IconFileExcel,
   csv: IconFileCsv
 }
+
+const { addUploadTask } = useUploadManager()
 
 // 文件类型颜色映射
 const fileColorMap = {
@@ -163,7 +167,6 @@ const handleConfirm = () => {
 // === 上传对话框 ===
 const showUploadDialog = ref(false)
 const uploadingFiles = ref([])
-const uploadProgress = ref({})
 
 const openUploadDialog = () => {
   showUploadDialog.value = true
@@ -214,51 +217,19 @@ const removeUploadingFile = (id) => {
   }
 }
 
-const startUpload = async () => {
+const startUpload = () => {
   const pendingFiles = uploadingFiles.value.filter(f => f.status === 'pending')
   if (pendingFiles.length === 0) {
     showToast('warning', '没有待上传的文件')
     return
   }
 
-  for (const fileItem of pendingFiles) {
-    fileItem.status = 'uploading'
-    fileItem.progress = 0
+  pendingFiles.forEach((fileItem) => {
+    addUploadTask(fileItem.file)
+  })
 
-    try {
-      await uploadDocument(
-        fileItem.file,
-        'User', // TODO: 从登录状态获取真实用户名
-        (percent) => {
-          fileItem.progress = percent
-        }
-      )
-
-      fileItem.status = 'completed'
-      fileItem.progress = 100
-    } catch (error) {
-      fileItem.status = 'failed'
-      fileItem.error = error.message || '上传失败'
-    }
-  }
-
-  // 上传完成后刷新列表
-  const successCount = uploadingFiles.value.filter(f => f.status === 'completed').length
-  const failCount = uploadingFiles.value.filter(f => f.status === 'failed').length
-
-  if (successCount > 0) {
-    showToast('success', `成功上传 ${successCount} 个文件`)
-    await loadFiles()
-  }
-
-  if (failCount > 0) {
-    showToast('error', `${failCount} 个文件上传失败`)
-  }
-
-  // 3秒后关闭对话框
-  setTimeout(() => {
-    closeUploadDialog()
-  }, 3000)
+  showToast('success', `已添加 ${pendingFiles.length} 个文件到上传队列`)
+  closeUploadDialog()
 }
 
 // === 文件预览 ===
@@ -606,6 +577,9 @@ onMounted(() => {
         </div>
       </div>
     </div>
+
+    <!-- 上传进度面板 -->
+    <UploadPanel />
 
     <!-- Toast 提示 -->
     <Toast

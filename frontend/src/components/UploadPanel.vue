@@ -1,10 +1,9 @@
 <script setup>
-import { ref, computed } from 'vue'
-import { useUploadManager, UPLOAD_STATUS } from '../composables/useUploadManager.js'
+import { computed, ref } from 'vue'
+import { UPLOAD_STATUS, useUploadManager } from '../composables/useUploadManager.js'
 
 const {
   uploadTasks,
-  activeUploads,
   hasActiveUploads,
   pauseTask,
   resumeTask,
@@ -15,94 +14,125 @@ const {
   resumeAll
 } = useUploadManager()
 
-// 面板展开状态
 const isExpanded = ref(true)
 
-// 面板是否可见
 const isVisible = computed(() => uploadTasks.value.length > 0)
 
-// 统计信息
 const stats = computed(() => {
-  const pending = uploadTasks.value.filter(t => t.status === UPLOAD_STATUS.PENDING).length
-  const uploading = uploadTasks.value.filter(t => t.status === UPLOAD_STATUS.UPLOADING).length
-  const success = uploadTasks.value.filter(t => t.status === UPLOAD_STATUS.SUCCESS).length
-  const error = uploadTasks.value.filter(t => t.status === UPLOAD_STATUS.ERROR).length
-  const paused = uploadTasks.value.filter(t => t.status === UPLOAD_STATUS.PAUSED).length
-
-  return { pending, uploading, success, error, paused }
+  const counts = {
+    pending: 0,
+    hashing: 0,
+    uploading: 0,
+    paused: 0,
+    completing: 0,
+    processing: 0,
+    success: 0,
+    error: 0,
+    cancelled: 0
+  }
+  uploadTasks.value.forEach((task) => {
+    if (counts[task.status] !== undefined) {
+      counts[task.status] += 1
+    }
+  })
+  return counts
 })
 
-// 任务标题
 const taskTitle = computed(() => {
-  const { uploading, pending, success, error } = stats.value
-  if (uploading > 0 || pending > 0) {
-    return `正在上传 ${uploading + pending} 个文件`
+  const { pending, hashing, uploading, completing, processing, success, error } = stats.value
+  const active = hashing + uploading + completing
+  if (active > 0 || pending > 0) {
+    return `正在上传 ${active + pending} 个文件`
   }
-  if (success > 0 && error === 0) {
-    return `成功上传 ${success} 个文件`
+  if (processing > 0) {
+    return `正在处理 ${processing} 个文件`
   }
   if (error > 0) {
     return `${success} 个成功，${error} 个失败`
   }
+  if (success > 0) {
+    return `成功上传 ${success} 个文件`
+  }
   return '上传任务'
 })
 
-// 切换面板展开状态
 const togglePanel = () => {
   isExpanded.value = !isExpanded.value
 }
 
-// 获取任务状态文本
 const getStatusText = (status) => {
   const statusMap = {
     [UPLOAD_STATUS.PENDING]: '等待中',
+    [UPLOAD_STATUS.HASHING]: '校验中',
     [UPLOAD_STATUS.UPLOADING]: '上传中',
     [UPLOAD_STATUS.PAUSED]: '已暂停',
+    [UPLOAD_STATUS.COMPLETING]: '合并中',
+    [UPLOAD_STATUS.PROCESSING]: '处理中',
     [UPLOAD_STATUS.SUCCESS]: '已完成',
-    [UPLOAD_STATUS.ERROR]: '失败'
+    [UPLOAD_STATUS.ERROR]: '失败',
+    [UPLOAD_STATUS.CANCELLED]: '已取消'
   }
   return statusMap[status] || '未知'
 }
 
-// 获取任务状态颜色
 const getStatusColor = (status) => {
   const colorMap = {
     [UPLOAD_STATUS.PENDING]: '#94A3B8',
+    [UPLOAD_STATUS.HASHING]: '#A855F7',
     [UPLOAD_STATUS.UPLOADING]: '#38BDF8',
     [UPLOAD_STATUS.PAUSED]: '#F59E0B',
+    [UPLOAD_STATUS.COMPLETING]: '#8B5CF6',
+    [UPLOAD_STATUS.PROCESSING]: '#0EA5E9',
     [UPLOAD_STATUS.SUCCESS]: '#10B981',
-    [UPLOAD_STATUS.ERROR]: '#EF4444'
+    [UPLOAD_STATUS.ERROR]: '#EF4444',
+    [UPLOAD_STATUS.CANCELLED]: '#64748B'
   }
   return colorMap[status] || '#94A3B8'
 }
 
-// 是否显示全部暂停按钮
-const canPauseAll = computed(() => {
-  return uploadTasks.value.some(t =>
-    t.status === UPLOAD_STATUS.UPLOADING || t.status === UPLOAD_STATUS.PENDING
-  )
-})
+const getProgress = (task) => {
+  if (task.status === UPLOAD_STATUS.HASHING) {
+    return Math.max(0, Math.min(100, task.hashProgress || 0))
+  }
+  return Math.max(0, Math.min(100, task.progress || 0))
+}
 
-// 是否显示全部恢复按钮
-const canResumeAll = computed(() => {
-  return uploadTasks.value.some(t => t.status === UPLOAD_STATUS.PAUSED)
-})
+const canPause = (task) => {
+  return [UPLOAD_STATUS.HASHING, UPLOAD_STATUS.UPLOADING].includes(task.status)
+}
+
+const canResume = (task) => task.status === UPLOAD_STATUS.PAUSED
+
+const canRetry = (task) => task.status === UPLOAD_STATUS.ERROR
+
+const canCancel = (task) => {
+  return ![UPLOAD_STATUS.COMPLETING, UPLOAD_STATUS.PROCESSING, UPLOAD_STATUS.SUCCESS].includes(task.status)
+}
+
+const showProgress = (task) => {
+  return [
+    UPLOAD_STATUS.HASHING,
+    UPLOAD_STATUS.UPLOADING,
+    UPLOAD_STATUS.PAUSED,
+    UPLOAD_STATUS.COMPLETING,
+    UPLOAD_STATUS.PROCESSING
+  ].includes(task.status)
+}
+
+const canPauseAll = computed(() => uploadTasks.value.some((task) => canPause(task)))
+
+const canResumeAll = computed(() => uploadTasks.value.some((task) => canResume(task)))
 </script>
 
 <template>
   <div v-if="isVisible" class="upload-panel" :class="{ collapsed: !isExpanded }">
-    <!-- 面板头部 -->
     <div class="panel-header" @click="togglePanel">
       <div class="header-left">
-        <div
-          class="status-indicator"
-          :class="{ active: hasActiveUploads }"
-        ></div>
+        <div class="status-indicator" :class="{ active: hasActiveUploads }"></div>
         <span class="panel-title">{{ taskTitle }}</span>
       </div>
 
       <div class="header-right">
-        <!-- 全部暂停 -->
         <button
           v-if="canPauseAll && isExpanded"
           class="header-btn"
@@ -115,7 +145,6 @@ const canResumeAll = computed(() => {
           </svg>
         </button>
 
-        <!-- 全部恢复 -->
         <button
           v-if="canResumeAll && isExpanded"
           class="header-btn"
@@ -127,7 +156,6 @@ const canResumeAll = computed(() => {
           </svg>
         </button>
 
-        <!-- 清除已完成 -->
         <button
           v-if="stats.success > 0 && isExpanded"
           class="header-btn"
@@ -140,7 +168,6 @@ const canResumeAll = computed(() => {
           </svg>
         </button>
 
-        <!-- 展开/收起 -->
         <button class="header-btn" title="展开/收起">
           <svg
             viewBox="0 0 24 24"
@@ -155,13 +182,8 @@ const canResumeAll = computed(() => {
       </div>
     </div>
 
-    <!-- 任务列表 -->
     <div v-if="isExpanded" class="panel-body">
-      <div
-        v-for="task in uploadTasks"
-        :key="task.id"
-        class="task-item"
-      >
+      <div v-for="task in uploadTasks" :key="task.id" class="task-item">
         <div class="task-info">
           <div class="task-name">{{ task.name }}</div>
           <div class="task-meta">
@@ -169,41 +191,33 @@ const canResumeAll = computed(() => {
             <span class="task-status" :style="{ color: getStatusColor(task.status) }">
               {{ getStatusText(task.status) }}
             </span>
-            <span v-if="task.status === UPLOAD_STATUS.UPLOADING" class="task-progress-text">
-              {{ task.progress }}%
+            <span v-if="showProgress(task)" class="task-progress-text">
+              {{ getProgress(task) }}%
             </span>
           </div>
 
-          <!-- 处理步骤 -->
-          <div v-if="task.step && task.status === UPLOAD_STATUS.UPLOADING" class="task-step">
+          <div v-if="task.step" class="task-step">
             {{ task.step }}
           </div>
 
-          <!-- 错误信息 -->
           <div v-if="task.error" class="task-error">
             {{ task.error }}
           </div>
         </div>
 
-        <!-- 进度条 -->
-        <div
-          v-if="task.status === UPLOAD_STATUS.UPLOADING || task.status === UPLOAD_STATUS.PAUSED"
-          class="task-progress"
-        >
+        <div v-if="showProgress(task)" class="task-progress">
           <div
             class="progress-bar"
             :style="{
-              width: task.progress + '%',
+              width: getProgress(task) + '%',
               background: getStatusColor(task.status)
             }"
           ></div>
         </div>
 
-        <!-- 操作按钮 -->
         <div class="task-actions">
-          <!-- 暂停 -->
           <button
-            v-if="task.status === UPLOAD_STATUS.UPLOADING"
+            v-if="canPause(task)"
             class="task-btn"
             @click="pauseTask(task.id)"
             title="暂停"
@@ -214,9 +228,8 @@ const canResumeAll = computed(() => {
             </svg>
           </button>
 
-          <!-- 恢复 -->
           <button
-            v-if="task.status === UPLOAD_STATUS.PAUSED"
+            v-if="canResume(task)"
             class="task-btn"
             @click="resumeTask(task.id)"
             title="恢复"
@@ -226,9 +239,8 @@ const canResumeAll = computed(() => {
             </svg>
           </button>
 
-          <!-- 重试 -->
           <button
-            v-if="task.status === UPLOAD_STATUS.ERROR"
+            v-if="canRetry(task)"
             class="task-btn retry"
             @click="retryTask(task.id)"
             title="重试"
@@ -239,8 +251,8 @@ const canResumeAll = computed(() => {
             </svg>
           </button>
 
-          <!-- 取消/删除 -->
           <button
+            v-if="canCancel(task)"
             class="task-btn delete"
             @click="cancelTask(task.id)"
             title="取消"
