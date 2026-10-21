@@ -9,15 +9,21 @@ from model.upload.model import UploadSession
 from services.common.exceptions import UploadNotFound
 from services.common.object_storage import client as storage_client
 from services.upload.errors import UploadError
-from services.upload.upload_shared import part_size
+from services.upload.errors import upload_aborted
+from services.upload.errors import upload_completed
+from services.upload.errors import upload_completing
+from services.upload.errors import upload_expired
+from services.upload.errors import upload_failed
+from services.upload.shared import part_size
+from services.upload.shared import require_session
 
-_CLOSED_PART_UPLOAD: dict[str, tuple[int, str, str]] = {
-    "COMPLETED": (409, "UPLOAD_ALREADY_COMPLETED", "上传已完成"),
-    "COMPLETING": (409, "UPLOAD_COMPLETING", "上传正在完成"),
-    "ABORTING": (410, "UPLOAD_ABORTED", "上传已取消"),
-    "ABORTED": (410, "UPLOAD_ABORTED", "上传已取消"),
-    "EXPIRED": (410, "UPLOAD_EXPIRED", "上传已过期"),
-    "FAILED": (409, "UPLOAD_FAILED", "上传已失败，请重新上传"),
+_CLOSED_PART_UPLOAD = {
+    "COMPLETED": upload_completed,
+    "COMPLETING": upload_completing,
+    "ABORTING": upload_aborted,
+    "ABORTED": upload_aborted,
+    "EXPIRED": upload_expired,
+    "FAILED": upload_failed,
 }
 
 
@@ -29,9 +35,7 @@ def upload_part(
     body: bytes,
 ) -> tuple[int, int]:
     """校验分片并写入 S3。"""
-    session = upload_orm.get(upload_id)
-    if session is None:
-        raise UploadError(404, "UPLOAD_NOT_FOUND", "上传会话不存在")
+    session = require_session(upload_id)
 
     now = datetime.now(timezone.utc)
     _reject_closed_upload(session, now)
@@ -46,7 +50,7 @@ def upload_part(
         )
     except UploadNotFound as exc:
         upload_orm.mark_failed(session.id, "分片上传已不存在", now)
-        raise UploadError(410, "UPLOAD_EXPIRED", "上传已过期") from exc
+        raise upload_expired() from exc
     return part_number, len(body)
 
 
@@ -54,9 +58,9 @@ def _reject_closed_upload(session: UploadSession, now: datetime) -> None:
     """已经结束或过期的会话不能再接收分片。"""
     closed = _CLOSED_PART_UPLOAD.get(session.status)
     if closed is not None:
-        raise UploadError(*closed)
+        raise closed()
     if session.expires_at <= now:
-        raise UploadError(410, "UPLOAD_EXPIRED", "上传已过期")
+        raise upload_expired()
 
 
 def _require_part_body(

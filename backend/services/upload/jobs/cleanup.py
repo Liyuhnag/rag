@@ -10,7 +10,7 @@ from model.document import orm as document_orm
 from model.upload import orm as upload_orm
 from services.common.exceptions import StorageError
 from services.common.object_storage import client as storage_client
-from services.upload.upload_completion import recover_completing
+from services.upload.steps.completion import recover_completing
 
 logger = logging.getLogger("rag.cleanup")
 

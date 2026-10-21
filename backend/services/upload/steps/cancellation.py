@@ -6,18 +6,18 @@ from datetime import timezone
 
 from model.upload import orm as upload_orm
 from services.common.object_storage import client as storage_client
-from services.upload.errors import UploadError
+from services.upload.errors import upload_completed
+from services.upload.errors import upload_completing
+from services.upload.shared import require_session
 
 
 def delete_upload(upload_id: str) -> None:
     """取消上传并释放 Multipart Upload。"""
-    session = upload_orm.get(upload_id)
-    if session is None:
-        raise UploadError(404, "UPLOAD_NOT_FOUND", "上传会话不存在")
+    session = require_session(upload_id)
     if session.status == "COMPLETED":
-        raise UploadError(409, "UPLOAD_ALREADY_COMPLETED", "上传已完成")
+        raise upload_completed()
     if session.status == "COMPLETING":
-        raise UploadError(409, "UPLOAD_COMPLETING", "上传正在完成")
+        raise upload_completing()
     if session.status in {"ABORTED", "EXPIRED"}:
         return
 

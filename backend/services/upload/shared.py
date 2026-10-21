@@ -5,13 +5,23 @@ from urllib.parse import quote
 
 from model.document_task import orm as document_task_orm
 from model.document_task.model import DocumentTask
+from model.upload import orm as upload_orm
 from model.upload.model import UploadSession
 from services.common.exceptions import StorageError
 from services.common.exceptions import UploadNotFound
+from services.upload.errors import session_not_found
 from services.common.object_storage import UploadedPart
 from services.common.object_storage import bucket as storage_bucket
 from services.common.object_storage import client as storage_client
 from services.common.object_storage import file_base_url as storage_file_base_url
+
+
+def require_session(upload_id: str) -> UploadSession:
+    """读取上传会话。不存在时抛出 UPLOAD_NOT_FOUND。"""
+    session = upload_orm.get(upload_id)
+    if session is None:
+        raise session_not_found()
+    return session
 
 
 def list_parts(session: UploadSession) -> list[UploadedPart]:

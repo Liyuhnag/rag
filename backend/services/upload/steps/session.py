@@ -18,8 +18,8 @@ from services.common.exceptions import FingerprintConflict
 from services.common.exceptions import StorageError
 from services.common.object_storage import UploadedPart
 from services.common.object_storage import client as storage_client
-from services.upload.upload_shared import abort_quietly
-from services.upload.upload_shared import parts_or_none
+from services.upload.shared import abort_quietly
+from services.upload.shared import parts_or_none
 
 
 @dataclass

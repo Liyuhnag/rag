@@ -6,7 +6,7 @@ from datetime import timedelta
 from datetime import timezone
 
 from services.common.object_storage import client as storage_client
-from services.upload import cleanup
+from services.upload.jobs import cleanup
 
 
 def _created(client) -> tuple[dict, object]:

@@ -14,7 +14,7 @@ from tests.memory import use_open_queue
 from tests.memory import use_memory_records
 from tests.memory import use_memory_tasks
 from tests.memory import use_memory_upload_repository
-from services.upload import upload_completion
+from services.upload.steps import completion as upload_completion
 
 
 @pytest.fixture

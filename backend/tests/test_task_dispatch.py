@@ -3,7 +3,7 @@
 
 from types import SimpleNamespace
 
-from services.upload import task_dispatch
+from services.upload.jobs import dispatch as task_dispatch
 from task import maintenance
 
 

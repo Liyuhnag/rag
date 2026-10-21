@@ -7,8 +7,8 @@ from datetime import timezone
 
 from config import load_settings
 from model.document_task import orm as task_orm
-from services.upload import cleanup
-from services.upload.task_dispatch import dispatch_task
+from services.upload.jobs import cleanup
+from services.upload.jobs.dispatch import dispatch_task
 from task.app import celery_app
 
 _REDISPATCH_MIN_AGE_SECONDS = 300

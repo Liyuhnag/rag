@@ -18,12 +18,19 @@ from services.common.exceptions import UploadNotFound
 from services.common.object_storage import UploadedPart
 from services.common.object_storage import client as storage_client
 from services.upload.errors import UploadError
-from services.upload.task_dispatch import dispatch_task
-from services.upload.upload_shared import abort_quietly
-from services.upload.upload_shared import file_url
-from services.upload.upload_shared import part_size
-from services.upload.upload_shared import parts_or_none
-from services.upload.upload_shared import task_for
+from services.upload.errors import upload_aborted
+from services.upload.errors import upload_aborting
+from services.upload.errors import upload_completing
+from services.upload.errors import upload_expired
+from services.upload.errors import upload_failed
+from services.upload.errors import upload_incomplete
+from services.upload.shared import abort_quietly
+from services.upload.shared import file_url
+from services.upload.shared import part_size
+from services.upload.shared import parts_or_none
+from services.upload.shared import require_session
+from services.upload.shared import task_for
+from services.upload.jobs.dispatch import dispatch_task
 
 
 @dataclass
@@ -35,27 +42,20 @@ class CompleteResult:
 
 def complete_upload(upload_id: str) -> CompleteResult:
     """抢占完成、校验分片、合并并落库。"""
-    session = _require_session(upload_id)
+    session = require_session(upload_id)
     if session.status != "UPLOADING":
         return _complete_state(upload_id)
 
     now = datetime.now(timezone.utc)
     if session.expires_at <= now:
-        raise UploadError(410, "UPLOAD_EXPIRED", "上传已过期")
+        raise upload_expired()
     if not upload_orm.claim_completing(upload_id, now):
         return _complete_state(upload_id)
 
-    session = _require_session(upload_id)
+    session = require_session(upload_id)
     uploaded = _require_complete_parts(session, now)
     _merge_parts(session, uploaded, now)
     return _store_completed(session, now)
-
-
-def _require_session(upload_id: str) -> UploadSession:
-    session = upload_orm.get(upload_id)
-    if session is None:
-        raise UploadError(404, "UPLOAD_NOT_FOUND", "上传会话不存在")
-    return session
 
 
 def _require_complete_parts(
@@ -66,7 +66,7 @@ def _require_complete_parts(
     parts = parts_or_none(session)
     if parts is None:
         upload_orm.mark_failed(session.id, "分片上传已不存在", now)
-        raise UploadError(410, "UPLOAD_EXPIRED", "上传已过期")
+        raise upload_expired()
 
     uploaded = {part.part_number: part for part in parts}
     numbers = range(1, session.total_parts + 1)
@@ -100,7 +100,7 @@ def _reject_incomplete(
     details: dict[str, list[int]],
 ) -> None:
     upload_orm.revert_to_uploading(session.id, session.claim_version, now)
-    raise UploadError(409, "UPLOAD_INCOMPLETE", message, details)
+    raise upload_incomplete(message, details)
 
 
 def _merge_parts(
@@ -122,7 +122,7 @@ def _merge_parts(
         )
     except UploadNotFound as exc:
         upload_orm.mark_failed(session.id, "分片上传已不存在", now)
-        raise UploadError(410, "UPLOAD_EXPIRED", "上传已过期") from exc
+        raise upload_expired() from exc
 
 
 def _store_completed(session: UploadSession, now: datetime) -> CompleteResult:
@@ -137,11 +137,7 @@ def _store_completed(session: UploadSession, now: datetime) -> CompleteResult:
             now,
         )
     except StateConflict as exc:
-        raise UploadError(
-            409,
-            "UPLOAD_COMPLETING",
-            "上传会话状态已变化",
-        ) from exc
+        raise upload_completing("上传会话状态已变化") from exc
     session.status = "COMPLETED"
     session.completed_at = now
     dispatch_task(task.id)
@@ -149,9 +145,7 @@ def _store_completed(session: UploadSession, now: datetime) -> CompleteResult:
 
 
 def _complete_state(upload_id: str) -> CompleteResult:
-    session = upload_orm.get(upload_id)
-    if session is None:
-        raise UploadError(404, "UPLOAD_NOT_FOUND", "上传会话不存在")
+    session = require_session(upload_id)
     if session.status == "COMPLETED":
         return CompleteResult(session, task_for(session), "completed")
     if session.status == "COMPLETING":
@@ -160,12 +154,12 @@ def _complete_state(upload_id: str) -> CompleteResult:
             return recovered
         return CompleteResult(session, None, "completing")
     if session.status == "ABORTING":
-        raise UploadError(409, "UPLOAD_ABORTING", "上传正在取消")
+        raise upload_aborting()
     if session.status in {"ABORTED", "EXPIRED"}:
-        raise UploadError(410, "UPLOAD_ABORTED", "上传已取消")
+        raise upload_aborted()
     if session.status == "FAILED":
-        raise UploadError(409, "UPLOAD_FAILED", "上传已失败，请重新上传")
-    raise UploadError(409, "UPLOAD_COMPLETING", "上传正在完成")
+        raise upload_failed()
+    raise upload_completing()
 
 
 def recover_completing(

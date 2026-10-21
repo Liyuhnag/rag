@@ -2,22 +2,19 @@
 """查询上传状态。"""
 
 from model.document_task.model import DocumentTask
-from model.upload import orm as upload_orm
 from model.upload.model import UploadSession
 from services.common.object_storage import UploadedPart
-from services.upload.errors import UploadError
-from services.upload.upload_completion import recover_completing
-from services.upload.upload_shared import parts_or_none
-from services.upload.upload_shared import task_for
+from services.upload.steps.completion import recover_completing
+from services.upload.shared import parts_or_none
+from services.upload.shared import require_session
+from services.upload.shared import task_for
 
 
 def get_upload(
     upload_id: str,
 ) -> tuple[UploadSession, list[UploadedPart], DocumentTask | None]:
     """查询会话、已上传分片和当前任务。"""
-    session = upload_orm.get(upload_id)
-    if session is None:
-        raise UploadError(404, "UPLOAD_NOT_FOUND", "上传会话不存在")
+    session = require_session(upload_id)
 
     if session.status == "COMPLETING":
         recovered = recover_completing(session)
