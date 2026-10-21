@@ -6,7 +6,12 @@ from datetime import datetime
 from model.common.database import as_aware
 from model.common.database import as_utc
 from model.common.database import execute
+from model.common.database import execute_count
+from model.common.database import transaction
+from model.document.model import Document
+from model.document_task.model import DocumentTask
 from model.upload.model import UploadSession
+from services.common.exceptions import StateConflict
 
 
 def _from_row(row: dict[str, object]) -> UploadSession:
@@ -36,6 +41,14 @@ def _from_row(row: dict[str, object]) -> UploadSession:
             None if row["completed_at"] is None else as_aware(row["completed_at"])
         ),
     )
+
+
+def get(upload_id: str) -> UploadSession | None:
+    rows = execute(
+        "SELECT * FROM upload_sessions WHERE id = %(id)s",
+        {"id": upload_id},
+    )
+    return None if not rows else _from_row(rows[0])
 
 
 def find_active(fingerprint: str, now: datetime) -> UploadSession | None:
@@ -127,6 +140,44 @@ def touch(upload_id: str, expires_at: datetime, updated_at: datetime) -> None:
     )
 
 
+def claim_completing(upload_id: str, now: datetime) -> bool:
+    count = execute_count(
+        """
+        UPDATE upload_sessions
+        SET status = 'COMPLETING',
+            claim_version = claim_version + 1,
+            updated_at = %(now)s
+        WHERE id = %(id)s
+          AND status = 'UPLOADING'
+          AND expires_at > %(now)s
+        """,
+        {"id": upload_id, "now": as_utc(now)},
+    )
+    return count == 1
+
+
+def revert_to_uploading(
+    upload_id: str,
+    claim_version: int,
+    now: datetime,
+) -> None:
+    execute_count(
+        """
+        UPDATE upload_sessions
+        SET status = 'UPLOADING',
+            updated_at = %(now)s
+        WHERE id = %(id)s
+          AND status = 'COMPLETING'
+          AND claim_version = %(claim_version)s
+        """,
+        {
+            "id": upload_id,
+            "claim_version": claim_version,
+            "now": as_utc(now),
+        },
+    )
+
+
 def mark_aborting(
     upload_id: str,
     reason: str,
@@ -149,6 +200,23 @@ def mark_aborting(
     )
 
 
+def finish_abort(upload_id: str, status: str, updated_at: datetime) -> None:
+    execute(
+        """
+        UPDATE upload_sessions
+        SET status = %(status)s,
+            updated_at = %(updated_at)s
+        WHERE id = %(id)s
+          AND status = 'ABORTING'
+        """,
+        {
+            "id": upload_id,
+            "status": status,
+            "updated_at": as_utc(updated_at),
+        },
+    )
+
+
 def mark_failed(upload_id: str, message: str, updated_at: datetime) -> None:
     execute(
         """
@@ -164,3 +232,86 @@ def mark_failed(upload_id: str, message: str, updated_at: datetime) -> None:
             "updated_at": as_utc(updated_at),
         },
     )
+
+
+def complete_session(
+    upload_id: str,
+    claim_version: int,
+    document: Document,
+    task: DocumentTask,
+    now: datetime,
+) -> None:
+    """在同一个事务中写文档、写任务并将会话置为 COMPLETED。"""
+    with transaction() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO documents (
+                    id, name, file_type, size_bytes, chunk_count,
+                    status, object_key, file_url, previewable,
+                    preview_url, uploaded_at, updated_at
+                ) VALUES (
+                    %(id)s, %(name)s, %(file_type)s, %(size_bytes)s,
+                    %(chunk_count)s, %(status)s, %(object_key)s,
+                    %(file_url)s, %(previewable)s, %(preview_url)s,
+                    %(uploaded_at)s, %(updated_at)s
+                )
+                """,
+                {
+                    "id": document.id,
+                    "name": document.name,
+                    "file_type": document.file_type,
+                    "size_bytes": document.size_bytes,
+                    "chunk_count": document.chunk_count,
+                    "status": document.status.value,
+                    "object_key": document.object_key,
+                    "file_url": document.file_url,
+                    "previewable": int(document.previewable),
+                    "preview_url": document.preview_url,
+                    "uploaded_at": as_utc(document.uploaded_at),
+                    "updated_at": as_utc(document.updated_at),
+                },
+            )
+            cursor.execute(
+                """
+                INSERT INTO document_tasks (
+                    id, document_id, version, status, stage,
+                    progress, step, error_message, result_json,
+                    created_at, updated_at
+                ) VALUES (
+                    %(id)s, %(document_id)s, %(version)s, %(status)s,
+                    %(stage)s, %(progress)s, %(step)s, %(error_message)s,
+                    NULL, %(created_at)s, %(updated_at)s
+                )
+                """,
+                {
+                    "id": task.id,
+                    "document_id": task.document_id,
+                    "version": task.version,
+                    "status": task.status,
+                    "stage": task.stage,
+                    "progress": task.progress,
+                    "step": task.step,
+                    "error_message": task.error_message,
+                    "created_at": as_utc(now),
+                    "updated_at": as_utc(now),
+                },
+            )
+            cursor.execute(
+                """
+                UPDATE upload_sessions
+                SET status = 'COMPLETED',
+                    completed_at = %(now)s,
+                    updated_at = %(now)s
+                WHERE id = %(id)s
+                  AND status = 'COMPLETING'
+                  AND claim_version = %(claim_version)s
+                """,
+                {
+                    "id": upload_id,
+                    "claim_version": claim_version,
+                    "now": as_utc(now),
+                },
+            )
+            if cursor.rowcount != 1:
+                raise StateConflict("上传会话状态已变化")

@@ -3,7 +3,7 @@
 
 from api.common.schemas import APIModel
 from model.task import ProcessingTask
-from services.upload.store import MockTask
+from model.document_task.model import DocumentTask
 
 
 class TaskResponse(APIModel):
@@ -17,7 +17,7 @@ class TaskResponse(APIModel):
     version: int | None = None
 
 
-def to_task_response(task: ProcessingTask | MockTask) -> TaskResponse:
+def to_task_response(task: ProcessingTask | DocumentTask) -> TaskResponse:
     return TaskResponse(
         id=task.id,
         status=task.status,

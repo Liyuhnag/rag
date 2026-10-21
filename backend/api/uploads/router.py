@@ -1,13 +1,7 @@
 # -*- coding: utf-8 -*-
-"""大文件上传接口。
-
-init 已接入 MySQL 和 S3；part/get/complete/delete 仍使用进程内联调桩，
-后续逐个替换为真实实现，路由和响应保持不变。
-"""
+"""大文件上传接口。"""
 
 import re
-from datetime import datetime
-from datetime import timezone
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -27,20 +21,14 @@ from api.uploads.schemas import UploadPartResponse
 from api.uploads.schemas import UploadStatusResponse
 from config import Settings
 from services.common.exceptions import FingerprintConflict
-from services.upload import mirror as upload_mirror
 from services.upload import service as upload_service
-from services.upload import store
+from services.upload.errors import UploadError
 
 router = APIRouter(prefix="/uploads", tags=["uploads"])
 
 _FINGERPRINT_PATTERN = re.compile(r"^[0-9a-f]{64}$")
-_EMPTY_PART_STATUSES = {"COMPLETED", "ABORTING", "ABORTED", "EXPIRED", "FAILED"}
 _MAX_TOTAL_PARTS = 10000
 _MAX_OBJECT_KEY_BYTES = 1024
-
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def _normalize_filename(filename: str) -> str:
@@ -57,20 +45,13 @@ def _file_type(filename: str) -> str:
         raise errors.unsupported_file_type() from exc
 
 
-def _uploaded_parts(session: store.UploadSession) -> list[UploadedPart]:
-    if session.status in _EMPTY_PART_STATUSES:
-        return []
-    return [
-        UploadedPart(part_number=number, size_bytes=size)
-        for number, size in sorted(session.uploaded_parts.items())
-    ]
-
-
-def _task_status(session: store.UploadSession) -> tuple[str | None, str | None]:
-    task = store.get_task(session.task_id)
-    if task is None:
-        return None, None
-    return task.id, task.status
+def _app_error(exc: UploadError) -> AppError:
+    return AppError(
+        exc.status_code,
+        exc.code,
+        exc.message,
+        exc.details,
+    )
 
 
 def _init_response(session, uploaded_parts, task=None) -> UploadInitResponse:
@@ -93,8 +74,7 @@ def _init_response(session, uploaded_parts, task=None) -> UploadInitResponse:
     )
 
 
-def _status_response(session: store.UploadSession) -> UploadStatusResponse:
-    task_id, task_status = _task_status(session)
+def _status_response(session, uploaded_parts, task) -> UploadStatusResponse:
     return UploadStatusResponse(
         upload_id=session.id,
         document_id=session.document_id,
@@ -103,18 +83,18 @@ def _status_response(session: store.UploadSession) -> UploadStatusResponse:
         chunk_size=session.chunk_size,
         total_parts=session.total_parts,
         status=session.status,
-        uploaded_parts=_uploaded_parts(session),
+        uploaded_parts=[
+            UploadedPart(
+                part_number=part.part_number,
+                size_bytes=part.size_bytes,
+            )
+            for part in uploaded_parts
+        ],
         expires_at=session.expires_at,
         error_message=session.error_message,
-        task_id=task_id,
-        task_status=task_status,
+        task_id=None if task is None else task.id,
+        task_status=None if task is None else task.status,
     )
-
-
-def _expected_part_size(session: store.UploadSession, part_number: int) -> int:
-    if part_number < session.total_parts:
-        return session.chunk_size
-    return session.size_bytes - (session.total_parts - 1) * session.chunk_size
 
 
 @router.post("/init", response_model=UploadInitResponse)
@@ -155,12 +135,8 @@ def init_upload(
         )
     except FingerprintConflict as exc:
         raise errors.fingerprint_conflict(exc.upload_id) from exc
-
-    upload_mirror.mirror(
-        result.session,
-        result.uploaded_parts,
-        result.task,
-    )
+    except UploadError as exc:
+        raise _app_error(exc) from exc
 
     if result.outcome == "created":
         response.status_code = 201
@@ -181,121 +157,69 @@ async def upload_part(
     upload_id: str,
     part_number: int,
     request: Request,
+    settings: Settings = Depends(get_settings),
 ) -> UploadPartResponse:
-    """上传单个分片。
-
-    联调阶段只校验并将分片大小记在进程内，不落对象存储。
-    """
-    session = store.get(upload_id)
-    if session is None:
-        raise errors.upload_not_found()
-    if session.status == "COMPLETED":
-        raise errors.upload_already_completed()
-    if session.status == "COMPLETING":
-        raise errors.upload_completing()
-    if session.status in {"ABORTING", "ABORTED"}:
-        raise errors.upload_aborted()
-    if session.status == "EXPIRED":
-        raise errors.upload_expired()
-    if session.status == "FAILED":
-        raise errors.upload_failed()
-    if session.expires_at <= _now():
-        raise errors.upload_expired()
-    if part_number < 1 or part_number > session.total_parts:
-        raise errors.invalid_part_number(session.total_parts)
-
-    expected = _expected_part_size(session, part_number)
+    """上传单个分片。"""
     raw_length = request.headers.get("content-length")
-    if raw_length is None:
-        raise errors.length_required()
+    content_length: int | None = None
+    body = b""
+
+    if raw_length is not None:
+        try:
+            content_length = int(raw_length)
+        except ValueError:
+            content_length = -1
+        if content_length > settings.upload_chunk_bytes:
+            raise errors.part_too_large(settings.upload_chunk_bytes)
+        if content_length >= 0:
+            body = await request.body()
+
     try:
-        content_length = int(raw_length)
-    except ValueError as exc:
-        raise errors.invalid_part_size(expected, None) from exc
-    if content_length > expected:
-        raise errors.part_too_large(expected)
-    if content_length != expected:
-        raise errors.invalid_part_size(expected, content_length)
+        number, size = upload_service.upload_part(
+            upload_id=upload_id,
+            part_number=part_number,
+            content_length=content_length,
+            body=body,
+        )
+    except UploadError as exc:
+        raise _app_error(exc) from exc
 
-    body = await request.body()
-    if len(body) != expected:
-        raise errors.invalid_part_size(expected, len(body))
-
-    store.add_part(session, part_number, len(body))
-    return UploadPartResponse(part_number=part_number, size_bytes=len(body))
+    return UploadPartResponse(part_number=number, size_bytes=size)
 
 
 @router.get("/{upload_id}", response_model=UploadStatusResponse)
 def get_upload(upload_id: str) -> UploadStatusResponse:
     """查询上传会话和已上传分片。"""
-    session = store.get(upload_id)
-    if session is None:
-        raise errors.upload_not_found()
-    return _status_response(session)
+    try:
+        session, parts, task = upload_service.get_upload(upload_id)
+    except UploadError as exc:
+        raise _app_error(exc) from exc
+    return _status_response(session, parts, task)
 
 
 @router.post("/{upload_id}/complete", response_model=UploadCompleteResponse)
 def complete_upload(upload_id: str, response: Response) -> UploadCompleteResponse:
-    """完成上传并创建联调任务。"""
-    session = store.get(upload_id)
-    if session is None:
-        raise errors.upload_not_found()
-    if session.status == "COMPLETED":
-        task_id, task_status = _task_status(session)
-        response.status_code = 200
-        return UploadCompleteResponse(
-            upload_id=session.id,
-            document_id=session.document_id,
-            status=session.status,
-            task_id=task_id,
-            task_status=task_status,
-        )
-    if session.status == "COMPLETING":
-        response.status_code = 202
-        return UploadCompleteResponse(
-            upload_id=session.id,
-            document_id=session.document_id,
-            status=session.status,
-        )
-    if session.status == "ABORTING":
-        raise errors.upload_aborting()
-    if session.status == "ABORTED":
-        raise errors.upload_aborted()
-    if session.status == "EXPIRED":
-        raise errors.upload_expired()
-    if session.status == "FAILED":
-        raise errors.upload_failed()
-    if session.expires_at <= _now():
-        raise errors.upload_expired()
+    """完成上传并写入文档和任务。"""
+    try:
+        result = upload_service.complete_upload(upload_id)
+    except UploadError as exc:
+        raise _app_error(exc) from exc
 
-    missing = [
-        number
-        for number in range(1, session.total_parts + 1)
-        if number not in session.uploaded_parts
-    ]
-    if missing:
-        raise errors.upload_incomplete(missing)
-
-    task = store.mark_completed(session)
-    response.status_code = 200
+    response.status_code = 202 if result.outcome == "completing" else 200
     return UploadCompleteResponse(
-        upload_id=session.id,
-        document_id=session.document_id,
-        status=session.status,
-        task_id=task.id,
-        task_status=task.status,
+        upload_id=result.session.id,
+        document_id=result.session.document_id,
+        status=result.session.status,
+        task_id=None if result.task is None else result.task.id,
+        task_status=None if result.task is None else result.task.status,
     )
 
 
 @router.delete("/{upload_id}", status_code=204)
 def delete_upload(upload_id: str) -> Response:
     """取消上传。"""
-    session = store.get(upload_id)
-    if session is None:
-        raise errors.upload_not_found()
-    if session.status == "COMPLETED":
-        raise errors.upload_already_completed()
-    if session.status == "COMPLETING":
-        raise errors.upload_completing()
-    store.mark_aborted(session)
+    try:
+        upload_service.delete_upload(upload_id)
+    except UploadError as exc:
+        raise _app_error(exc) from exc
     return Response(status_code=204)

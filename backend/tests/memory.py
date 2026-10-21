@@ -13,6 +13,7 @@ from config import Settings
 from model.document import Document
 from model.document import orm as document_orm
 from services.common.exceptions import DuplicateRecord
+from services.common.exceptions import StateConflict
 from services.common.exceptions import UploadNotFound
 from services.common.object_storage import ObjectStorage
 from services.common.object_storage import UploadedPart
@@ -200,6 +201,71 @@ class MemoryUploadRepository:
             return None
         return max(candidates, key=lambda session: session.created_at)
 
+    def get(self, upload_id: str) -> UploadSession | None:
+        return self.sessions.get(upload_id)
+
+    def claim_completing(self, upload_id: str, now: datetime) -> bool:
+        session = self.sessions.get(upload_id)
+        if (
+            session is None
+            or session.status != "UPLOADING"
+            or session.expires_at <= now
+        ):
+            return False
+        session.status = "COMPLETING"
+        session.claim_version += 1
+        session.updated_at = now
+        return True
+
+    def revert_to_uploading(
+        self,
+        upload_id: str,
+        claim_version: int,
+        now: datetime,
+    ) -> None:
+        session = self.sessions.get(upload_id)
+        if (
+            session is None
+            or session.status != "COMPLETING"
+            or session.claim_version != claim_version
+        ):
+            return
+        session.status = "UPLOADING"
+        session.updated_at = now
+
+    def finish_abort(self, upload_id: str, status: str, now: datetime) -> None:
+        session = self.sessions.get(upload_id)
+        if session is None or session.status != "ABORTING":
+            return
+        session.status = status
+        session.updated_at = now
+
+    def complete_session(
+        self,
+        upload_id: str,
+        claim_version: int,
+        document,
+        task,
+        now: datetime,
+    ) -> None:
+        session = self.sessions.get(upload_id)
+        if (
+            session is None
+            or session.status != "COMPLETING"
+            or session.claim_version != claim_version
+        ):
+            raise StateConflict("上传会话状态已变化")
+        session.status = "COMPLETED"
+        session.completed_at = now
+        session.updated_at = now
+        self.tasks[(task.document_id, task.version)] = task
+
+    def get_task(self, task_id: str):
+        for task in self.tasks.values():
+            if task.id == task_id:
+                return task
+        return None
+
     def insert(self, session: UploadSession) -> None:
         for existing in self.sessions.values():
             if existing.id == session.id:
@@ -262,13 +328,31 @@ def use_memory_upload_repository(
     repository: MemoryUploadRepository,
 ) -> None:
     """让上传服务走进程内会话和任务。"""
+    monkeypatch.setattr(upload_orm, "get", repository.get)
     monkeypatch.setattr(upload_orm, "find_active", repository.find_active)
     monkeypatch.setattr(upload_orm, "find_latest", repository.find_latest)
     monkeypatch.setattr(upload_orm, "insert", repository.insert)
     monkeypatch.setattr(upload_orm, "touch", repository.touch)
+    monkeypatch.setattr(
+        upload_orm,
+        "claim_completing",
+        repository.claim_completing,
+    )
+    monkeypatch.setattr(
+        upload_orm,
+        "revert_to_uploading",
+        repository.revert_to_uploading,
+    )
     monkeypatch.setattr(upload_orm, "mark_aborting", repository.mark_aborting)
+    monkeypatch.setattr(upload_orm, "finish_abort", repository.finish_abort)
     monkeypatch.setattr(upload_orm, "mark_failed", repository.mark_failed)
+    monkeypatch.setattr(
+        upload_orm,
+        "complete_session",
+        repository.complete_session,
+    )
     monkeypatch.setattr(document_task_orm, "find", repository.find_task)
+    monkeypatch.setattr(document_task_orm, "get", repository.get_task)
 
 
 class MemoryTaskRepository:

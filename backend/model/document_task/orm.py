@@ -30,3 +30,11 @@ def find(document_id: str, version: int) -> DocumentTask | None:
         {"document_id": document_id, "version": version},
     )
     return None if not rows else _from_row(rows[0])
+
+
+def get(task_id: str) -> DocumentTask | None:
+    rows = execute(
+        "SELECT * FROM document_tasks WHERE id = %(id)s LIMIT 1",
+        {"id": task_id},
+    )
+    return None if not rows else _from_row(rows[0])

@@ -34,6 +34,14 @@ class DuplicateRecord(Exception):
         self.message = message
 
 
+class StateConflict(Exception):
+    """上传会话状态已经被其他请求改变。"""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
 class FingerprintConflict(Exception):
     """同一指纹已有元数据不一致的上传会话。"""
 

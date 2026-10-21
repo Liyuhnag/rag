@@ -14,7 +14,6 @@ from tests.memory import use_open_queue
 from tests.memory import use_memory_records
 from tests.memory import use_memory_tasks
 from tests.memory import use_memory_upload_repository
-from services.upload import store as upload_store
 
 
 @pytest.fixture
@@ -25,7 +24,6 @@ def client(monkeypatch: pytest.MonkeyPatch):
         upload_chunk_bytes=4,
         cors_origins=("http://localhost:5173",),
     )
-    upload_store.reset()
     upload_repository = MemoryUploadRepository()
     use_memory_upload_repository(monkeypatch, upload_repository)
     document_repository = MemoryDocumentRepository()
