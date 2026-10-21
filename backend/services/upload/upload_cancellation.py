@@ -23,7 +23,8 @@ def delete_upload(upload_id: str) -> None:
 
     now = datetime.now(timezone.utc)
     if session.status == "UPLOADING":
-        upload_orm.mark_aborting(session.id, "USER", now)
+        if not upload_orm.mark_aborting(session.id, "USER", now):
+            return
     storage_client().abort_multipart_upload(
         session.object_key,
         session.s3_upload_id,

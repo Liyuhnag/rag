@@ -79,6 +79,99 @@ def find_latest(fingerprint: str, status: str) -> UploadSession | None:
     return None if not rows else _from_row(rows[0])
 
 
+def find_by_s3_upload_id(s3_upload_id: str) -> UploadSession | None:
+    rows = execute(
+        """
+        SELECT * FROM upload_sessions
+        WHERE s3_upload_id = %(s3_upload_id)s
+        LIMIT 1
+        """,
+        {"s3_upload_id": s3_upload_id},
+    )
+    return None if not rows else _from_row(rows[0])
+
+
+def find_expired_uploading(
+    now: datetime,
+    limit: int,
+) -> list[UploadSession]:
+    rows = execute(
+        """
+        SELECT * FROM upload_sessions
+        WHERE status = 'UPLOADING' AND expires_at <= %(now)s
+        ORDER BY expires_at ASC
+        LIMIT %(limit)s
+        """,
+        {"now": as_utc(now), "limit": limit},
+    )
+    return [_from_row(row) for row in rows]
+
+
+def find_aborting_before(
+    older_than: datetime,
+    limit: int,
+) -> list[UploadSession]:
+    rows = execute(
+        """
+        SELECT * FROM upload_sessions
+        WHERE status = 'ABORTING' AND updated_at < %(older_than)s
+        ORDER BY updated_at ASC
+        LIMIT %(limit)s
+        """,
+        {"older_than": as_utc(older_than), "limit": limit},
+    )
+    return [_from_row(row) for row in rows]
+
+
+def find_completing_before(
+    older_than: datetime,
+    limit: int,
+) -> list[UploadSession]:
+    rows = execute(
+        """
+        SELECT * FROM upload_sessions
+        WHERE status = 'COMPLETING' AND updated_at < %(older_than)s
+        ORDER BY updated_at ASC
+        LIMIT %(limit)s
+        """,
+        {"older_than": as_utc(older_than), "limit": limit},
+    )
+    return [_from_row(row) for row in rows]
+
+
+def find_terminal_before(
+    older_than: datetime,
+    limit: int,
+) -> list[UploadSession]:
+    rows = execute(
+        """
+        SELECT * FROM upload_sessions
+        WHERE status IN ('FAILED', 'ABORTED', 'EXPIRED')
+          AND updated_at < %(older_than)s
+        ORDER BY updated_at ASC
+        LIMIT %(limit)s
+        """,
+        {"older_than": as_utc(older_than), "limit": limit},
+    )
+    return [_from_row(row) for row in rows]
+
+
+def delete_old_sessions(
+    older_than: datetime,
+    limit: int,
+) -> int:
+    return execute_count(
+        """
+        DELETE FROM upload_sessions
+        WHERE status IN ('COMPLETED', 'FAILED', 'ABORTED', 'EXPIRED')
+          AND updated_at < %(older_than)s
+        ORDER BY updated_at ASC
+        LIMIT %(limit)s
+        """,
+        {"older_than": as_utc(older_than), "limit": limit},
+    )
+
+
 def insert(session: UploadSession) -> None:
     execute(
         """
@@ -182,8 +275,8 @@ def mark_aborting(
     upload_id: str,
     reason: str,
     updated_at: datetime,
-) -> None:
-    execute(
+) -> bool:
+    count = execute_count(
         """
         UPDATE upload_sessions
         SET status = 'ABORTING',
@@ -198,6 +291,30 @@ def mark_aborting(
             "updated_at": as_utc(updated_at),
         },
     )
+    return count == 1
+
+
+def mark_aborting_completing(
+    upload_id: str,
+    reason: str,
+    updated_at: datetime,
+) -> bool:
+    count = execute_count(
+        """
+        UPDATE upload_sessions
+        SET status = 'ABORTING',
+            abort_reason = %(reason)s,
+            updated_at = %(updated_at)s
+        WHERE id = %(id)s
+          AND status = 'COMPLETING'
+        """,
+        {
+            "id": upload_id,
+            "reason": reason,
+            "updated_at": as_utc(updated_at),
+        },
+    )
+    return count == 1
 
 
 def finish_abort(upload_id: str, status: str, updated_at: datetime) -> None:

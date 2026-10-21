@@ -19,6 +19,7 @@ from services.common.object_storage import UploadedPart
 from services.common.object_storage import client as storage_client
 from services.upload.errors import UploadError
 from services.upload.task_dispatch import dispatch_task
+from services.upload.upload_shared import abort_quietly
 from services.upload.upload_shared import file_url
 from services.upload.upload_shared import part_size
 from services.upload.upload_shared import parts_or_none
@@ -167,23 +168,86 @@ def _complete_state(upload_id: str) -> CompleteResult:
     raise UploadError(409, "UPLOAD_COMPLETING", "上传正在完成")
 
 
-def recover_completing(session: UploadSession) -> CompleteResult | None:
-    """S3 已合并但数据库没写完时，补写文档和任务。"""
+def recover_completing(
+    session: UploadSession,
+    lease_seconds: int = 300,
+) -> CompleteResult | None:
+    """恢复超时的 COMPLETING 会话。"""
     now = datetime.now(timezone.utc)
-    if session.updated_at + timedelta(seconds=300) > now:
+    if session.updated_at + timedelta(seconds=lease_seconds) > now:
         return None
+
     try:
         size = storage_client().head_object(session.object_key)
     except StorageError:
         return None
-    if size != session.size_bytes:
+    if size is not None:
+        if size != session.size_bytes:
+            upload_orm.mark_failed(session.id, "对象大小不一致", now)
+            return None
+        try:
+            return _store_completed(session, now)
+        except UploadError as exc:
+            if exc.status_code == 409:
+                return None
+            raise
+
+    parts = parts_or_none(session)
+    if parts is None:
+        upload_orm.mark_failed(session.id, "分片上传已不存在", now)
         return None
+
+    uploaded = {part.part_number: part for part in parts}
+    numbers = range(1, session.total_parts + 1)
+    valid = (
+        all(number in uploaded for number in numbers)
+        and all(
+            uploaded[number].size_bytes == part_size(session, number)
+            for number in numbers
+        )
+    )
+    if not valid:
+        _revert_or_expire(session, now)
+        return None
+
+    try:
+        storage_client().complete_multipart_upload(
+            session.object_key,
+            session.s3_upload_id,
+            [
+                {
+                    "PartNumber": number,
+                    "ETag": uploaded[number].etag,
+                }
+                for number in numbers
+            ],
+        )
+    except UploadNotFound:
+        upload_orm.mark_failed(session.id, "分片上传已不存在", now)
+        return None
+    except StorageError:
+        return None
+
     try:
         return _store_completed(session, now)
     except UploadError as exc:
         if exc.status_code == 409:
             return None
         raise
+
+
+def _revert_or_expire(session: UploadSession, now: datetime) -> None:
+    if session.expires_at <= now:
+        if not upload_orm.mark_aborting_completing(
+            session.id,
+            "EXPIRED",
+            now,
+        ):
+            return
+        abort_quietly(session)
+        upload_orm.finish_abort(session.id, "EXPIRED", now)
+        return
+    upload_orm.revert_to_uploading(session.id, session.claim_version, now)
 
 
 def _completed_document(session: UploadSession, now: datetime) -> Document:

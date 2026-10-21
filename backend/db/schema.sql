@@ -71,7 +71,8 @@ CREATE TABLE IF NOT EXISTS upload_sessions (
     UNIQUE KEY uk_upload_sessions_active_fingerprint (active_fingerprint),
     KEY idx_upload_sessions_fingerprint (fingerprint, created_at),
     KEY idx_upload_sessions_status_expires (status, expires_at),
-    KEY idx_upload_sessions_status_updated (status, updated_at)
+    KEY idx_upload_sessions_status_updated (status, updated_at),
+    KEY idx_upload_sessions_s3_upload_id (s3_upload_id(191))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 文档处理任务。重新解析时 version 递增。

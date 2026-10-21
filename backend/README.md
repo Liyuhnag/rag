@@ -10,11 +10,13 @@ Python 环境使用 [uv](https://docs.astral.sh/uv/)。解释器版本见 `.pyth
 cd backend
 uv sync --all-groups
 uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
-uv run celery -A main.celery_app worker --loglevel=info
+uv run celery -A main.celery_app worker --loglevel=info -Q celery
+uv run celery -A main.celery_app worker --loglevel=info -Q maintenance --concurrency=1
+uv run celery -A main.celery_app beat --loglevel=info
 uv run celery -A main.celery_app flower
 ```
 
-接口进程、Celery worker 和 Flower 要在同一台机器上。上传内容先落在本机临时目录，再由 worker 写入对象存储。Redis 只监听 `127.0.0.1:6379`。Flower 监控页是 `http://<主机>:5555`，登录账号在 `FLOWER_BASIC_AUTH`。
+接口进程、Celery worker、beat 和 Flower 要在同一台机器上。上传分片由 API 直接写入对象存储；解析任务走 `celery` 队列，补投和清理任务走独立的 `maintenance` 队列。Redis 只监听 `127.0.0.1:6379`。Flower 监控页是 `http://<主机>:5555`，登录账号在 `FLOWER_BASIC_AUTH`。
 
 接口文档：http://127.0.0.1:8000/docs
 
@@ -31,6 +33,14 @@ uv run pytest
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `MAX_UPLOAD_BYTES` | `20971520` | 单个文件上限，20MB |
+| `MAX_DOCUMENT_BYTES` | `1048576000` | 大文件上传上限，1000MiB |
+| `UPLOAD_CHUNK_BYTES` | `8388608` | 分片大小，8MiB |
+| `UPLOAD_SESSION_TTL_HOURS` | `24` | 上传会话有效期 |
+| `UPLOAD_COMPLETE_LEASE_SECONDS` | `300` | `COMPLETING/ABORTING` 租约 |
+| `ORPHAN_MPU_GRACE_HOURS` | `24` | 孤儿 Multipart Upload 宽限期 |
+| `ORPHAN_OBJECT_RETENTION_DAYS` | `7` | 孤儿对象保留天数 |
+| `SESSION_RETENTION_DAYS` | `30` | 终态会话保留天数 |
+| `CLEANUP_BATCH_SIZE` | `50` | 每批清理条数 |
 | `CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | 允许的前端来源，逗号分隔。本机 `localhost` 和 `127.0.0.1` 的其他端口也会放行 |
 | `S3_ENDPOINT` | 无 | S3 地址，例如 `http://127.0.0.1:8333` |
 | `S3_REGION` | `us-east-1` | 签名区域 |

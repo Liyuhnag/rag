@@ -119,8 +119,8 @@ def _match_fingerprint(
 
     stale = upload_orm.find_latest(fingerprint, "UPLOADING")
     if stale is not None:
-        upload_orm.mark_aborting(stale.id, "EXPIRED", now)
-        abort_quietly(stale)
+        if upload_orm.mark_aborting(stale.id, "EXPIRED", now):
+            abort_quietly(stale)
     return None
 
 

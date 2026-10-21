@@ -2,6 +2,7 @@
 """对象存储。文件正文和分片放在 S3 兼容服务里。"""
 
 from dataclasses import dataclass
+from datetime import datetime
 
 import boto3
 from botocore.config import Config
@@ -17,6 +18,13 @@ class UploadedPart:
     part_number: int
     etag: str
     size_bytes: int
+
+
+@dataclass(frozen=True)
+class MultipartUploadInfo:
+    key: str
+    upload_id: str
+    initiated: datetime | None
 
 
 class ObjectStorage:
@@ -55,6 +63,12 @@ class ObjectStorage:
         raise NotImplementedError
 
     def head_object(self, key: str) -> int | None:
+        raise NotImplementedError
+
+    def list_multipart_uploads(
+        self,
+        prefix: str,
+    ) -> list[MultipartUploadInfo]:
         raise NotImplementedError
 
 
@@ -222,6 +236,39 @@ class S3ObjectStorage(ObjectStorage):
         except BotoCoreError as exc:
             raise StorageError("查询对象失败") from exc
         return int(response.get("ContentLength", 0))
+
+    def list_multipart_uploads(
+        self,
+        prefix: str,
+    ) -> list[MultipartUploadInfo]:
+        uploads: list[MultipartUploadInfo] = []
+        key_marker = ""
+        upload_id_marker = ""
+        try:
+            while True:
+                response = self._client.list_multipart_uploads(
+                    Bucket=self.bucket,
+                    Prefix=prefix,
+                    KeyMarker=key_marker,
+                    UploadIdMarker=upload_id_marker,
+                )
+                for item in response.get("Uploads", []):
+                    uploads.append(
+                        MultipartUploadInfo(
+                            key=str(item["Key"]),
+                            upload_id=str(item["UploadId"]),
+                            initiated=item.get("Initiated"),
+                        )
+                    )
+                if not response.get("IsTruncated"):
+                    break
+                key_marker = str(response.get("NextKeyMarker", ""))
+                upload_id_marker = str(
+                    response.get("NextUploadIdMarker", "")
+                )
+        except (BotoCoreError, ClientError) as exc:
+            raise StorageError("查询分片上传列表失败") from exc
+        return uploads
 
 
 def _error_code(exc: ClientError) -> str:

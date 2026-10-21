@@ -15,6 +15,7 @@ from model.document import orm as document_orm
 from services.common.exceptions import DuplicateRecord
 from services.common.exceptions import StateConflict
 from services.common.exceptions import UploadNotFound
+from services.common.object_storage import MultipartUploadInfo
 from services.common.object_storage import ObjectStorage
 from services.common.object_storage import UploadedPart
 from services.common.object_storage import configure
@@ -44,7 +45,11 @@ class MemoryObjectStorage(ObjectStorage):
     def create_multipart_upload(self, key: str, content_type: str) -> str:
         del content_type
         upload_id = uuid4().hex
-        self.multipart[upload_id] = {"key": key, "parts": {}}
+        self.multipart[upload_id] = {
+            "key": key,
+            "parts": {},
+            "initiated": datetime.now(timezone.utc),
+        }
         return upload_id
 
     def upload_part(
@@ -103,6 +108,20 @@ class MemoryObjectStorage(ObjectStorage):
     def head_object(self, key: str) -> int | None:
         content = self.objects.get(key)
         return None if content is None else len(content)
+
+    def list_multipart_uploads(
+        self,
+        prefix: str,
+    ) -> list[MultipartUploadInfo]:
+        return [
+            MultipartUploadInfo(
+                key=str(upload["key"]),
+                upload_id=upload_id,
+                initiated=upload["initiated"],
+            )
+            for upload_id, upload in self.multipart.items()
+            if str(upload["key"]).startswith(prefix)
+        ]
 
 
 class MemoryDocumentRepository:
@@ -293,13 +312,28 @@ class MemoryUploadRepository:
         upload_id: str,
         reason: str,
         updated_at: datetime,
-    ) -> None:
+    ) -> bool:
         session = self.sessions[upload_id]
         if session.status != "UPLOADING":
-            return
+            return False
         session.status = "ABORTING"
         session.abort_reason = reason
         session.updated_at = updated_at
+        return True
+
+    def mark_aborting_completing(
+        self,
+        upload_id: str,
+        reason: str,
+        updated_at: datetime,
+    ) -> bool:
+        session = self.sessions[upload_id]
+        if session.status != "COMPLETING":
+            return False
+        session.status = "ABORTING"
+        session.abort_reason = reason
+        session.updated_at = updated_at
+        return True
 
     def mark_failed(
         self,
@@ -311,6 +345,77 @@ class MemoryUploadRepository:
         session.status = "FAILED"
         session.error_message = message[:1024]
         session.updated_at = updated_at
+
+    def find_by_s3_upload_id(self, s3_upload_id: str) -> UploadSession | None:
+        for session in self.sessions.values():
+            if session.s3_upload_id == s3_upload_id:
+                return session
+        return None
+
+    def find_expired_uploading(
+        self,
+        now: datetime,
+        limit: int,
+    ) -> list[UploadSession]:
+        sessions = [
+            session
+            for session in self.sessions.values()
+            if session.status == "UPLOADING" and session.expires_at <= now
+        ]
+        sessions.sort(key=lambda session: session.expires_at)
+        return sessions[:limit]
+
+    def find_aborting_before(
+        self,
+        older_than: datetime,
+        limit: int,
+    ) -> list[UploadSession]:
+        sessions = [
+            session
+            for session in self.sessions.values()
+            if session.status == "ABORTING" and session.updated_at < older_than
+        ]
+        sessions.sort(key=lambda session: session.updated_at)
+        return sessions[:limit]
+
+    def find_completing_before(
+        self,
+        older_than: datetime,
+        limit: int,
+    ) -> list[UploadSession]:
+        sessions = [
+            session
+            for session in self.sessions.values()
+            if session.status == "COMPLETING" and session.updated_at < older_than
+        ]
+        sessions.sort(key=lambda session: session.updated_at)
+        return sessions[:limit]
+
+    def find_terminal_before(
+        self,
+        older_than: datetime,
+        limit: int,
+    ) -> list[UploadSession]:
+        sessions = [
+            session
+            for session in self.sessions.values()
+            if session.status in {"FAILED", "ABORTED", "EXPIRED"}
+            and session.updated_at < older_than
+        ]
+        sessions.sort(key=lambda session: session.updated_at)
+        return sessions[:limit]
+
+    def delete_old_sessions(self, older_than: datetime, limit: int) -> int:
+        sessions = [
+            session
+            for session in self.sessions.values()
+            if session.status in {"COMPLETED", "FAILED", "ABORTED", "EXPIRED"}
+            and session.updated_at < older_than
+        ]
+        sessions.sort(key=lambda session: session.updated_at)
+        for session in sessions[:limit]:
+            self.sessions.pop(session.id, None)
+        return min(len(sessions), limit)
 
     def find_task(
         self,
@@ -344,8 +449,43 @@ def use_memory_upload_repository(
         repository.revert_to_uploading,
     )
     monkeypatch.setattr(upload_orm, "mark_aborting", repository.mark_aborting)
+    monkeypatch.setattr(
+        upload_orm,
+        "mark_aborting_completing",
+        repository.mark_aborting_completing,
+    )
     monkeypatch.setattr(upload_orm, "finish_abort", repository.finish_abort)
     monkeypatch.setattr(upload_orm, "mark_failed", repository.mark_failed)
+    monkeypatch.setattr(
+        upload_orm,
+        "find_by_s3_upload_id",
+        repository.find_by_s3_upload_id,
+    )
+    monkeypatch.setattr(
+        upload_orm,
+        "find_expired_uploading",
+        repository.find_expired_uploading,
+    )
+    monkeypatch.setattr(
+        upload_orm,
+        "find_aborting_before",
+        repository.find_aborting_before,
+    )
+    monkeypatch.setattr(
+        upload_orm,
+        "find_completing_before",
+        repository.find_completing_before,
+    )
+    monkeypatch.setattr(
+        upload_orm,
+        "find_terminal_before",
+        repository.find_terminal_before,
+    )
+    monkeypatch.setattr(
+        upload_orm,
+        "delete_old_sessions",
+        repository.delete_old_sessions,
+    )
     monkeypatch.setattr(
         upload_orm,
         "complete_session",
