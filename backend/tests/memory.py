@@ -1,27 +1,37 @@
 # -*- coding: utf-8 -*-
-"""测试用的进程内文档存储。"""
+"""测试用的进程内文档、上传和任务存储。"""
 
 from dataclasses import replace
 from datetime import datetime
 from datetime import timezone
+from hashlib import md5
+from uuid import uuid4
 
 import pytest
 
 from config import Settings
 from model.document import Document
 from model.document import orm as document_orm
+from services.common.exceptions import DuplicateRecord
+from services.common.exceptions import UploadNotFound
 from services.common.object_storage import ObjectStorage
+from services.common.object_storage import UploadedPart
 from services.common.object_storage import configure
 from model.task import ProcessingTask
 from model.task import orm as task_orm
 from main import celery_app
+from model.document_task import orm as document_task_orm
+from model.document_task.model import DocumentTask
+from model.upload import orm as upload_orm
+from model.upload.model import UploadSession
 
 
 class MemoryObjectStorage(ObjectStorage):
-    """进程内对象存储。"""
+    """进程内对象存储，支持 Multipart Upload。"""
 
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}
+        self.multipart: dict[str, dict[str, object]] = {}
 
     def put(self, key: str, content: bytes, content_type: str) -> None:
         del content_type
@@ -30,15 +40,86 @@ class MemoryObjectStorage(ObjectStorage):
     def delete(self, key: str) -> None:
         self.objects.pop(key, None)
 
+    def create_multipart_upload(self, key: str, content_type: str) -> str:
+        del content_type
+        upload_id = uuid4().hex
+        self.multipart[upload_id] = {"key": key, "parts": {}}
+        return upload_id
+
+    def upload_part(
+        self,
+        key: str,
+        upload_id: str,
+        part_number: int,
+        body: bytes,
+    ) -> str:
+        upload = self.multipart.get(upload_id)
+        if upload is None or upload["key"] != key:
+            raise UploadNotFound("分片上传不存在")
+        etag = f'"{md5(body).hexdigest()}"'
+        parts = upload["parts"]
+        assert isinstance(parts, dict)
+        parts[part_number] = {"etag": etag, "size": len(body), "body": body}
+        return etag
+
+    def list_parts(self, key: str, upload_id: str) -> list[UploadedPart]:
+        upload = self.multipart.get(upload_id)
+        if upload is None or upload["key"] != key:
+            raise UploadNotFound("分片上传不存在")
+        parts = upload["parts"]
+        assert isinstance(parts, dict)
+        return [
+            UploadedPart(
+                part_number=number,
+                etag=str(part["etag"]),
+                size_bytes=int(part["size"]),
+            )
+            for number, part in sorted(parts.items())
+        ]
+
+    def complete_multipart_upload(
+        self,
+        key: str,
+        upload_id: str,
+        parts: list[dict[str, object]],
+    ) -> None:
+        upload = self.multipart.get(upload_id)
+        if upload is None or upload["key"] != key:
+            raise UploadNotFound("分片上传不存在")
+        stored = upload["parts"]
+        assert isinstance(stored, dict)
+        ordered = [stored[int(part["PartNumber"])] for part in parts]
+        self.objects[key] = b"".join(
+            bytes(part["body"]) for part in ordered
+        )
+        self.multipart.pop(upload_id, None)
+
+    def abort_multipart_upload(self, key: str, upload_id: str) -> None:
+        upload = self.multipart.get(upload_id)
+        if upload is not None and upload["key"] == key:
+            self.multipart.pop(upload_id, None)
+
+    def head_object(self, key: str) -> int | None:
+        content = self.objects.get(key)
+        return None if content is None else len(content)
+
 
 class MemoryDocumentRepository:
     """进程内文档记录。"""
 
     def __init__(self) -> None:
         self.records: dict[str, Document] = {}
+        self.document_ids: set[str] = set()
 
     def insert(self, document: Document) -> None:
         self.records[document.id] = document
+        self.document_ids.add(document.id)
+
+    def mark_exists(self, document_id: str) -> None:
+        self.document_ids.add(document_id)
+
+    def exists(self, document_id: str) -> bool:
+        return document_id in self.document_ids or document_id in self.records
 
     def get(self, document_id: str) -> Document | None:
         return self.records.get(document_id)
@@ -79,6 +160,115 @@ def use_memory_records(
     monkeypatch.setattr(document_orm, "get", records.get)
     monkeypatch.setattr(document_orm, "delete", records.delete)
     monkeypatch.setattr(document_orm, "list_page", records.list_page)
+    monkeypatch.setattr(document_orm, "exists", records.exists)
+
+
+class MemoryUploadRepository:
+    """进程内上传会话和文档任务。"""
+
+    def __init__(self) -> None:
+        self.sessions: dict[str, UploadSession] = {}
+        self.tasks: dict[tuple[str, int], DocumentTask] = {}
+
+    def find_active(
+        self,
+        fingerprint: str,
+        now: datetime,
+    ) -> UploadSession | None:
+        candidates = [
+            session
+            for session in self.sessions.values()
+            if session.fingerprint == fingerprint
+            and session.status == "UPLOADING"
+            and session.expires_at > now
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda session: session.created_at)
+
+    def find_latest(
+        self,
+        fingerprint: str,
+        status: str,
+    ) -> UploadSession | None:
+        candidates = [
+            session
+            for session in self.sessions.values()
+            if session.fingerprint == fingerprint and session.status == status
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda session: session.created_at)
+
+    def insert(self, session: UploadSession) -> None:
+        for existing in self.sessions.values():
+            if existing.id == session.id:
+                raise DuplicateRecord("duplicate upload id")
+            if (
+                existing.fingerprint == session.fingerprint
+                and existing.status in {"UPLOADING", "COMPLETING"}
+                and session.status in {"UPLOADING", "COMPLETING"}
+            ):
+                raise DuplicateRecord("duplicate active fingerprint")
+        self.sessions[session.id] = session
+
+    def touch(
+        self,
+        upload_id: str,
+        expires_at: datetime,
+        updated_at: datetime,
+    ) -> None:
+        session = self.sessions[upload_id]
+        session.expires_at = expires_at
+        session.updated_at = updated_at
+
+    def mark_aborting(
+        self,
+        upload_id: str,
+        reason: str,
+        updated_at: datetime,
+    ) -> None:
+        session = self.sessions[upload_id]
+        if session.status != "UPLOADING":
+            return
+        session.status = "ABORTING"
+        session.abort_reason = reason
+        session.updated_at = updated_at
+
+    def mark_failed(
+        self,
+        upload_id: str,
+        message: str,
+        updated_at: datetime,
+    ) -> None:
+        session = self.sessions[upload_id]
+        session.status = "FAILED"
+        session.error_message = message[:1024]
+        session.updated_at = updated_at
+
+    def find_task(
+        self,
+        document_id: str,
+        version: int,
+    ) -> DocumentTask | None:
+        return self.tasks.get((document_id, version))
+
+    def add_task(self, task: DocumentTask) -> None:
+        self.tasks[(task.document_id, task.version)] = task
+
+
+def use_memory_upload_repository(
+    monkeypatch: pytest.MonkeyPatch,
+    repository: MemoryUploadRepository,
+) -> None:
+    """让上传服务走进程内会话和任务。"""
+    monkeypatch.setattr(upload_orm, "find_active", repository.find_active)
+    monkeypatch.setattr(upload_orm, "find_latest", repository.find_latest)
+    monkeypatch.setattr(upload_orm, "insert", repository.insert)
+    monkeypatch.setattr(upload_orm, "touch", repository.touch)
+    monkeypatch.setattr(upload_orm, "mark_aborting", repository.mark_aborting)
+    monkeypatch.setattr(upload_orm, "mark_failed", repository.mark_failed)
+    monkeypatch.setattr(document_task_orm, "find", repository.find_task)
 
 
 class MemoryTaskRepository:

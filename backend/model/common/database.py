@@ -7,7 +7,9 @@ from pathlib import Path
 
 import pymysql
 from pymysql.err import Error as MySQLError
+from pymysql.err import IntegrityError
 
+from services.common.exceptions import DuplicateRecord
 from services.common.exceptions import StorageError
 
 
@@ -81,6 +83,8 @@ def execute(
                 return list(cursor.fetchall())
     except StorageError:
         raise
+    except IntegrityError as exc:
+        raise DuplicateRecord(str(exc)) from exc
     except MySQLError as exc:
         raise StorageError("数据库不可用") from exc
 

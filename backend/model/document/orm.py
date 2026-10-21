@@ -112,3 +112,12 @@ def _from_row(row: dict[str, object]) -> Document:
             None if row["preview_url"] is None else str(row["preview_url"])
         ),
     )
+
+
+def exists(document_id: str) -> bool:
+    """按 ID 判断文档是否存在。"""
+    rows = execute(
+        "SELECT id FROM documents WHERE id = %(id)s LIMIT 1",
+        {"id": document_id},
+    )
+    return bool(rows)

@@ -1,27 +1,60 @@
 # -*- coding: utf-8 -*-
-"""对象存储。文件正文放在 S3 兼容服务里。"""
+"""对象存储。文件正文和分片放在 S3 兼容服务里。"""
 
-import hashlib
-import hmac
-from datetime import datetime
-from datetime import timezone
-from urllib.error import HTTPError
-from urllib.error import URLError
-from urllib.parse import quote
-from urllib.parse import urlparse
-from urllib.request import Request
-from urllib.request import urlopen
+from dataclasses import dataclass
+
+import boto3
+from botocore.config import Config
+from botocore.exceptions import BotoCoreError
+from botocore.exceptions import ClientError
 
 from services.common.exceptions import StorageError
+from services.common.exceptions import UploadNotFound
+
+
+@dataclass(frozen=True)
+class UploadedPart:
+    part_number: int
+    etag: str
+    size_bytes: int
 
 
 class ObjectStorage:
-    """保存和删除原始文件。"""
+    """对象存储接口。"""
 
     def put(self, key: str, content: bytes, content_type: str) -> None:
         raise NotImplementedError
 
     def delete(self, key: str) -> None:
+        raise NotImplementedError
+
+    def create_multipart_upload(self, key: str, content_type: str) -> str:
+        raise NotImplementedError
+
+    def upload_part(
+        self,
+        key: str,
+        upload_id: str,
+        part_number: int,
+        body: bytes,
+    ) -> str:
+        raise NotImplementedError
+
+    def list_parts(self, key: str, upload_id: str) -> list[UploadedPart]:
+        raise NotImplementedError
+
+    def complete_multipart_upload(
+        self,
+        key: str,
+        upload_id: str,
+        parts: list[dict[str, object]],
+    ) -> None:
+        raise NotImplementedError
+
+    def abort_multipart_upload(self, key: str, upload_id: str) -> None:
+        raise NotImplementedError
+
+    def head_object(self, key: str) -> int | None:
         raise NotImplementedError
 
 
@@ -36,107 +69,163 @@ class S3ObjectStorage(ObjectStorage):
         secret_access_key: str,
         bucket: str,
     ) -> None:
-        parsed = urlparse(endpoint)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        if not endpoint.startswith(("http://", "https://")):
             raise RuntimeError("S3_ENDPOINT 必须是 http 或 https 地址")
-        self.scheme = parsed.scheme
-        self.host = parsed.netloc
-        self.region = region
-        self.access_key_id = access_key_id
-        self.secret_access_key = secret_access_key
         self.bucket = bucket
+        self._client = boto3.client(
+            "s3",
+            endpoint_url=endpoint,
+            region_name=region,
+            aws_access_key_id=access_key_id,
+            aws_secret_access_key=secret_access_key,
+            config=Config(
+                signature_version="s3v4",
+                s3={"addressing_style": "path"},
+                connect_timeout=10,
+                read_timeout=120,
+                retries={"max_attempts": 3, "mode": "standard"},
+            ),
+        )
 
     def put(self, key: str, content: bytes, content_type: str) -> None:
-        self._request("PUT", key, content, content_type)
+        try:
+            self._client.put_object(
+                Bucket=self.bucket,
+                Key=key,
+                Body=content,
+                ContentType=content_type,
+            )
+        except (BotoCoreError, ClientError) as exc:
+            raise StorageError("对象存储写入失败") from exc
 
     def delete(self, key: str) -> None:
-        self._request("DELETE", key, b"", None)
-
-    def _request(
-        self,
-        method: str,
-        key: str,
-        body: bytes,
-        content_type: str | None,
-    ) -> None:
-        path = "/" + self.bucket + "/" + quote(key, safe="/")
-        now = datetime.now(timezone.utc)
-        amz_date = now.strftime("%Y%m%dT%H%M%SZ")
-        date_stamp = now.strftime("%Y%m%d")
-        payload_hash = hashlib.sha256(body).hexdigest()
-        headers = {
-            "host": self.host,
-            "x-amz-content-sha256": payload_hash,
-            "x-amz-date": amz_date,
-        }
-        if content_type:
-            headers["content-type"] = content_type
-        signed_names = sorted(headers)
-        canonical_headers = "".join(
-            f"{name}:{headers[name]}\n" for name in signed_names
-        )
-        signed_headers = ";".join(signed_names)
-        canonical_request = "\n".join(
-            [
-                method,
-                path,
-                "",
-                canonical_headers,
-                signed_headers,
-                payload_hash,
-            ]
-        )
-        scope = f"{date_stamp}/{self.region}/s3/aws4_request"
-        string_to_sign = "\n".join(
-            [
-                "AWS4-HMAC-SHA256",
-                amz_date,
-                scope,
-                hashlib.sha256(canonical_request.encode()).hexdigest(),
-            ]
-        )
-        signing_key = _sign(
-            ("AWS4" + self.secret_access_key).encode(),
-            date_stamp,
-        )
-        signing_key = _sign(signing_key, self.region)
-        signing_key = _sign(signing_key, "s3")
-        signing_key = _sign(signing_key, "aws4_request")
-        signature = hmac.new(
-            signing_key,
-            string_to_sign.encode(),
-            hashlib.sha256,
-        ).hexdigest()
-        authorization = (
-            "AWS4-HMAC-SHA256 "
-            f"Credential={self.access_key_id}/{scope}, "
-            f"SignedHeaders={signed_headers}, "
-            f"Signature={signature}"
-        )
-        request_headers = {
-            "x-amz-date": amz_date,
-            "x-amz-content-sha256": payload_hash,
-            "Authorization": authorization,
-        }
-        if content_type:
-            request_headers["Content-Type"] = content_type
-        request = Request(
-            f"{self.scheme}://{self.host}{path}",
-            data=body if method in {"PUT", "POST", "DELETE"} else None,
-            headers=request_headers,
-            method=method,
-        )
         try:
-            with urlopen(request, timeout=30) as response:
-                response.read()
-        except HTTPError as exc:
-            raise StorageError("对象存储请求失败") from exc
-        except URLError as exc:
-            raise StorageError("对象存储不可用") from exc
+            self._client.delete_object(Bucket=self.bucket, Key=key)
+        except ClientError as exc:
+            if _error_code(exc) == "NoSuchKey":
+                return
+            raise StorageError("对象存储删除失败") from exc
+        except BotoCoreError as exc:
+            raise StorageError("对象存储删除失败") from exc
+
+    def create_multipart_upload(self, key: str, content_type: str) -> str:
+        try:
+            response = self._client.create_multipart_upload(
+                Bucket=self.bucket,
+                Key=key,
+                ContentType=content_type,
+            )
+        except (BotoCoreError, ClientError) as exc:
+            raise StorageError("创建分片上传失败") from exc
+        upload_id = response.get("UploadId")
+        if not upload_id:
+            raise StorageError("对象存储未返回 UploadId")
+        return str(upload_id)
+
+    def upload_part(
+        self,
+        key: str,
+        upload_id: str,
+        part_number: int,
+        body: bytes,
+    ) -> str:
+        try:
+            response = self._client.upload_part(
+                Bucket=self.bucket,
+                Key=key,
+                UploadId=upload_id,
+                PartNumber=part_number,
+                Body=body,
+            )
+        except ClientError as exc:
+            if _error_code(exc) == "NoSuchUpload":
+                raise UploadNotFound("分片上传已不存在") from exc
+            raise StorageError("分片上传失败") from exc
+        except BotoCoreError as exc:
+            raise StorageError("分片上传失败") from exc
+        return str(response.get("ETag", ""))
+
+    def list_parts(self, key: str, upload_id: str) -> list[UploadedPart]:
+        parts: list[UploadedPart] = []
+        marker = 0
+        try:
+            while True:
+                response = self._client.list_parts(
+                    Bucket=self.bucket,
+                    Key=key,
+                    UploadId=upload_id,
+                    PartNumberMarker=marker,
+                )
+                for item in response.get("Parts", []):
+                    parts.append(
+                        UploadedPart(
+                            part_number=int(item["PartNumber"]),
+                            etag=str(item.get("ETag", "")),
+                            size_bytes=int(item.get("Size", 0)),
+                        )
+                    )
+                if not response.get("IsTruncated"):
+                    break
+                marker = int(response.get("NextPartNumberMarker", 0))
+                if marker <= 0:
+                    break
+        except ClientError as exc:
+            if _error_code(exc) == "NoSuchUpload":
+                raise UploadNotFound("分片上传已不存在") from exc
+            raise StorageError("查询分片失败") from exc
+        except BotoCoreError as exc:
+            raise StorageError("查询分片失败") from exc
+        parts.sort(key=lambda part: part.part_number)
+        return parts
+
+    def complete_multipart_upload(
+        self,
+        key: str,
+        upload_id: str,
+        parts: list[dict[str, object]],
+    ) -> None:
+        try:
+            self._client.complete_multipart_upload(
+                Bucket=self.bucket,
+                Key=key,
+                UploadId=upload_id,
+                MultipartUpload={"Parts": parts},
+            )
+        except ClientError as exc:
+            if _error_code(exc) == "NoSuchUpload":
+                raise UploadNotFound("分片上传已不存在") from exc
+            raise StorageError("合并分片失败") from exc
+        except BotoCoreError as exc:
+            raise StorageError("合并分片失败") from exc
+
+    def abort_multipart_upload(self, key: str, upload_id: str) -> None:
+        try:
+            self._client.abort_multipart_upload(
+                Bucket=self.bucket,
+                Key=key,
+                UploadId=upload_id,
+            )
+        except ClientError as exc:
+            if _error_code(exc) == "NoSuchUpload":
+                return
+            raise StorageError("取消分片上传失败") from exc
+        except BotoCoreError as exc:
+            raise StorageError("取消分片上传失败") from exc
+
+    def head_object(self, key: str) -> int | None:
+        try:
+            response = self._client.head_object(Bucket=self.bucket, Key=key)
+        except ClientError as exc:
+            if _error_code(exc) in {"404", "NoSuchKey", "NotFound"}:
+                return None
+            raise StorageError("查询对象失败") from exc
+        except BotoCoreError as exc:
+            raise StorageError("查询对象失败") from exc
+        return int(response.get("ContentLength", 0))
 
 
-def _sign(key: bytes, message: str) -> bytes:
-    return hmac.new(key, message.encode(), hashlib.sha256).digest()
+def _error_code(exc: ClientError) -> str:
+    return str(exc.response.get("Error", {}).get("Code", ""))
 
 
 _storage: dict[str, object] = {

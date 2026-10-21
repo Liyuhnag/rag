@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """大文件上传接口。
 
-当前为前后端联调版本：接口契约和状态流转已就位，分片暂存在进程内，
-不访问对象存储和 MySQL。后续替换服务层实现，路由和响应保持不变。
+init 已接入 MySQL 和 S3；part/get/complete/delete 仍使用进程内联调桩，
+后续逐个替换为真实实现，路由和响应保持不变。
 """
 
 import re
@@ -26,6 +26,9 @@ from api.uploads.schemas import UploadInitResponse
 from api.uploads.schemas import UploadPartResponse
 from api.uploads.schemas import UploadStatusResponse
 from config import Settings
+from services.common.exceptions import FingerprintConflict
+from services.upload import mirror as upload_mirror
+from services.upload import service as upload_service
 from services.upload import store
 
 router = APIRouter(prefix="/uploads", tags=["uploads"])
@@ -70,18 +73,23 @@ def _task_status(session: store.UploadSession) -> tuple[str | None, str | None]:
     return task.id, task.status
 
 
-def _init_response(session: store.UploadSession) -> UploadInitResponse:
-    task_id, task_status = _task_status(session)
+def _init_response(session, uploaded_parts, task=None) -> UploadInitResponse:
     return UploadInitResponse(
         upload_id=session.id,
         document_id=session.document_id,
         status=session.status,
         chunk_size=session.chunk_size,
         total_parts=session.total_parts,
-        uploaded_parts=_uploaded_parts(session),
+        uploaded_parts=[
+            UploadedPart(
+                part_number=part.part_number,
+                size_bytes=part.size_bytes,
+            )
+            for part in uploaded_parts
+        ],
         expires_at=session.expires_at,
-        task_id=task_id,
-        task_status=task_status,
+        task_id=None if task is None else task.id,
+        task_status=None if task is None else task.status,
     )
 
 
@@ -131,48 +139,41 @@ def init_upload(
     if total_parts > _MAX_TOTAL_PARTS:
         raise errors.invalid_total_parts()
 
-    now = _now()
-    active = store.find_active(payload.fingerprint, now)
-    if active is not None:
-        if active.filename != filename or active.size_bytes != payload.size_bytes:
-            raise errors.fingerprint_conflict(active.id)
-        store.touch(active, settings.upload_session_ttl_hours)
-        response.status_code = 200
-        return _init_response(active)
-
-    completing = store.find_completing(payload.fingerprint)
-    if completing is not None:
-        response.status_code = 202
-        return _init_response(completing)
-
-    completed = store.find_completed(payload.fingerprint)
-    if completed is not None:
-        response.status_code = 200
-        return _init_response(completed)
-
-    aborting = store.find_aborting(payload.fingerprint)
-    if aborting is not None:
-        response.status_code = 202
-        return _init_response(aborting)
-
-    document_id = store.new_id()
-    object_key = f"documents/{document_id}/source/{filename}"
-    if len(object_key.encode("utf-8")) > _MAX_OBJECT_KEY_BYTES:
+    preview_key = f"documents/{'0' * 32}/source/{filename}"
+    if len(preview_key.encode("utf-8")) > _MAX_OBJECT_KEY_BYTES:
         raise errors.invalid_filename()
 
-    session = store.create_session(
-        fingerprint=payload.fingerprint,
-        filename=filename,
-        file_type=file_type,
-        size_bytes=payload.size_bytes,
-        chunk_size=chunk_size,
-        total_parts=total_parts,
-        object_key=object_key,
-        document_id=document_id,
-        ttl_hours=settings.upload_session_ttl_hours,
+    try:
+        result = upload_service.init_upload(
+            fingerprint=payload.fingerprint,
+            filename=filename,
+            file_type=file_type,
+            size_bytes=payload.size_bytes,
+            chunk_size=chunk_size,
+            total_parts=total_parts,
+            ttl_hours=settings.upload_session_ttl_hours,
+        )
+    except FingerprintConflict as exc:
+        raise errors.fingerprint_conflict(exc.upload_id) from exc
+
+    upload_mirror.mirror(
+        result.session,
+        result.uploaded_parts,
+        result.task,
     )
-    response.status_code = 201
-    return _init_response(session)
+
+    if result.outcome == "created":
+        response.status_code = 201
+    elif result.outcome in {"completing", "aborting"}:
+        response.status_code = 202
+    else:
+        response.status_code = 200
+
+    return _init_response(
+        result.session,
+        result.uploaded_parts,
+        result.task,
+    )
 
 
 @router.put("/{upload_id}/parts/{part_number}", response_model=UploadPartResponse)

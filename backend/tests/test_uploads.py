@@ -2,6 +2,11 @@
 """大文件上传接口的联调测试。"""
 
 import hashlib
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
+
+from model.document_task.model import DocumentTask
 
 
 def _fingerprint(content: bytes) -> str:
@@ -44,8 +49,17 @@ def test_init_creates_session(client):
 def test_init_reuses_active_session(client):
     content = b"0123456789"
     created = _init(client, content).json()
-    uploaded = _put(client, created["uploadId"], 1, content[:4])
-    assert uploaded.status_code == 200
+    repository = client.app.state.upload_repository
+    session = repository.sessions[created["uploadId"]]
+
+    from services.common.object_storage import client as storage_client
+
+    storage_client().upload_part(
+        session.object_key,
+        session.s3_upload_id,
+        1,
+        content[:4],
+    )
 
     reused = _init(client, content)
 
@@ -216,3 +230,51 @@ def test_cors_allows_put(client):
 
     assert response.status_code == 200
     assert "PUT" in response.headers["access-control-allow-methods"]
+
+def test_init_returns_existing_completed_document(client):
+    content = b"0123456789"
+    created = _init(client, content).json()
+    repository = client.app.state.upload_repository
+    session = repository.sessions[created["uploadId"]]
+    session.status = "COMPLETED"
+    session.completed_at = datetime.now(timezone.utc)
+    client.app.state.document_repository.mark_exists(session.document_id)
+    repository.add_task(
+        DocumentTask(
+            id="a" * 32,
+            document_id=session.document_id,
+            version=1,
+            status="COMPLETED",
+            stage="DONE",
+            progress=100,
+            step="处理完成",
+        )
+    )
+
+    response = _init(client, content)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "COMPLETED"
+    assert body["documentId"] == created["documentId"]
+    assert body["taskId"] == "a" * 32
+    assert body["taskStatus"] == "COMPLETED"
+    assert body["uploadedParts"] == []
+
+
+def test_init_creates_new_session_after_expiry(client):
+    content = b"0123456789"
+    created = _init(client, content).json()
+    repository = client.app.state.upload_repository
+    old_session = repository.sessions[created["uploadId"]]
+    old_session.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+
+    response = _init(client, content)
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["uploadId"] != created["uploadId"]
+    assert body["status"] == "UPLOADING"
+    assert old_session.status == "ABORTING"
+    assert old_session.abort_reason == "EXPIRED"
+

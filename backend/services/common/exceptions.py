@@ -18,6 +18,30 @@ class StorageError(Exception):
         self.message = message
 
 
+class UploadNotFound(Exception):
+    """Multipart Upload 已不存在。"""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+class DuplicateRecord(Exception):
+    """唯一键冲突。"""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+class FingerprintConflict(Exception):
+    """同一指纹已有元数据不一致的上传会话。"""
+
+    def __init__(self, upload_id: str) -> None:
+        super().__init__("同一指纹存在其他未完成上传")
+        self.upload_id = upload_id
+
+
 class QueueFull(Exception):
     """等待中的任务已达到上限。"""
 
