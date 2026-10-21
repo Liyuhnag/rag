@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { getDocuments, deleteDocument, downloadDocument } from '../api'
 import Toast from '../components/Toast.vue'
 import Confirm from '../components/Confirm.vue'
@@ -26,7 +26,7 @@ const fileIconMap = {
   csv: IconFileCsv
 }
 
-const { addUploadTask } = useUploadManager()
+const { addUploadTask, documentsVersion } = useUploadManager()
 
 // 文件类型颜色映射
 const fileColorMap = {
@@ -365,6 +365,10 @@ const loadFiles = async () => {
     loading.value = false
   }
 }
+
+watch(documentsVersion, () => {
+  void loadFiles()
+})
 
 // === 生命周期 ===
 onMounted(() => {

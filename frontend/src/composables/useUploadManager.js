@@ -2,7 +2,7 @@
  * 大文件上传管理器。
  *
  * 一次只上传一个文件，每个文件 2 个分片并发。
- * 当前后端为联调桩：会话和分片状态保存在服务端进程内。
+ * 会话和分片状态以服务端 upload_sessions + S3 ListParts 为准。
  */
 
 import { computed, ref } from 'vue'
@@ -56,6 +56,8 @@ const ERROR_TEXT = {
 }
 
 const uploadTasks = ref([])
+const storedUploads = ref(readStored())
+const documentsVersion = ref(0)
 
 const config = {
   partConcurrency: 2
@@ -344,6 +346,7 @@ function handleCompletedUpload(task, taskId, taskStatus) {
   task.taskId = taskId || null
   task.taskStatus = taskStatus || 'PENDING'
   task.progress = 100
+  notifyDocumentsChanged()
 
   if (!task.taskId) {
     task.status = UPLOAD_STATUS.SUCCESS
@@ -416,6 +419,7 @@ function startTaskPolling(task) {
         task.uploadedAt = new Date().toISOString()
         stopPolling(task)
         clearStored(task)
+        notifyDocumentsChanged()
         processQueue()
         return
       }
@@ -659,6 +663,10 @@ function readStored() {
   }
 }
 
+function notifyDocumentsChanged() {
+  documentsVersion.value += 1
+}
+
 function saveStored(task) {
   if (typeof localStorage === 'undefined' || !task.uploadId || !task.fingerprint) return
   try {
@@ -673,30 +681,48 @@ function saveStored(task) {
       updatedAt: new Date().toISOString()
     })
     localStorage.setItem(STORAGE_KEY, JSON.stringify(entries))
+    storedUploads.value = readStored()
   } catch {
     // 本地存储不可用时不影响上传。
   }
 }
 
-function clearStored(task) {
-  if (typeof localStorage === 'undefined') return
+function clearStoredUpload(uploadId) {
+  if (typeof localStorage === 'undefined' || !uploadId) return
   try {
-    const entries = readStored().filter((entry) => entry.uploadId !== task.uploadId)
+    const entries = readStored().filter((entry) => entry.uploadId !== uploadId)
     localStorage.setItem(STORAGE_KEY, JSON.stringify(entries))
+    storedUploads.value = readStored()
   } catch {
     // 忽略存储失败。
   }
 }
 
+function clearStored(task) {
+  clearStoredUpload(task.uploadId)
+}
+
+function restoreStoredUpload(file, entry) {
+  if (!file) return null
+  if (entry?.uploadId) {
+    clearStoredUpload(entry.uploadId)
+  }
+  return addUploadTask(file)
+}
+
 export function useUploadManager() {
   return {
     uploadTasks,
+    storedUploads,
+    documentsVersion,
     activeUploads,
     hasActiveUploads,
     pendingCount,
     config,
 
     addUploadTask,
+    restoreStoredUpload,
+    discardStoredUpload: clearStoredUpload,
     pauseTask,
     resumeTask,
     retryTask,

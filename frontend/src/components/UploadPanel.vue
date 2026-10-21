@@ -4,6 +4,9 @@ import { UPLOAD_STATUS, useUploadManager } from '../composables/useUploadManager
 
 const {
   uploadTasks,
+  storedUploads,
+  restoreStoredUpload,
+  discardStoredUpload,
   hasActiveUploads,
   pauseTask,
   resumeTask,
@@ -15,8 +18,22 @@ const {
 } = useUploadManager()
 
 const isExpanded = ref(true)
+const restoreInput = ref(null)
+const pendingRestore = ref(null)
+const restoreError = ref('')
 
-const isVisible = computed(() => uploadTasks.value.length > 0)
+const restorableUploads = computed(() => {
+  return storedUploads.value.filter((entry) => {
+    return !uploadTasks.value.some((task) => {
+      return task.uploadId === entry.uploadId ||
+        (task.name === entry.filename && task.size === entry.sizeBytes)
+    })
+  })
+})
+
+const isVisible = computed(() => {
+  return uploadTasks.value.length > 0 || restorableUploads.value.length > 0
+})
 
 const stats = computed(() => {
   const counts = {
@@ -39,6 +56,9 @@ const stats = computed(() => {
 })
 
 const taskTitle = computed(() => {
+  if (uploadTasks.value.length === 0 && restorableUploads.value.length > 0) {
+    return '有未完成的上传'
+  }
   const { pending, hashing, uploading, completing, processing, success, error } = stats.value
   const active = hashing + uploading + completing
   if (active > 0 || pending > 0) {
@@ -58,6 +78,35 @@ const taskTitle = computed(() => {
 
 const togglePanel = () => {
   isExpanded.value = !isExpanded.value
+}
+
+const formatSize = (bytes) => {
+  if (!bytes) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  const index = Math.floor(Math.log(bytes) / Math.log(1024))
+  return `${Math.round((bytes / Math.pow(1024, index)) * 100) / 100} ${units[index]}`
+}
+
+const chooseRestore = (entry) => {
+  pendingRestore.value = entry
+  restoreError.value = ''
+  restoreInput.value?.click()
+}
+
+const handleRestoreFile = (event) => {
+  const file = event.target.files?.[0]
+  const entry = pendingRestore.value
+  if (!file) return
+  if (entry && (file.name !== entry.filename || file.size !== entry.sizeBytes)) {
+    restoreError.value = '请选择与上次相同的文件（文件名和大小一致）'
+    event.target.value = ''
+    return
+  }
+  restoreError.value = ''
+  restoreStoredUpload(file, entry)
+  pendingRestore.value = null
+  event.target.value = ''
+  isExpanded.value = true
 }
 
 const getStatusText = (status) => {
@@ -183,6 +232,38 @@ const canResumeAll = computed(() => uploadTasks.value.some((task) => canResume(t
     </div>
 
     <div v-if="isExpanded" class="panel-body">
+      <div v-if="restorableUploads.length" class="restore-list">
+        <div class="restore-title">上次上传未完成</div>
+        <div
+          v-for="entry in restorableUploads"
+          :key="entry.uploadId"
+          class="restore-item"
+        >
+          <div class="restore-file">
+            <span class="restore-name">{{ entry.filename }}</span>
+            <span class="restore-size">{{ formatSize(entry.sizeBytes) }}</span>
+          </div>
+          <div class="restore-actions">
+            <button class="restore-btn" @click="chooseRestore(entry)">
+              选择文件继续
+            </button>
+            <button
+              class="restore-skip"
+              @click="discardStoredUpload(entry.uploadId)"
+            >
+              忽略
+            </button>
+          </div>
+        </div>
+        <div v-if="restoreError" class="restore-error">{{ restoreError }}</div>
+        <input
+          ref="restoreInput"
+          type="file"
+          class="restore-input"
+          @change="handleRestoreFile"
+        />
+      </div>
+
       <div v-for="task in uploadTasks" :key="task.id" class="task-item">
         <div class="task-info">
           <div class="task-name">{{ task.name }}</div>
@@ -435,6 +516,91 @@ const canResumeAll = computed(() => uploadTasks.value.some((task) => canResume(t
   padding: 6px 8px;
   background: rgba(239, 68, 68, 0.1);
   border-radius: 4px;
+}
+
+/* 恢复上次上传 */
+.restore-list {
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(56, 189, 248, 0.06);
+}
+
+.restore-title {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.restore-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+}
+
+.restore-file {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.restore-name {
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.restore-size {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.restore-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.restore-btn {
+  flex: none;
+  border: 1px solid var(--primary);
+  background: transparent;
+  color: var(--primary);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.restore-btn:hover {
+  background: rgba(56, 189, 248, 0.1);
+}
+
+.restore-skip {
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px;
+}
+
+.restore-skip:hover {
+  color: var(--text-secondary);
+}
+
+.restore-input {
+  display: none;
+}
+
+.restore-error {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--error);
 }
 
 /* 进度条 */
