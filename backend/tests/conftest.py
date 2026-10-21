@@ -14,6 +14,7 @@ from tests.memory import use_open_queue
 from tests.memory import use_memory_records
 from tests.memory import use_memory_tasks
 from tests.memory import use_memory_upload_repository
+from services.upload import upload_completion
 
 
 @pytest.fixture
@@ -30,9 +31,16 @@ def client(monkeypatch: pytest.MonkeyPatch):
     use_memory_records(monkeypatch, document_repository)
     use_memory_tasks(monkeypatch)
     use_inline_tasks()
+    dispatched_tasks: list[str] = []
+    monkeypatch.setattr(
+        upload_completion,
+        "dispatch_task",
+        lambda task_id: dispatched_tasks.append(task_id) or True,
+    )
     use_open_queue(monkeypatch)
     application = create_app(settings, open_memory_storage)
     application.state.upload_repository = upload_repository
     application.state.document_repository = document_repository
+    application.state.dispatched_tasks = dispatched_tasks
     with TestClient(application) as test_client:
         yield test_client

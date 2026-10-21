@@ -99,6 +99,7 @@ def test_upload_complete_and_query_task(client):
     assert body["status"] == "COMPLETED"
     assert body["taskStatus"] == "PENDING"
     assert body["taskId"]
+    assert client.app.state.dispatched_tasks == [body["taskId"]]
 
     after = client.get(f"/api/uploads/{upload_id}")
     assert after.status_code == 200
@@ -131,6 +132,7 @@ def test_complete_is_idempotent(client):
     assert second.status_code == 200
     assert second.json()["taskId"] == first.json()["taskId"]
     assert second.json()["documentId"] == first.json()["documentId"]
+    assert client.app.state.dispatched_tasks == [first.json()["taskId"]]
 
 
 def test_complete_reports_missing_parts(client):

@@ -44,6 +44,12 @@ celery_app.conf.update(
     task_send_sent_event=True,
     broker_connection_retry_on_startup=True,
 )
+celery_app.conf.beat_schedule = {
+    "redispatch-pending-tasks": {
+        "task": "rag.redispatch_pending_tasks",
+        "schedule": 300.0,
+    },
+}
 
 
 @worker_process_init.connect

@@ -18,6 +18,7 @@ from services.common.exceptions import UploadNotFound
 from services.common.object_storage import UploadedPart
 from services.common.object_storage import client as storage_client
 from services.upload.errors import UploadError
+from services.upload.task_dispatch import dispatch_task
 from services.upload.upload_shared import file_url
 from services.upload.upload_shared import part_size
 from services.upload.upload_shared import parts_or_none
@@ -142,6 +143,7 @@ def _store_completed(session: UploadSession, now: datetime) -> CompleteResult:
         ) from exc
     session.status = "COMPLETED"
     session.completed_at = now
+    dispatch_task(task.id)
     return CompleteResult(session, task, "completed")
 
 
@@ -176,21 +178,12 @@ def recover_completing(session: UploadSession) -> CompleteResult | None:
         return None
     if size != session.size_bytes:
         return None
-    document = _completed_document(session, now)
-    task = _new_task(session)
     try:
-        upload_orm.complete_session(
-            session.id,
-            session.claim_version,
-            document,
-            task,
-            now,
-        )
-    except StateConflict:
-        return None
-    session.status = "COMPLETED"
-    session.completed_at = now
-    return CompleteResult(session, task, "completed")
+        return _store_completed(session, now)
+    except UploadError as exc:
+        if exc.status_code == 409:
+            return None
+        raise
 
 
 def _completed_document(session: UploadSession, now: datetime) -> Document:
