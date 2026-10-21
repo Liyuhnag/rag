@@ -7,6 +7,9 @@ from datetime import timedelta
 from datetime import timezone
 
 from model.document_task.model import DocumentTask
+from services.common.exceptions import StorageError
+from services.common.exceptions import UploadNotFound
+from services.common.object_storage import client as storage_client
 
 
 def _fingerprint(content: bytes) -> str:
@@ -279,4 +282,75 @@ def test_init_creates_new_session_after_expiry(client):
     assert body["status"] == "UPLOADING"
     assert old_session.status == "ABORTING"
     assert old_session.abort_reason == "EXPIRED"
+
+def test_complete_merge_timeout_detects_completed_object(client, monkeypatch):
+    content = b"0123456789"
+    created = _init(client, content).json()
+    upload_id = created["uploadId"]
+    for number, chunk in enumerate((content[:4], content[4:8], content[8:]), 1):
+        _put(client, upload_id, number, chunk)
+
+    repository = client.app.state.upload_repository
+    session = repository.get(upload_id)
+    storage = storage_client()
+    storage.put(session.object_key, content, "text/plain")
+
+    def timeout(*_args, **_kwargs):
+        raise StorageError("timeout")
+
+    monkeypatch.setattr(storage, "complete_multipart_upload", timeout)
+    response = client.post(f"/api/uploads/{upload_id}/complete")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "COMPLETED"
+    assert session.status == "COMPLETED"
+
+
+def test_complete_merge_timeout_reverts_when_object_missing(client, monkeypatch):
+    content = b"0123456789"
+    created = _init(client, content).json()
+    upload_id = created["uploadId"]
+    for number, chunk in enumerate((content[:4], content[4:8], content[8:]), 1):
+        _put(client, upload_id, number, chunk)
+
+    repository = client.app.state.upload_repository
+    session = repository.get(upload_id)
+    storage = storage_client()
+    original = storage.complete_multipart_upload
+
+    def timeout(*_args, **_kwargs):
+        raise StorageError("timeout")
+
+    monkeypatch.setattr(storage, "complete_multipart_upload", timeout)
+    response = client.post(f"/api/uploads/{upload_id}/complete")
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "STORAGE_UNAVAILABLE"
+    assert session.status == "UPLOADING"
+
+    monkeypatch.setattr(storage, "complete_multipart_upload", original)
+    retried = client.post(f"/api/uploads/{upload_id}/complete")
+    assert retried.status_code == 200
+
+
+def test_complete_merge_not_found_marks_failed(client, monkeypatch):
+    content = b"0123456789"
+    created = _init(client, content).json()
+    upload_id = created["uploadId"]
+    for number, chunk in enumerate((content[:4], content[4:8], content[8:]), 1):
+        _put(client, upload_id, number, chunk)
+
+    repository = client.app.state.upload_repository
+    session = repository.get(upload_id)
+    storage = storage_client()
+
+    def missing(*_args, **_kwargs):
+        raise UploadNotFound("gone")
+
+    monkeypatch.setattr(storage, "complete_multipart_upload", missing)
+    response = client.post(f"/api/uploads/{upload_id}/complete")
+
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "UPLOAD_EXPIRED"
+    assert session.status == "FAILED"
 

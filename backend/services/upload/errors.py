@@ -52,3 +52,11 @@ def upload_incomplete(
     details: dict[str, list[int]],
 ) -> UploadError:
     return UploadError(409, "UPLOAD_INCOMPLETE", message, details)
+
+
+def upload_merge_failed() -> UploadError:
+    return UploadError(
+        503,
+        "STORAGE_UNAVAILABLE",
+        "合并分片失败，请稍后重试",
+    )

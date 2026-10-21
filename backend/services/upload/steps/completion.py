@@ -24,6 +24,7 @@ from services.upload.errors import upload_completing
 from services.upload.errors import upload_expired
 from services.upload.errors import upload_failed
 from services.upload.errors import upload_incomplete
+from services.upload.errors import upload_merge_failed
 from services.upload.shared import abort_quietly
 from services.upload.shared import file_url
 from services.upload.shared import part_size
@@ -123,6 +124,39 @@ def _merge_parts(
     except UploadNotFound as exc:
         upload_orm.mark_failed(session.id, "分片上传已不存在", now)
         raise upload_expired() from exc
+    except StorageError as exc:
+        _handle_merge_uncertain(session, now, exc)
+
+
+def _handle_merge_uncertain(
+    session: UploadSession,
+    now: datetime,
+    error: StorageError,
+) -> None:
+    """合并请求结果不确定时，用 HeadObject 判断是否已成功。"""
+    try:
+        size = storage_client().head_object(session.object_key)
+    except StorageError:
+        raise upload_merge_failed() from error
+
+    if size is not None:
+        if size == session.size_bytes:
+            return
+        upload_orm.mark_failed(session.id, "对象大小不一致", now)
+        raise upload_failed()
+
+    if session.expires_at <= now:
+        if upload_orm.mark_aborting_completing(
+            session.id,
+            "EXPIRED",
+            now,
+        ):
+            abort_quietly(session)
+            upload_orm.finish_abort(session.id, "EXPIRED", now)
+        raise upload_expired()
+
+    upload_orm.revert_to_uploading(session.id, session.claim_version, now)
+    raise upload_merge_failed() from error
 
 
 def _store_completed(session: UploadSession, now: datetime) -> CompleteResult:
