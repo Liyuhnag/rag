@@ -3,6 +3,7 @@
 
 from api.common.schemas import APIModel
 from model.task import ProcessingTask
+from model.document_task.model import DocumentTask
 
 
 class TaskResponse(APIModel):
@@ -10,12 +11,20 @@ class TaskResponse(APIModel):
     status: str
     document_id: str | None = None
     error_message: str | None = None
+    stage: str | None = None
+    progress: int | None = None
+    step: str | None = None
+    version: int | None = None
 
 
-def to_task_response(task: ProcessingTask) -> TaskResponse:
+def to_task_response(task: ProcessingTask | DocumentTask) -> TaskResponse:
     return TaskResponse(
         id=task.id,
         status=task.status,
-        document_id=task.document_id,
-        error_message=task.error_message,
+        document_id=getattr(task, "document_id", None),
+        error_message=getattr(task, "error_message", None),
+        stage=getattr(task, "stage", None),
+        progress=getattr(task, "progress", None),
+        step=getattr(task, "step", None),
+        version=getattr(task, "version", None),
     )

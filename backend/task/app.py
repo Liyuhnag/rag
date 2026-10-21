@@ -44,6 +44,36 @@ celery_app.conf.update(
     task_send_sent_event=True,
     broker_connection_retry_on_startup=True,
 )
+celery_app.conf.beat_schedule = {
+    "expire-uploads": {
+        "task": "rag.expire_uploads",
+        "schedule": 3600.0,
+    },
+    "retry-aborting-uploads": {
+        "task": "rag.retry_aborting_uploads",
+        "schedule": 3600.0,
+    },
+    "recover-completing-uploads": {
+        "task": "rag.recover_completing_uploads",
+        "schedule": 300.0,
+    },
+    "cleanup-orphan-mpu": {
+        "task": "rag.cleanup_orphan_mpu",
+        "schedule": 86400.0,
+    },
+    "cleanup-orphan-object": {
+        "task": "rag.cleanup_orphan_object",
+        "schedule": 86400.0,
+    },
+    "cleanup-old-sessions": {
+        "task": "rag.cleanup_old_sessions",
+        "schedule": 86400.0,
+    },
+    "redispatch-pending-tasks": {
+        "task": "rag.redispatch_pending_tasks",
+        "schedule": 300.0,
+    },
+}
 
 
 @worker_process_init.connect

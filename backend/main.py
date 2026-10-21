@@ -12,6 +12,7 @@ from api.common.errors import register_exception_handlers
 from api.documents import router as document_router
 from api.health import router as health_router
 from api.tasks import router as task_router
+from api.uploads import router as upload_router
 from config import Settings
 from config import load_settings
 from services.chat.service import ChatService
@@ -41,7 +42,7 @@ def create_app(
         allow_origins=list(active.cors_origins),
         allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
         allow_credentials=False,
-        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["*"],
     )
 
@@ -55,6 +56,7 @@ def create_app(
 
     application.include_router(health_router, prefix="/api")
     application.include_router(document_router, prefix="/api")
+    application.include_router(upload_router, prefix="/api")
     application.include_router(task_router, prefix="/api")
     application.include_router(chat_router, prefix="/api")
     logger.debug("RAG API ready")

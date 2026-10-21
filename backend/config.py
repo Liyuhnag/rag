@@ -9,6 +9,14 @@ from dotenv import load_dotenv
 
 
 DEFAULT_MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+DEFAULT_MAX_DOCUMENT_BYTES = 1000 * 1024 * 1024
+DEFAULT_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
+DEFAULT_UPLOAD_SESSION_TTL_HOURS = 24
+DEFAULT_UPLOAD_COMPLETE_LEASE_SECONDS = 300
+DEFAULT_ORPHAN_MPU_GRACE_HOURS = 24
+DEFAULT_ORPHAN_OBJECT_RETENTION_DAYS = 7
+DEFAULT_SESSION_RETENTION_DAYS = 30
+DEFAULT_CLEANUP_BATCH_SIZE = 50
 DEFAULT_TASK_QUEUE_LIMIT = 200
 ALLOWED_FILE_TYPES = frozenset(
     {
@@ -41,6 +49,17 @@ def _required(name: str) -> str:
     return value
 
 
+def _int_env(name: str, default: int, minimum: int = 1) -> int:
+    raw = os.getenv(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} 必须是整数") from exc
+    if value < minimum:
+        raise RuntimeError(f"{name} 必须大于等于 {minimum}")
+    return value
+
+
 def _first_present(*names: str) -> str:
     for name in names:
         value = os.getenv(name, "").strip()
@@ -55,6 +74,14 @@ class Settings:
     """API 进程使用的配置。"""
 
     max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES
+    max_document_bytes: int = DEFAULT_MAX_DOCUMENT_BYTES
+    upload_chunk_bytes: int = DEFAULT_UPLOAD_CHUNK_BYTES
+    upload_session_ttl_hours: int = DEFAULT_UPLOAD_SESSION_TTL_HOURS
+    upload_complete_lease_seconds: int = DEFAULT_UPLOAD_COMPLETE_LEASE_SECONDS
+    orphan_mpu_grace_hours: int = DEFAULT_ORPHAN_MPU_GRACE_HOURS
+    orphan_object_retention_days: int = DEFAULT_ORPHAN_OBJECT_RETENTION_DAYS
+    session_retention_days: int = DEFAULT_SESSION_RETENTION_DAYS
+    cleanup_batch_size: int = DEFAULT_CLEANUP_BATCH_SIZE
     cors_origins: tuple[str, ...] = (
         "http://localhost:5173",
         "http://127.0.0.1:5173",
@@ -88,6 +115,60 @@ def load_settings() -> Settings:
     if max_upload_bytes < 1:
         raise RuntimeError("MAX_UPLOAD_BYTES 必须大于 0")
 
+    raw_max_document = os.getenv(
+        "MAX_DOCUMENT_BYTES",
+        str(DEFAULT_MAX_DOCUMENT_BYTES),
+    )
+    try:
+        max_document_bytes = int(raw_max_document)
+    except ValueError as exc:
+        raise RuntimeError("MAX_DOCUMENT_BYTES 必须是整数") from exc
+    if max_document_bytes < 1:
+        raise RuntimeError("MAX_DOCUMENT_BYTES 必须大于 0")
+
+    raw_chunk_bytes = os.getenv(
+        "UPLOAD_CHUNK_BYTES",
+        str(DEFAULT_UPLOAD_CHUNK_BYTES),
+    )
+    try:
+        upload_chunk_bytes = int(raw_chunk_bytes)
+    except ValueError as exc:
+        raise RuntimeError("UPLOAD_CHUNK_BYTES 必须是整数") from exc
+    if upload_chunk_bytes < 1:
+        raise RuntimeError("UPLOAD_CHUNK_BYTES 必须大于 0")
+
+    raw_ttl_hours = os.getenv(
+        "UPLOAD_SESSION_TTL_HOURS",
+        str(DEFAULT_UPLOAD_SESSION_TTL_HOURS),
+    )
+    try:
+        upload_session_ttl_hours = int(raw_ttl_hours)
+    except ValueError as exc:
+        raise RuntimeError("UPLOAD_SESSION_TTL_HOURS 必须是整数") from exc
+    if upload_session_ttl_hours < 1:
+        raise RuntimeError("UPLOAD_SESSION_TTL_HOURS 必须大于 0")
+
+    upload_complete_lease_seconds = _int_env(
+        "UPLOAD_COMPLETE_LEASE_SECONDS",
+        DEFAULT_UPLOAD_COMPLETE_LEASE_SECONDS,
+    )
+    orphan_mpu_grace_hours = _int_env(
+        "ORPHAN_MPU_GRACE_HOURS",
+        DEFAULT_ORPHAN_MPU_GRACE_HOURS,
+    )
+    orphan_object_retention_days = _int_env(
+        "ORPHAN_OBJECT_RETENTION_DAYS",
+        DEFAULT_ORPHAN_OBJECT_RETENTION_DAYS,
+    )
+    session_retention_days = _int_env(
+        "SESSION_RETENTION_DAYS",
+        DEFAULT_SESSION_RETENTION_DAYS,
+    )
+    cleanup_batch_size = _int_env(
+        "CLEANUP_BATCH_SIZE",
+        DEFAULT_CLEANUP_BATCH_SIZE,
+    )
+
     s3_region = os.getenv("S3_REGION", "us-east-1").strip() or "us-east-1"
     mysql_host = os.getenv("MYSQL_HOST", "127.0.0.1").strip() or "127.0.0.1"
     file_base_url = os.getenv("FILE_BASE_URL", "").strip().rstrip("/")
@@ -115,6 +196,14 @@ def load_settings() -> Settings:
 
     return Settings(
         max_upload_bytes=max_upload_bytes,
+        max_document_bytes=max_document_bytes,
+        upload_chunk_bytes=upload_chunk_bytes,
+        upload_session_ttl_hours=upload_session_ttl_hours,
+        upload_complete_lease_seconds=upload_complete_lease_seconds,
+        orphan_mpu_grace_hours=orphan_mpu_grace_hours,
+        orphan_object_retention_days=orphan_object_retention_days,
+        session_retention_days=session_retention_days,
+        cleanup_batch_size=cleanup_batch_size,
         cors_origins=_cors_origins_from_env(),
         s3_endpoint=_required("S3_ENDPOINT"),
         s3_region=s3_region,

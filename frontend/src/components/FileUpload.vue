@@ -463,7 +463,7 @@ const previewFile = (file) => {
             <input
               type="file"
               multiple
-              accept=".pdf,.txt,.md,.docx"
+              accept=".pdf,.txt,.md,.markdown,.doc,.docx,.xls,.xlsx,.csv"
               @change="handleFileInput"
               style="display: none"
             />
