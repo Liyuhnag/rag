@@ -13,6 +13,10 @@
 
 - [从文件到答案：RAG 全流程](./design/end-to-end-pipeline.md)
 
+### 大文件上传
+
+- [大文件上传实现说明](./design/大文件上传实现说明.md)
+
 ### 索引阶段（第一部分）
 
 - [设计文档集说明](./design/indexing/README.md)
