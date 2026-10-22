@@ -33,7 +33,7 @@ from services.upload.shared import part_size
 from services.upload.shared import parts_or_none
 from services.upload.shared import require_session
 from services.upload.shared import task_for
-from services.upload.jobs.dispatch import dispatch_task
+from services.parsing.dispatch import dispatch_task
 
 
 @dataclass

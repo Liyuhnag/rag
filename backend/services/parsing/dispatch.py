@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""把 document_tasks 投递到 Celery。"""
+"""把 document_tasks 投递到解析 Worker。"""
 
 import logging
 
@@ -9,7 +9,7 @@ logger = logging.getLogger("rag.task")
 
 
 def dispatch_task(task_id: str) -> bool:
-    """投递失败只记录日志，任务保持 PENDING 等补投。"""
+    """投递解析任务；失败只记录日志，任务保持 PENDING 等补投。"""
     try:
         parse_document.delay(task_id)
     except Exception:
