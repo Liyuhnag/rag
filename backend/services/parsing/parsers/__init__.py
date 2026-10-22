@@ -10,7 +10,6 @@ from services.parsing.parsers.pdf import PdfParser
 from services.parsing.parsers.registry import ParserRegistry
 from services.parsing.parsers.registry import build_default_registry
 from services.parsing.parsers.txt import TxtParser
-from services.parsing.parsers.xls import XlsParser
 from services.parsing.parsers.xlsx import XlsxParser
 
 __all__ = [
@@ -22,7 +21,6 @@ __all__ = [
     "ParserRegistry",
     "PdfParser",
     "TxtParser",
-    "XlsParser",
     "XlsxParser",
     "build_default_registry",
 ]

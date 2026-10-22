@@ -494,7 +494,7 @@ onMounted(() => {
               id="file-input"
               multiple
               @change="handleFileInput"
-              accept=".pdf,.doc,.docx,.txt,.md,.markdown,.xls,.xlsx,.csv"
+              accept=".pdf,.doc,.docx,.txt,.md,.markdown,.xlsx,.csv"
             />
             <label for="file-input" class="upload-label">
               <div class="upload-icon">📁</div>

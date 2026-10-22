@@ -14,7 +14,6 @@ from services.parsing.parsers.docx import DocxParser
 from services.parsing.parsers.markdown import MarkdownParser
 from services.parsing.parsers.pdf import PdfParser
 from services.parsing.parsers.txt import TxtParser
-from services.parsing.parsers.xls import XlsParser
 from services.parsing.parsers.xlsx import XlsxParser
 
 
@@ -57,7 +56,6 @@ def build_default_registry() -> ParserRegistry:
             MarkdownParser(),
             CsvParser(),
             XlsxParser(),
-            XlsParser(),
             PdfParser(),
             DocxParser(),
             DocParser(),

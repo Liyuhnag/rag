@@ -22,7 +22,6 @@ parsers/
 ├── markdown.py       # MarkdownParser
 ├── csv.py            # CsvParser
 ├── xlsx.py           # XlsxParser
-├── xls.py            # XlsParser
 ├── docx.py           # DocxParser
 ├── doc.py            # DocParser
 └── pdf.py            # PdfParser
@@ -33,7 +32,6 @@ parsers/
 ```text
 adapters/
 ├── mineru.py         # MinerU 客户端
-├── libreoffice.py    # LibreOffice 转换器
 └── object_reader.py  # 对象存储读写
 ```
 
@@ -45,11 +43,11 @@ adapters/
 - Template Method：`BaseParser.parse()` 固定入口，子类实现 `_parse()`；
 - Registry：`ParserRegistry` 按扩展名查找；
 - Factory：`build_default_registry()` 组装默认解析器；
-- Adapter：`MinerUClient`、`LibreOfficeConverter`。
+- Adapter：`MinerUClient`、`StorageObjectReader`。
 
 适配器由解析器内部默认创建，调用方不需要传；测试或替换实现时可以通过构造函数注入。
 
-Markdown 原样保留文本。TXT 把标题作为一级标题，正文按空行保留段落。CSV、XLSX 和 XLS 按表头转成 JSON 对象数组，XLS 先转成 XLSX。其余 `_parse()` 仍抛出 `FeatureNotReady`。
+Markdown 原样保留文本。TXT 把标题作为一级标题，正文按空行保留段落。CSV 和 XLSX 按表头转成 JSON 对象数组。其余 `_parse()` 仍抛出 `FeatureNotReady`。
 
 Worker 已接入解析服务。解析、上传或落库抛出 `FeatureNotReady` 时，暂时把任务标成完成，避免上传链路回归。实现具体解析器后移除该兜底。
 

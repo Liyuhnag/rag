@@ -4,7 +4,6 @@
 import io
 import json
 from datetime import datetime
-from pathlib import Path
 
 import pytest
 from openpyxl import Workbook
@@ -12,7 +11,6 @@ from openpyxl import Workbook
 from services.parsing.errors import ParseFailed
 from services.parsing.models import ParseInput
 from services.parsing.models import ParseRequest
-from services.parsing.parsers.xls import XlsParser
 from services.parsing.parsers.xlsx import XlsxParser
 
 
@@ -120,22 +118,3 @@ def test_xlsx_rejects_too_many_sheets():
 def test_xlsx_rejects_invalid_file():
     with pytest.raises(ParseFailed, match="无法解析"):
         XlsxParser(_Reader(b"not-xlsx")).parse(_source())
-
-
-def test_xls_converts_before_parsing():
-    content = _sales_book()
-
-    class _Converter:
-        def to_xlsx(self, source_path: Path) -> Path:
-            assert source_path.read_bytes() == b"old-xls"
-            target = source_path.with_suffix(".xlsx")
-            target.write_bytes(content)
-            return target
-
-    parsed = XlsParser(
-        converter=_Converter(),
-        reader=_Reader(b"old-xls"),
-    ).parse(_source("xls"))
-
-    assert parsed.blocks[0].sheet == "销售"
-    assert _records(parsed.blocks[0].text)[0]["区域"] == "华东"

@@ -76,6 +76,6 @@ uv run pytest
 | `DELETE` | `/api/documents/{id}` | 删除文档记录和对象 |
 | `POST` | `/api/chat` | 校验问题后返回 `501`，检索生成尚未接入 |
 
-允许的扩展名：`pdf`、`md`、`markdown`、`doc`、`docx`、`txt`、`xls`、`xlsx`、`csv`。
+允许的扩展名：`pdf`、`md`、`markdown`、`doc`、`docx`、`txt`、`xlsx`、`csv`。
 
 列表查询参数为 `page`、`pageSize`、`sortBy`、`sortOrder`。文件通过 `/api/uploads` 分片上传。这些成功响应的字段结构已经写在 OpenAPI 里。

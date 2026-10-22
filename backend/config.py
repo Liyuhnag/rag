@@ -24,7 +24,6 @@ ALLOWED_FILE_TYPES = frozenset(
         "doc",
         "docx",
         "txt",
-        "xls",
         "xlsx",
         "csv",
     }
