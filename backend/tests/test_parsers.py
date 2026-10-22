@@ -35,12 +35,12 @@ def test_parser_is_scaffold_only():
         request=ParseRequest(
             document_id="doc-1",
             version=1,
-            object_key="documents/doc-1/source/demo.txt",
-            file_type="txt",
-            filename="demo.txt",
+            object_key="documents/doc-1/source/demo.pdf",
+            file_type="pdf",
+            filename="demo.pdf",
             size_bytes=10,
         ),
     )
 
     with pytest.raises(FeatureNotReady):
-        registry.get("txt").parse(source)
+        registry.get("pdf").parse(source)
