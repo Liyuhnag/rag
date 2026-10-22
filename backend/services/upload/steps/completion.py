@@ -10,6 +10,8 @@ from uuid import uuid4
 from model.document.model import Document
 from model.document.model import DocumentStatus
 from model.document_task.model import DocumentTask
+from model.document_task.model import DocumentTaskStage
+from model.document_task.model import DocumentTaskStatus
 from model.upload import orm as upload_orm
 from model.upload.model import UploadSession
 from services.common.exceptions import StateConflict
@@ -300,8 +302,8 @@ def _new_task(session: UploadSession) -> DocumentTask:
         id=uuid4().hex,
         document_id=session.document_id,
         version=1,
-        status="PENDING",
-        stage="PENDING",
+        status=DocumentTaskStatus.PENDING,
+        stage=DocumentTaskStage.PENDING,
         progress=0,
         step="等待处理",
     )

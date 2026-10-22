@@ -15,6 +15,7 @@ from services.common.exceptions import StateConflict
 
 
 def _from_row(row: dict[str, object]) -> UploadSession:
+    """把一行 upload_sessions 记录转换为模型。"""
     return UploadSession(
         id=str(row["id"]),
         document_id=str(row["document_id"]),
@@ -44,6 +45,7 @@ def _from_row(row: dict[str, object]) -> UploadSession:
 
 
 def get(upload_id: str) -> UploadSession | None:
+    """按 uploadId 查询上传会话；不存在返回 None。"""
     rows = execute(
         "SELECT * FROM upload_sessions WHERE id = %(id)s",
         {"id": upload_id},
@@ -52,6 +54,7 @@ def get(upload_id: str) -> UploadSession | None:
 
 
 def find_active(fingerprint: str, now: datetime) -> UploadSession | None:
+    """按指纹查询未过期 UPLOADING 会话，按创建时间倒序。"""
     rows = execute(
         """
         SELECT * FROM upload_sessions
@@ -67,6 +70,7 @@ def find_active(fingerprint: str, now: datetime) -> UploadSession | None:
 
 
 def find_latest(fingerprint: str, status: str) -> UploadSession | None:
+    """按指纹和状态查询最近一条会话。"""
     rows = execute(
         """
         SELECT * FROM upload_sessions
@@ -80,6 +84,7 @@ def find_latest(fingerprint: str, status: str) -> UploadSession | None:
 
 
 def find_by_s3_upload_id(s3_upload_id: str) -> UploadSession | None:
+    """按 S3 UploadId 查询会话，用于孤儿 MPU 清理。"""
     rows = execute(
         """
         SELECT * FROM upload_sessions
@@ -95,6 +100,7 @@ def find_expired_uploading(
     now: datetime,
     limit: int,
 ) -> list[UploadSession]:
+    """查询已过期 UPLOADING 会话，按过期时间升序，最多 limit 条。"""
     rows = execute(
         """
         SELECT * FROM upload_sessions
@@ -111,6 +117,7 @@ def find_aborting_before(
     older_than: datetime,
     limit: int,
 ) -> list[UploadSession]:
+    """查询超过租约仍未完成的 ABORTING 会话。"""
     rows = execute(
         """
         SELECT * FROM upload_sessions
@@ -127,6 +134,7 @@ def find_completing_before(
     older_than: datetime,
     limit: int,
 ) -> list[UploadSession]:
+    """查询超过租约仍未完成的 COMPLETING 会话。"""
     rows = execute(
         """
         SELECT * FROM upload_sessions
@@ -143,6 +151,7 @@ def find_terminal_before(
     older_than: datetime,
     limit: int,
 ) -> list[UploadSession]:
+    """查询超过保留期的 FAILED/ABORTED/EXPIRED 会话。"""
     rows = execute(
         """
         SELECT * FROM upload_sessions
@@ -160,6 +169,7 @@ def delete_old_sessions(
     older_than: datetime,
     limit: int,
 ) -> int:
+    """删除超过保留期的终态会话，最多 limit 条，返回删除行数。"""
     return execute_count(
         """
         DELETE FROM upload_sessions
@@ -173,6 +183,7 @@ def delete_old_sessions(
 
 
 def insert(session: UploadSession) -> None:
+    """写入一条新的上传会话。"""
     execute(
         """
         INSERT INTO upload_sessions (
@@ -218,6 +229,7 @@ def insert(session: UploadSession) -> None:
 
 
 def touch(upload_id: str, expires_at: datetime, updated_at: datetime) -> None:
+    """复用会话时刷新过期时间和更新时间。"""
     execute(
         """
         UPDATE upload_sessions
@@ -234,6 +246,7 @@ def touch(upload_id: str, expires_at: datetime, updated_at: datetime) -> None:
 
 
 def claim_completing(upload_id: str, now: datetime) -> bool:
+    """条件更新 UPLOADING→COMPLETING 并递增 claim_version；返回是否抢到。"""
     count = execute_count(
         """
         UPDATE upload_sessions
@@ -254,6 +267,7 @@ def revert_to_uploading(
     claim_version: int,
     now: datetime,
 ) -> None:
+    """合并失败时按 claim_version 回退 COMPLETING→UPLOADING。"""
     execute_count(
         """
         UPDATE upload_sessions
@@ -276,6 +290,7 @@ def mark_aborting(
     reason: str,
     updated_at: datetime,
 ) -> bool:
+    """条件更新 UPLOADING→ABORTING；返回是否抢到。"""
     count = execute_count(
         """
         UPDATE upload_sessions
@@ -299,6 +314,7 @@ def mark_aborting_completing(
     reason: str,
     updated_at: datetime,
 ) -> bool:
+    """过期恢复时条件更新 COMPLETING→ABORTING；返回是否抢到。"""
     count = execute_count(
         """
         UPDATE upload_sessions
@@ -318,6 +334,7 @@ def mark_aborting_completing(
 
 
 def finish_abort(upload_id: str, status: str, updated_at: datetime) -> None:
+    """把 ABORTING 会话推进到 ABORTED 或 EXPIRED。"""
     execute(
         """
         UPDATE upload_sessions
@@ -335,6 +352,7 @@ def finish_abort(upload_id: str, status: str, updated_at: datetime) -> None:
 
 
 def mark_failed(upload_id: str, message: str, updated_at: datetime) -> None:
+    """把会话标记为 FAILED 并记录错误原因。"""
     execute(
         """
         UPDATE upload_sessions
@@ -405,8 +423,8 @@ def complete_session(
                     "id": task.id,
                     "document_id": task.document_id,
                     "version": task.version,
-                    "status": task.status,
-                    "stage": task.stage,
+                    "status": task.status.value,
+                    "stage": task.stage.value,
                     "progress": task.progress,
                     "step": task.step,
                     "error_message": task.error_message,

@@ -6,10 +6,18 @@
 
 | 文件 | 职责 |
 | --- | --- |
-| `models.py` | `ParseRequest`、`ParsedBlock`、`ParsedDocument`、`DocumentChunk`、`ParseResult` |
+| `models.py` | `ParseRequest`、`ParsedBlock`、`ParsedDocument`、`ParseResult` |
 | `ports.py` | `ObjectReader`、`DocumentStore`、`TaskStore`、`ChunkStore`、`DocumentParser`、`DocumentChunker` |
 | `service.py` | `DocumentParsingService` 编排入口 |
 | `errors.py` | 解析和切分业务异常 |
+
+## 模型层
+
+持久化模型已经放在：
+
+- `model/document_chunk/`：`document_chunks` 的模型和 ORM；
+- `model/parse_job/`：`parse_jobs` 的模型和 ORM；
+- `model/document/orm.py`：解析状态、解析产物 key 的更新函数。
 
 ## 依赖方向
 
@@ -29,7 +37,7 @@ worker / task
 1. 按文件类型注册具体 `DocumentParser`；
 2. 实现 PDF、DOCX、TXT、Markdown、Excel、CSV 解析器；
 3. 实现父子块 `DocumentChunker`；
-4. 实现 MySQL `document_chunks` 的 `ChunkStore`；
+4. 实现 MySQL `document_chunks` 的 `ChunkStore` 适配器；
 5. 实现任务领取、进度更新、完成和失败；
 6. 在 `task/parse_document.py` 中注入依赖并调用服务。
 

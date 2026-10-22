@@ -5,12 +5,14 @@
 实现方在 worker 启动时注入。
 """
 
+from datetime import datetime
 from typing import Protocol
 
 from model.document.model import Document
+from model.document_chunk.model import DocumentChunk
 from model.document_task.model import DocumentTask
+from model.document_task.model import DocumentTaskStage
 from services.parsing.models import ChunkOptions
-from services.parsing.models import DocumentChunk
 from services.parsing.models import ParseRequest
 from services.parsing.models import ParsedDocument
 
@@ -33,7 +35,12 @@ class DocumentStore(Protocol):
     def get(self, document_id: str) -> Document | None:
         ...
 
-    def mark_processing(self, document_id: str) -> None:
+    def begin_parse(
+        self,
+        document_id: str,
+        parse_version: int,
+        now: datetime,
+    ) -> None:
         ...
 
     def mark_ready(
@@ -41,39 +48,46 @@ class DocumentStore(Protocol):
         document_id: str,
         chunk_count: int,
         parent_chunk_count: int,
+        now: datetime,
     ) -> None:
         ...
 
-    def mark_failed(self, document_id: str, message: str) -> None:
+    def mark_failed(
+        self,
+        document_id: str,
+        message: str,
+        now: datetime,
+    ) -> None:
         ...
 
 
 class TaskStore(Protocol):
     """领取任务并更新任务状态。"""
 
-    def claim(self, task_id: str) -> DocumentTask | None:
+    def claim(self, task_id: str, now: datetime) -> DocumentTask | None:
         ...
 
     def update_progress(
         self,
         task_id: str,
-        stage: str,
+        stage: DocumentTaskStage,
         progress: int,
         step: str,
+        now: datetime,
     ) -> None:
         ...
 
-    def complete(self, task_id: str, step: str) -> None:
+    def complete(self, task_id: str, step: str, now: datetime) -> None:
         ...
 
-    def fail(self, task_id: str, message: str) -> None:
+    def fail(self, task_id: str, message: str, now: datetime) -> None:
         ...
 
 
 class ChunkStore(Protocol):
     """替换某个文档版本的切分结果。"""
 
-    def replace(
+    def replace_for_version(
         self,
         document_id: str,
         version: int,

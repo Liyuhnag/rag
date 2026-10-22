@@ -10,6 +10,13 @@ CREATE TABLE IF NOT EXISTS documents (
     file_url VARCHAR(1024) NOT NULL COMMENT '原始文件链接',
     previewable TINYINT(1) NOT NULL COMMENT '是否可预览',
     preview_url VARCHAR(2048) NULL COMMENT '预览链接，不可预览时为空',
+    page_count INT NOT NULL DEFAULT 0 COMMENT '页数，未解析时为 0',
+    parent_chunk_count INT NOT NULL DEFAULT 0 COMMENT '父块数量',
+    parse_version INT NOT NULL DEFAULT 0 COMMENT '当前解析版本',
+    parsed_md_key VARCHAR(768) NULL COMMENT '解析后的 Markdown key',
+    parsed_json_key VARCHAR(768) NULL COMMENT '解析后的 JSON key',
+    source_sha256 CHAR(64) NULL COMMENT '源文件 SHA-256',
+    error_message VARCHAR(1024) NULL COMMENT '解析或索引失败原因',
     uploaded_at DATETIME(6) NOT NULL COMMENT '上传时间，UTC',
     updated_at DATETIME(6) NOT NULL COMMENT '记录更新时间，UTC',
     PRIMARY KEY (id),
@@ -35,7 +42,7 @@ CREATE TABLE IF NOT EXISTS processing_tasks (
     updated_at DATETIME(6) NOT NULL COMMENT '更新时间，UTC',
     PRIMARY KEY (id),
     KEY idx_processing_tasks_created_at (created_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 大文件上传会话。与 documents 一一对应，分片状态以 S3 ListParts 为准。
 CREATE TABLE IF NOT EXISTS upload_sessions (
@@ -94,4 +101,60 @@ CREATE TABLE IF NOT EXISTS document_tasks (
     UNIQUE KEY uk_document_tasks_document_version (document_id, version),
     KEY idx_document_tasks_status_updated (status, updated_at),
     KEY idx_document_tasks_document (document_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 父子块。父块用于最终上下文，子块用于 embedding 和召回。
+CREATE TABLE IF NOT EXISTS document_chunks (
+    id VARCHAR(64) NOT NULL COMMENT 'chunk ID，确定性哈希',
+    document_id VARCHAR(32) NOT NULL COMMENT '文档 ID',
+    version INT NOT NULL COMMENT '文档版本',
+    chunk_level VARCHAR(16) NOT NULL COMMENT 'PARENT/CHILD',
+    parent_id VARCHAR(64) NULL COMMENT '子块所属父块 ID；父块为 NULL',
+    parent_index INT NULL COMMENT '子块所属父块序号；父块为 NULL',
+    child_order INT NULL COMMENT '子块在父块内序号；父块为 NULL',
+    chunk_index INT NOT NULL COMMENT '同层级序号',
+    child_count INT NOT NULL DEFAULT 0 COMMENT '父块子块数；子块为 0',
+    file_type VARCHAR(32) NOT NULL COMMENT '文件类型',
+    page_start INT NULL COMMENT '起始页',
+    page_end INT NULL COMMENT '结束页',
+    locator VARCHAR(512) NOT NULL DEFAULT '' COMMENT '页码或表格位置',
+    heading_path VARCHAR(1024) NOT NULL DEFAULT '' COMMENT '标题路径',
+    content MEDIUMTEXT NOT NULL COMMENT 'chunk 正文',
+    token_count INT NOT NULL COMMENT '估算 token 数',
+    embedding_model VARCHAR(128) NULL COMMENT '子块向量模型；父块为 NULL',
+    created_at DATETIME(6) NOT NULL COMMENT '创建时间，UTC',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_document_chunks_level_index (
+        document_id, version, chunk_level, chunk_index
+    ),
+    KEY idx_document_chunks_document_version (document_id, version),
+    KEY idx_document_chunks_parent (parent_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- PDF 分段解析任务。一个文档版本可以拆成多个 MinerU 分段。
+CREATE TABLE IF NOT EXISTS parse_jobs (
+    id VARCHAR(32) NOT NULL COMMENT '分段任务 ID',
+    document_id VARCHAR(32) NOT NULL COMMENT '文档 ID',
+    task_id VARCHAR(32) NOT NULL COMMENT '文档任务 ID',
+    version INT NOT NULL COMMENT '解析版本',
+    part_index INT NOT NULL COMMENT '分段序号，从 1 开始',
+    page_start INT NOT NULL COMMENT '起始页，1-based',
+    page_end INT NOT NULL COMMENT '结束页，包含',
+    source_key VARCHAR(768) NOT NULL COMMENT '拆分后的临时 PDF key',
+    mineru_file_id VARCHAR(128) NULL COMMENT 'MinerU file id',
+    mineru_job_id VARCHAR(128) NULL COMMENT 'MinerU job id',
+    status VARCHAR(32) NOT NULL
+        COMMENT 'PENDING/SUBMITTED/RUNNING/DOWNLOADING/COMPLETED/FAILED',
+    attempts INT NOT NULL DEFAULT 0 COMMENT '已尝试次数',
+    next_poll_at DATETIME(6) NULL COMMENT '下次轮询时间，UTC',
+    error_message VARCHAR(1024) NULL COMMENT '失败原因',
+    result_key VARCHAR(768) NULL COMMENT '分段结果 manifest key',
+    created_at DATETIME(6) NOT NULL COMMENT '创建时间，UTC',
+    updated_at DATETIME(6) NOT NULL COMMENT '更新时间，UTC',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_parse_jobs_document_version_part (
+        document_id, version, part_index
+    ),
+    KEY idx_parse_jobs_status_poll (status, next_poll_at),
+    KEY idx_parse_jobs_document (document_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

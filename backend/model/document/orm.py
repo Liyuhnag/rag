@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """documents 表的 SQL。服务层只调用这里的函数。"""
 
+from datetime import datetime
+
 from model.common.database import as_aware
 from model.common.database import as_utc
 from model.common.database import execute
@@ -96,6 +98,7 @@ def list_page(
 
 
 def _from_row(row: dict[str, object]) -> Document:
+    """把一行 documents 记录转换为模型。"""
     return Document(
         id=str(row["id"]),
         name=str(row["name"]),
@@ -111,6 +114,29 @@ def _from_row(row: dict[str, object]) -> Document:
         preview_url=(
             None if row["preview_url"] is None else str(row["preview_url"])
         ),
+        page_count=int(row.get("page_count", 0)),
+        parent_chunk_count=int(row.get("parent_chunk_count", 0)),
+        parse_version=int(row.get("parse_version", 0)),
+        parsed_md_key=(
+            None
+            if row.get("parsed_md_key") is None
+            else str(row["parsed_md_key"])
+        ),
+        parsed_json_key=(
+            None
+            if row.get("parsed_json_key") is None
+            else str(row["parsed_json_key"])
+        ),
+        source_sha256=(
+            None
+            if row.get("source_sha256") is None
+            else str(row["source_sha256"])
+        ),
+        error_message=(
+            None
+            if row.get("error_message") is None
+            else str(row["error_message"])
+        ),
     )
 
 
@@ -121,3 +147,97 @@ def exists(document_id: str) -> bool:
         {"id": document_id},
     )
     return bool(rows)
+
+def begin_parse(
+    document_id: str,
+    parse_version: int,
+    now: datetime,
+) -> None:
+    """开始一个新解析版本：置 PROCESSING 并记录 parse_version。"""
+    execute(
+        """
+        UPDATE documents
+        SET status = 'PROCESSING',
+            parse_version = %(parse_version)s,
+            error_message = NULL,
+            updated_at = %(now)s
+        WHERE id = %(id)s
+        """,
+        {
+            "id": document_id,
+            "parse_version": parse_version,
+            "now": as_utc(now),
+        },
+    )
+
+
+def mark_ready(
+    document_id: str,
+    chunk_count: int,
+    parent_chunk_count: int,
+    now: datetime,
+) -> None:
+    """索引完成：写入父子块数量并置 READY。"""
+    execute(
+        """
+        UPDATE documents
+        SET status = 'READY',
+            chunk_count = %(chunk_count)s,
+            parent_chunk_count = %(parent_chunk_count)s,
+            error_message = NULL,
+            updated_at = %(now)s
+        WHERE id = %(id)s
+        """,
+        {
+            "id": document_id,
+            "chunk_count": chunk_count,
+            "parent_chunk_count": parent_chunk_count,
+            "now": as_utc(now),
+        },
+    )
+
+
+def mark_failed(
+    document_id: str,
+    message: str,
+    now: datetime,
+) -> None:
+    """解析或索引失败：置 FAILED 并记录原因。"""
+    execute(
+        """
+        UPDATE documents
+        SET status = 'FAILED',
+            error_message = %(message)s,
+            updated_at = %(now)s
+        WHERE id = %(id)s
+        """,
+        {
+            "id": document_id,
+            "message": message[:1024],
+            "now": as_utc(now),
+        },
+    )
+
+
+def set_parsed_artifacts(
+    document_id: str,
+    parsed_md_key: str | None,
+    parsed_json_key: str | None,
+    now: datetime,
+) -> None:
+    """记录解析产物对象 key，便于重试和回溯。"""
+    execute(
+        """
+        UPDATE documents
+        SET parsed_md_key = %(parsed_md_key)s,
+            parsed_json_key = %(parsed_json_key)s,
+            updated_at = %(now)s
+        WHERE id = %(id)s
+        """,
+        {
+            "id": document_id,
+            "parsed_md_key": parsed_md_key,
+            "parsed_json_key": parsed_json_key,
+            "now": as_utc(now),
+        },
+    )

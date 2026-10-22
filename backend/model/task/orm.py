@@ -89,10 +89,12 @@ def fail(task_id: str, message: str) -> None:
 
 
 def _now() -> datetime:
+    """返回当前 UTC 时间，供 ORM 写入时间字段。"""
     return datetime.now(timezone.utc)
 
 
 def _params(task: ProcessingTask) -> dict[str, object]:
+    """构造 processing_tasks 的 INSERT 参数。"""
     return {
         "id": task.id,
         "name": task.name,
@@ -108,6 +110,7 @@ def _params(task: ProcessingTask) -> dict[str, object]:
 
 
 def _from_row(row: dict[str, object]) -> ProcessingTask:
+    """把一行 processing_tasks 记录转换为模型。"""
     document_id = row["document_id"]
     error_message = row["error_message"]
     return ProcessingTask(

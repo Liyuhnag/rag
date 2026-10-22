@@ -5,8 +5,9 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import Literal
 
+from model.document_chunk.model import DocumentChunk
+
 BlockKind = Literal["text", "table", "image", "code", "formula"]
-ChunkLevel = Literal["PARENT", "CHILD"]
 
 
 @dataclass(frozen=True)
@@ -53,29 +54,6 @@ class ChunkOptions:
     max_child_tokens: int = 500
     min_child_tokens: int = 300
     overlap_tokens: int = 50
-
-
-@dataclass
-class DocumentChunk:
-    """写入 document_chunks 的父块或子块。"""
-
-    id: str
-    document_id: str
-    version: int
-    chunk_level: ChunkLevel
-    parent_id: str | None
-    parent_index: int | None
-    child_order: int | None
-    chunk_index: int
-    child_count: int
-    file_type: str
-    page_start: int | None
-    page_end: int | None
-    locator: str
-    heading_path: str
-    content: str
-    token_count: int
-    embedding_model: str | None = None
 
 
 @dataclass

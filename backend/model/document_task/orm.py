@@ -7,15 +7,18 @@ from model.common.database import as_utc
 from model.common.database import execute
 from model.common.database import execute_count
 from model.document_task.model import DocumentTask
+from model.document_task.model import DocumentTaskStage
+from model.document_task.model import DocumentTaskStatus
 
 
 def _from_row(row: dict[str, object]) -> DocumentTask:
+    """把一行 document_tasks 记录转换为模型。"""
     return DocumentTask(
         id=str(row["id"]),
         document_id=str(row["document_id"]),
         version=int(row["version"]),
-        status=str(row["status"]),
-        stage=str(row["stage"]),
+        status=DocumentTaskStatus(str(row["status"])),
+        stage=DocumentTaskStage(str(row["stage"])),
         progress=int(row["progress"]),
         step=str(row["step"]),
         error_message=(
@@ -25,6 +28,7 @@ def _from_row(row: dict[str, object]) -> DocumentTask:
 
 
 def get(task_id: str) -> DocumentTask | None:
+    """按 taskId 查询任务；不存在返回 None。"""
     rows = execute(
         "SELECT * FROM document_tasks WHERE id = %(id)s LIMIT 1",
         {"id": task_id},
@@ -33,6 +37,7 @@ def get(task_id: str) -> DocumentTask | None:
 
 
 def find(document_id: str, version: int) -> DocumentTask | None:
+    """按 documentId 和 version 查询任务。"""
     rows = execute(
         """
         SELECT * FROM document_tasks
@@ -48,6 +53,7 @@ def find_pending(
     older_than: datetime,
     limit: int,
 ) -> list[DocumentTask]:
+    """查询超过最小年龄的 PENDING 任务，用于补投。"""
     rows = execute(
         """
         SELECT * FROM document_tasks
@@ -65,25 +71,31 @@ def claim(task_id: str, now: datetime) -> DocumentTask | None:
     count = execute_count(
         """
         UPDATE document_tasks
-        SET status = 'RUNNING',
-            stage = 'PARSING',
+        SET status = %(status)s,
+            stage = %(stage)s,
             progress = 0,
             step = '解析中',
             updated_at = %(now)s
         WHERE id = %(id)s AND status = 'PENDING'
         """,
-        {"id": task_id, "now": as_utc(now)},
+        {
+            "id": task_id,
+            "status": DocumentTaskStatus.RUNNING.value,
+            "stage": DocumentTaskStage.PARSING.value,
+            "now": as_utc(now),
+        },
     )
     return None if count != 1 else get(task_id)
 
 
 def update_progress(
     task_id: str,
-    stage: str,
+    stage: DocumentTaskStage,
     progress: int,
     step: str,
     now: datetime,
 ) -> None:
+    """更新 RUNNING 任务的阶段、进度和步骤。"""
     execute_count(
         """
         UPDATE document_tasks
@@ -95,7 +107,7 @@ def update_progress(
         """,
         {
             "id": task_id,
-            "stage": stage,
+            "stage": stage.value,
             "progress": progress,
             "step": step,
             "now": as_utc(now),
@@ -104,11 +116,12 @@ def update_progress(
 
 
 def complete(task_id: str, step: str, now: datetime) -> None:
+    """把 RUNNING 任务推进到 COMPLETED/DONE。"""
     execute_count(
         """
         UPDATE document_tasks
-        SET status = 'COMPLETED',
-            stage = 'DONE',
+        SET status = %(status)s,
+            stage = %(stage)s,
             progress = 100,
             step = %(step)s,
             updated_at = %(now)s
@@ -116,6 +129,8 @@ def complete(task_id: str, step: str, now: datetime) -> None:
         """,
         {
             "id": task_id,
+            "status": DocumentTaskStatus.COMPLETED.value,
+            "stage": DocumentTaskStage.DONE.value,
             "step": step,
             "now": as_utc(now),
         },
@@ -123,6 +138,7 @@ def complete(task_id: str, step: str, now: datetime) -> None:
 
 
 def fail(task_id: str, message: str, now: datetime) -> None:
+    """把 RUNNING 任务标记 FAILED 并记录原因。"""
     execute_count(
         """
         UPDATE document_tasks

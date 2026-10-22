@@ -2,7 +2,7 @@
 """文档解析服务。"""
 
 from services.parsing.models import ChunkOptions
-from services.parsing.models import DocumentChunk
+from model.document_chunk.model import DocumentChunk
 from services.parsing.models import ParseRequest
 from services.parsing.models import ParseResult
 from services.parsing.models import ParsedBlock

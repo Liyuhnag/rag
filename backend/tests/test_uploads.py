@@ -7,6 +7,8 @@ from datetime import timedelta
 from datetime import timezone
 
 from model.document_task.model import DocumentTask
+from model.document_task.model import DocumentTaskStage
+from model.document_task.model import DocumentTaskStatus
 from services.common.exceptions import StorageError
 from services.common.exceptions import UploadNotFound
 from services.common.object_storage import client as storage_client
@@ -249,8 +251,8 @@ def test_init_returns_existing_completed_document(client):
             id="a" * 32,
             document_id=session.document_id,
             version=1,
-            status="COMPLETED",
-            stage="DONE",
+            status=DocumentTaskStatus.COMPLETED,
+            stage=DocumentTaskStage.DONE,
             progress=100,
             step="处理完成",
         )
