@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """解析模块的外部服务适配器。"""
 
-from services.parsing.adapters.chunk_store import OrmChunkStore
 from services.parsing.adapters.libreoffice import LibreOfficeConverter
 from services.parsing.adapters.mineru import MinerUClient
 from services.parsing.adapters.object_reader import StorageObjectReader
@@ -9,6 +8,5 @@ from services.parsing.adapters.object_reader import StorageObjectReader
 __all__ = [
     "LibreOfficeConverter",
     "MinerUClient",
-    "OrmChunkStore",
     "StorageObjectReader",
 ]

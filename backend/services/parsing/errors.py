@@ -20,7 +20,3 @@ class ParserUnavailable(ParsingError):
 
 class ParseFailed(ParsingError):
     """解析器执行失败。"""
-
-
-class ChunkingFailed(ParsingError):
-    """文本切分失败。"""

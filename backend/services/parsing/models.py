@@ -5,8 +5,6 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import Literal
 
-from model.document_chunk.model import DocumentChunk
-
 BlockKind = Literal["text", "table", "image", "code", "formula"]
 
 
@@ -50,22 +48,3 @@ class ParsedDocument:
     title: str
     blocks: list[ParsedBlock] = field(default_factory=list)
     metadata: dict[str, object] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class ChunkOptions:
-    """父子块切分参数。"""
-
-    max_parent_tokens: int = 1800
-    min_parent_tokens: int = 1200
-    max_child_tokens: int = 500
-    min_child_tokens: int = 300
-    overlap_tokens: int = 50
-
-
-@dataclass
-class ParseResult:
-    """解析和切分的完整结果。"""
-
-    parsed: ParsedDocument
-    chunks: list[DocumentChunk] = field(default_factory=list)

@@ -9,10 +9,8 @@ from datetime import datetime
 from typing import Protocol
 
 from model.document.model import Document
-from model.document_chunk.model import DocumentChunk
 from model.document_task.model import DocumentTask
 from model.document_task.model import DocumentTaskStage
-from services.parsing.models import ChunkOptions
 from services.parsing.models import ParseInput
 from services.parsing.models import ParsedDocument
 
@@ -84,18 +82,6 @@ class TaskStore(Protocol):
         ...
 
 
-class ChunkStore(Protocol):
-    """替换某个文档版本的切分结果。"""
-
-    def replace_for_version(
-        self,
-        document_id: str,
-        version: int,
-        chunks: list[DocumentChunk],
-    ) -> None:
-        ...
-
-
 class DocumentParser(Protocol):
     """单一文件类型的解析器。"""
 
@@ -103,15 +89,4 @@ class DocumentParser(Protocol):
         ...
 
     def parse(self, source: ParseInput) -> ParsedDocument:
-        ...
-
-
-class DocumentChunker(Protocol):
-    """把解析结果切成父子块。"""
-
-    def split(
-        self,
-        parsed: ParsedDocument,
-        options: ChunkOptions,
-    ) -> list[DocumentChunk]:
         ...

@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""父子块切分器。"""
+"""按 token 和标题结构切父子块。"""
 
+from model.document_chunk.model import DocumentChunk
+from services.chunking.models import ChunkOptions
 from services.common.exceptions import FeatureNotReady
-from services.parsing.models import ChunkOptions
-from services.parsing.models import DocumentChunk
 from services.parsing.models import ParsedDocument
 
 
