@@ -12,6 +12,7 @@ from model.document_task.model import DocumentTaskStage
 from model.document_task.model import DocumentTaskStatus
 from services.parsing.models import ParseRequest
 from services.parsing.models import ParsedDocument
+from services.parsing.models import SubmittedPart
 from services.parsing.service import FinishedParse
 from services.parsing.service import SubmittedParse
 
@@ -85,10 +86,59 @@ def test_submitted_parse_does_not_upload(monkeypatch):
         "upload",
         lambda self, parsed: (_ for _ in ()).throw(AssertionError("不应上传")),
     )
+    monkeypatch.setattr(
+        worker.parse_job_orm,
+        "insert",
+        lambda job: (_ for _ in ()).throw(AssertionError("不应写入分段")),
+    )
 
     worker.parse_document.run("task-1")
 
     assert progress == ["分段已提交"]
+
+
+def test_submitted_parse_records_job(monkeypatch):
+    _prepare(monkeypatch)
+    inserted = []
+    progress = []
+    part = SubmittedPart(
+        file_id="file-1",
+        job_id="job-1",
+        part_index=1,
+        page_start=1,
+        page_end=0,
+        source_key="documents/doc-1/demo.pdf",
+    )
+    monkeypatch.setattr(
+        worker.DocumentParsingService,
+        "parse",
+        lambda self, document, version: SubmittedParse(parts=(part,)),
+    )
+    monkeypatch.setattr(
+        worker.parse_job_orm,
+        "insert",
+        lambda job: inserted.append(job),
+    )
+    monkeypatch.setattr(
+        worker.task_orm,
+        "update_progress",
+        lambda task_id, stage, percent, step, now: progress.append(step),
+    )
+    monkeypatch.setattr(
+        worker.DocumentParsingService,
+        "upload",
+        lambda self, parsed: (_ for _ in ()).throw(AssertionError("不应上传")),
+    )
+
+    worker.parse_document.run("task-1")
+
+    assert progress == ["分段已提交"]
+    assert inserted[0].mineru_file_id == "file-1"
+    assert inserted[0].mineru_job_id == "job-1"
+    assert inserted[0].status.value == "SUBMITTED"
+    assert inserted[0].task_id == "task-1"
+    assert inserted[0].source_key == "documents/doc-1/demo.pdf"
+    assert inserted[0].next_poll_at is not None
 
 
 def test_finished_parse_uploads_and_persists(monkeypatch):

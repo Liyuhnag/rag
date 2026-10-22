@@ -12,6 +12,7 @@ from model.document.model import Document
 from model.document_task.model import DocumentTask
 from model.document_task.model import DocumentTaskStage
 from services.parsing.models import ParseInput
+from services.parsing.models import ParseSubmission
 from services.parsing.models import ParsedDocument
 
 
@@ -88,5 +89,5 @@ class DocumentParser(Protocol):
     def supports(self, file_type: str) -> bool:
         ...
 
-    def parse(self, source: ParseInput) -> ParsedDocument:
+    def parse(self, source: ParseInput) -> ParsedDocument | ParseSubmission:
         ...

@@ -11,7 +11,9 @@ from model.document.model import Document
 from services.common.exceptions import FeatureNotReady
 from services.parsing.models import ParseInput
 from services.parsing.models import ParseRequest
+from services.parsing.models import ParseSubmission
 from services.parsing.models import ParsedDocument
+from services.parsing.models import SubmittedPart
 from services.parsing.parsers.registry import build_default_registry
 
 
@@ -34,6 +36,8 @@ class FinishedParse:
 class SubmittedParse:
     """分段已提交，等待外部解析结束。"""
 
+    parts: tuple[SubmittedPart, ...] = ()
+
 
 class DocumentParsingService:
     """解析文档，上传产物，并写入数据库。"""
@@ -53,7 +57,10 @@ class DocumentParsingService:
             size_bytes=document.size_bytes,
         )
         parser = build_default_registry().get(document.file_type)
-        return FinishedParse(parser.parse(ParseInput(request=request)))
+        outcome = parser.parse(ParseInput(request=request))
+        if isinstance(outcome, ParseSubmission):
+            return SubmittedParse(parts=outcome.parts)
+        return FinishedParse(outcome)
 
     def upload(self, parsed: ParsedDocument) -> StoredParseResult:
         """把解析产物上传到对象存储。尚未实现。"""

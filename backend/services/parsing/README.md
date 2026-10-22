@@ -6,7 +6,7 @@
 
 | 文件 | 职责 |
 | --- | --- |
-| `models.py` | `ParseRequest`、`ParseInput`、`ParsedBlock`、`ParsedDocument` |
+| `models.py` | `ParseRequest`、`ParseInput`、`ParsedBlock`、`ParsedDocument`、`ParseSubmission` |
 | `ports.py` | `ObjectReader`、`DocumentStore`、`TaskStore`、`DocumentParser` |
 | `service.py` | `DocumentParsingService`：解析、上传、落库 |
 | `dispatch.py` | 只负责把 `document_tasks` 投递到解析 Worker |
@@ -27,11 +27,18 @@ parsers/
 └── pdf.py            # PdfParser
 ```
 
+## MinerU
+
+```text
+mineru/
+├── client.py         # 提交、查询、下载
+└── submit.py         # 把整文件提交出去
+```
+
 ## 外部适配器
 
 ```text
 adapters/
-├── mineru.py         # MinerU 客户端
 └── object_reader.py  # 对象存储读写
 ```
 
@@ -43,11 +50,11 @@ adapters/
 - Template Method：`BaseParser.parse()` 固定入口，子类实现 `_parse()`；
 - Registry：`ParserRegistry` 按扩展名查找；
 - Factory：`build_default_registry()` 组装默认解析器；
-- Adapter：`MinerUClient`、`StorageObjectReader`。
+- Adapter：`services.parsing.mineru`、`StorageObjectReader`。
 
 适配器由解析器内部默认创建，调用方不需要传；测试或替换实现时可以通过构造函数注入。
 
-Markdown 原样保留文本。TXT 把标题作为一级标题，正文按空行保留段落。CSV 和 XLSX 按表头转成 JSON 对象数组。其余 `_parse()` 仍抛出 `FeatureNotReady`。
+Markdown 原样保留文本。TXT 把标题作为一级标题，正文按空行保留段落。CSV 和 XLSX 按表头转成 JSON 对象数组。PDF、DOC 和 DOCX 先在解析器里判断是否超过 180MiB，不超过就交给 MinerU 提交后返回，不等待解析结束。
 
 Worker 已接入解析服务。解析、上传或落库抛出 `FeatureNotReady` 时，暂时把任务标成完成，避免上传链路回归。实现具体解析器后移除该兜底。
 
@@ -63,7 +70,7 @@ task/parse_document.py
     -> 领取任务、更新状态、捕获异常
     -> DocumentParsingService.parse()
     -> 解析已完成时：upload()、persist()
-    -> 分段已提交时：记录进度并返回
+    -> 分段已提交时：写入 parse_jobs，记录进度并返回
 
 DocumentParsingService
     -> ParserRegistry
@@ -72,5 +79,5 @@ DocumentParsingService
 
 ## 待实现
 
-1. 实现各解析器的 `_parse()`；
+1. PDF 超过 180MiB 时拆分，以及 MinerU 轮询和结果合并；
 2. 实现解析产物上传和落库。

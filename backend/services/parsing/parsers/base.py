@@ -12,6 +12,7 @@ from abc import abstractmethod
 
 from services.parsing.errors import UnsupportedFileType
 from services.parsing.models import ParseInput
+from services.parsing.models import ParseSubmission
 from services.parsing.models import ParsedDocument
 
 
@@ -24,7 +25,7 @@ class BaseParser(ABC):
         """当前解析器是否支持该扩展名。"""
         return file_type in self.file_types
 
-    def parse(self, source: ParseInput) -> ParsedDocument:
+    def parse(self, source: ParseInput) -> ParsedDocument | ParseSubmission:
         """解析入口；具体格式处理交给子类。"""
         if not self.supports(source.request.file_type):
             raise UnsupportedFileType(
@@ -33,6 +34,6 @@ class BaseParser(ABC):
         return self._parse(source)
 
     @abstractmethod
-    def _parse(self, source: ParseInput) -> ParsedDocument:
+    def _parse(self, source: ParseInput) -> ParsedDocument | ParseSubmission:
         """子类实现具体解析逻辑。"""
         ...

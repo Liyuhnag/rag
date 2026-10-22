@@ -48,3 +48,22 @@ class ParsedDocument:
     title: str
     blocks: list[ParsedBlock] = field(default_factory=list)
     metadata: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SubmittedPart:
+    """已提交给 MinerU 的一段。整文件提交时页码尚未测量，page_end 为 0。"""
+
+    file_id: str
+    job_id: str
+    part_index: int
+    page_start: int
+    page_end: int
+    source_key: str
+
+
+@dataclass(frozen=True)
+class ParseSubmission:
+    """解析器已把文件提交给外部服务，还没有解析结果。"""
+
+    parts: tuple[SubmittedPart, ...]

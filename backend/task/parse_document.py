@@ -6,19 +6,25 @@ parse_document 负责编排，具体动作由同文件辅助函数和解析服�
 
 import logging
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
+from uuid import uuid4
 
 from model.document import orm as document_orm
 from model.document.model import Document
 from model.document_task import orm as task_orm
 from model.document_task.model import DocumentTask
 from model.document_task.model import DocumentTaskStage
+from model.parse_job import orm as parse_job_orm
+from model.parse_job.model import ParseJob
+from model.parse_job.model import ParseJobStatus
 from services.common.exceptions import FeatureNotReady
 from services.parsing.service import DocumentParsingService
 from services.parsing.service import SubmittedParse
 from task.app import celery_app
 
 logger = logging.getLogger("rag.task")
+_POLL_SECONDS = 10
 
 
 @celery_app.task(
@@ -42,6 +48,7 @@ def parse_document(task_id: str) -> None:
     try:
         outcome = service.parse(document, task.version)
         if isinstance(outcome, SubmittedParse):
+            _record_parts(task, outcome, now)
             task_orm.update_progress(
                 task_id,
                 DocumentTaskStage.PARSING,
@@ -75,6 +82,36 @@ def _load_document(task: DocumentTask) -> Document | None:
     if document is None:
         task_orm.fail(task.id, "文档不存在", _now())
     return document
+
+
+def _record_parts(
+    task: DocumentTask,
+    outcome: SubmittedParse,
+    now: datetime,
+) -> None:
+    """把已提交的分段记下来，轮询时才能按 job_id 继续查。"""
+    for part in outcome.parts:
+        parse_job_orm.insert(
+            ParseJob(
+                id=uuid4().hex,
+                document_id=task.document_id,
+                task_id=task.id,
+                version=task.version,
+                part_index=part.part_index,
+                page_start=part.page_start,
+                page_end=part.page_end,
+                source_key=part.source_key,
+                mineru_file_id=part.file_id,
+                mineru_job_id=part.job_id,
+                status=ParseJobStatus.SUBMITTED,
+                attempts=1,
+                next_poll_at=now + timedelta(seconds=_POLL_SECONDS),
+                error_message=None,
+                result_key=None,
+                created_at=now,
+                updated_at=now,
+            )
+        )
 
 
 def _now() -> datetime:

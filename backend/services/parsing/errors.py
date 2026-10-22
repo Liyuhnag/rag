@@ -20,3 +20,11 @@ class ParserUnavailable(ParsingError):
 
 class ParseFailed(ParsingError):
     """解析器执行失败。"""
+
+
+class MinerUJobLost(ParsingError):
+    """MinerU 重启后找不到原来的任务。"""
+
+
+class MinerURequestError(ParsingError):
+    """MinerU 拒绝了这次请求。"""
