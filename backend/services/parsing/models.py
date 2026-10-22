@@ -3,7 +3,6 @@
 
 from dataclasses import dataclass
 from dataclasses import field
-from pathlib import Path
 from typing import Literal
 
 from model.document_chunk.model import DocumentChunk
@@ -25,10 +24,9 @@ class ParseRequest:
 
 @dataclass(frozen=True)
 class ParseInput:
-    """解析器实际读取的本地源文件。"""
+    """交给解析器的请求。文件由解析器从对象存储读取。"""
 
     request: ParseRequest
-    source_path: Path
 
 
 @dataclass

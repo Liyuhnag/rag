@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 """解析器注册表。"""
 
-from pathlib import Path
-
 import pytest
 
 from services.common.exceptions import FeatureNotReady
@@ -42,7 +40,6 @@ def test_parser_is_scaffold_only():
             filename="demo.txt",
             size_bytes=10,
         ),
-        source_path=Path("/tmp/demo.txt"),
     )
 
     with pytest.raises(FeatureNotReady):

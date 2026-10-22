@@ -1,55 +1,68 @@
 # -*- coding: utf-8 -*-
-"""文档解析的核心业务服务。
+"""文档解析服务。
 
-这里只做解析、切分和落库；任务领取、状态流转和异常重试由 task 层编排。
+负责三件事：按文件类型解析、把解析产物上传到对象存储、把结果写入数据库。
+读取源文件和具体格式处理由解析器完成。
 """
 
+from dataclasses import dataclass
+
+from model.document.model import Document
 from services.common.exceptions import FeatureNotReady
-from services.parsing.models import ChunkOptions
-from services.parsing.models import DocumentChunk
 from services.parsing.models import ParseInput
+from services.parsing.models import ParseRequest
 from services.parsing.models import ParsedDocument
-from services.parsing.parsers.registry import ParserRegistry
-from services.parsing.ports import ChunkStore
-from services.parsing.ports import DocumentChunker
-from services.parsing.ports import ObjectReader
+from services.parsing.parsers.registry import build_default_registry
+
+
+@dataclass(frozen=True)
+class StoredParseResult:
+    """已上传的解析产物位置。"""
+
+    md_key: str
+    json_key: str
+
+
+@dataclass(frozen=True)
+class FinishedParse:
+    """解析已经完成，可以上传和落库。"""
+
+    parsed: ParsedDocument
+
+
+@dataclass(frozen=True)
+class SubmittedParse:
+    """分段已提交，等待外部解析结束。"""
 
 
 class DocumentParsingService:
-    """解析、切分和落库的核心业务。"""
+    """解析文档，上传产物，并写入数据库。"""
 
-    def __init__(
+    def parse(
         self,
-        *,
-        objects: ObjectReader,
-        chunks: ChunkStore,
-        parsers: ParserRegistry,
-        chunker: DocumentChunker,
-        chunk_options: ChunkOptions | None = None,
-    ) -> None:
-        self._objects = objects
-        self._chunks = chunks
-        self._parsers = parsers
-        self._chunker = chunker
-        self._chunk_options = chunk_options or ChunkOptions()
+        document: Document,
+        version: int,
+    ) -> FinishedParse | SubmittedParse:
+        """按扩展名把文档交给对应解析器。"""
+        request = ParseRequest(
+            document_id=document.id,
+            version=version,
+            object_key=document.object_key,
+            file_type=document.file_type,
+            filename=document.name,
+            size_bytes=document.size_bytes,
+        )
+        parser = build_default_registry().get(document.file_type)
+        return FinishedParse(parser.parse(ParseInput(request=request)))
 
-    def parse(self, source: ParseInput) -> ParsedDocument:
-        """按文件类型选择解析器并解析源文件。"""
-        raise FeatureNotReady("文档解析服务尚未实现：parse")
-
-    def split(
-        self,
-        parsed: ParsedDocument,
-        options: ChunkOptions | None = None,
-    ) -> list[DocumentChunk]:
-        """把解析结果切成父子块。"""
-        raise FeatureNotReady("文档解析服务尚未实现：split")
+    def upload(self, parsed: ParsedDocument) -> StoredParseResult:
+        """把解析产物上传到对象存储。尚未实现。"""
+        raise FeatureNotReady("解析产物上传尚未实现")
 
     def persist(
         self,
-        document_id: str,
-        version: int,
-        chunks: list[DocumentChunk],
-    ) -> tuple[int, int]:
-        """替换某个版本的切分结果，返回子块数和父块数。"""
-        raise FeatureNotReady("文档解析服务尚未实现：persist")
+        parsed: ParsedDocument,
+        stored: StoredParseResult,
+    ) -> None:
+        """把解析结果写入数据库。尚未实现。"""
+        raise FeatureNotReady("解析结果落库尚未实现")

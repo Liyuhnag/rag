@@ -33,6 +33,9 @@ class ObjectStorage:
     def put(self, key: str, content: bytes, content_type: str) -> None:
         raise NotImplementedError
 
+    def get_object(self, key: str) -> bytes:
+        raise NotImplementedError
+
     def delete(self, key: str) -> None:
         raise NotImplementedError
 
@@ -111,6 +114,20 @@ class S3ObjectStorage(ObjectStorage):
             )
         except (BotoCoreError, ClientError) as exc:
             raise StorageError("对象存储写入失败") from exc
+
+    def get_object(self, key: str) -> bytes:
+        try:
+            response = self._client.get_object(Bucket=self.bucket, Key=key)
+            body = response.get("Body")
+            if body is None:
+                raise StorageError("对象存储返回空响应")
+            return body.read()
+        except ClientError as exc:
+            if _error_code(exc) in {"NoSuchKey", "404", "NotFound"}:
+                raise StorageError("对象不存在") from exc
+            raise StorageError("对象存储读取失败") from exc
+        except BotoCoreError as exc:
+            raise StorageError("对象存储读取失败") from exc
 
     def delete(self, key: str) -> None:
         try:

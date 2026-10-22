@@ -50,6 +50,8 @@ adapters/
 
 当前所有 `_parse()` 都抛出 `FeatureNotReady`，具体解析逻辑后续实现。
 
+Worker 已接入解析服务；解析器或切分器抛出 `FeatureNotReady` 时，暂时保留原占位完成行为，避免上传链路回归。实现具体解析器后移除该兜底。
+
 ## 模型层
 
 - `model/document_chunk/`：`document_chunks` 的模型和 ORM；

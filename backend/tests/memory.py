@@ -13,6 +13,7 @@ from model.document import Document
 from model.document import orm as document_orm
 from services.common.exceptions import DuplicateRecord
 from services.common.exceptions import StateConflict
+from services.common.exceptions import StorageError
 from services.common.exceptions import UploadNotFound
 from services.common.object_storage import MultipartUploadInfo
 from services.common.object_storage import ObjectStorage
@@ -35,6 +36,12 @@ class MemoryObjectStorage(ObjectStorage):
     def put(self, key: str, content: bytes, content_type: str) -> None:
         del content_type
         self.objects[key] = content
+
+    def get_object(self, key: str) -> bytes:
+        content = self.objects.get(key)
+        if content is None:
+            raise StorageError("对象不存在")
+        return content
 
     def delete(self, key: str) -> None:
         self.objects.pop(key, None)
