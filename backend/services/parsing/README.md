@@ -49,7 +49,7 @@ adapters/
 
 适配器由解析器内部默认创建，调用方不需要传；测试或替换实现时可以通过构造函数注入。
 
-当前所有 `_parse()` 都抛出 `FeatureNotReady`，具体解析逻辑后续实现。
+Markdown 原样保留文本。其余 `_parse()` 仍抛出 `FeatureNotReady`。
 
 Worker 已接入解析服务。解析、上传或落库抛出 `FeatureNotReady` 时，暂时把任务标成完成，避免上传链路回归。实现具体解析器后移除该兜底。
 
