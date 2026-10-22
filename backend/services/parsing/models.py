@@ -3,6 +3,7 @@
 
 from dataclasses import dataclass
 from dataclasses import field
+from pathlib import Path
 from typing import Literal
 
 from model.document_chunk.model import DocumentChunk
@@ -20,6 +21,14 @@ class ParseRequest:
     file_type: str
     filename: str
     size_bytes: int
+
+
+@dataclass(frozen=True)
+class ParseInput:
+    """解析器实际读取的本地源文件。"""
+
+    request: ParseRequest
+    source_path: Path
 
 
 @dataclass

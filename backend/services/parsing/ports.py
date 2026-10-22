@@ -13,7 +13,7 @@ from model.document_chunk.model import DocumentChunk
 from model.document_task.model import DocumentTask
 from model.document_task.model import DocumentTaskStage
 from services.parsing.models import ChunkOptions
-from services.parsing.models import ParseRequest
+from services.parsing.models import ParseInput
 from services.parsing.models import ParsedDocument
 
 
@@ -102,7 +102,7 @@ class DocumentParser(Protocol):
     def supports(self, file_type: str) -> bool:
         ...
 
-    def parse(self, request: ParseRequest) -> ParsedDocument:
+    def parse(self, source: ParseInput) -> ParsedDocument:
         ...
 
 

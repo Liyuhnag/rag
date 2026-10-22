@@ -4,16 +4,14 @@
 这里只做解析、切分和落库；任务领取、状态流转和异常重试由 task 层编排。
 """
 
-from collections.abc import Mapping
-
 from services.common.exceptions import FeatureNotReady
 from services.parsing.models import ChunkOptions
 from services.parsing.models import DocumentChunk
-from services.parsing.models import ParseRequest
+from services.parsing.models import ParseInput
 from services.parsing.models import ParsedDocument
+from services.parsing.parsers.registry import ParserRegistry
 from services.parsing.ports import ChunkStore
 from services.parsing.ports import DocumentChunker
-from services.parsing.ports import DocumentParser
 from services.parsing.ports import ObjectReader
 
 
@@ -25,7 +23,7 @@ class DocumentParsingService:
         *,
         objects: ObjectReader,
         chunks: ChunkStore,
-        parsers: Mapping[str, DocumentParser],
+        parsers: ParserRegistry,
         chunker: DocumentChunker,
         chunk_options: ChunkOptions | None = None,
     ) -> None:
@@ -35,7 +33,7 @@ class DocumentParsingService:
         self._chunker = chunker
         self._chunk_options = chunk_options or ChunkOptions()
 
-    def parse(self, request: ParseRequest) -> ParsedDocument:
+    def parse(self, source: ParseInput) -> ParsedDocument:
         """按文件类型选择解析器并解析源文件。"""
         raise FeatureNotReady("文档解析服务尚未实现：parse")
 
