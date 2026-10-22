@@ -9,14 +9,6 @@ def not_found() -> AppError:
     return AppError(404, "NOT_FOUND", "文档不存在")
 
 
-def empty_file() -> AppError:
-    return AppError(422, "EMPTY_FILE", "文件内容为空")
-
-
-def file_too_large() -> AppError:
-    return AppError(413, "FILE_TOO_LARGE", "文件大小超出限制")
-
-
 def invalid_filename() -> AppError:
     return AppError(422, "VALIDATION_ERROR", "文件名不合法")
 

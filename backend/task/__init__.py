@@ -9,10 +9,8 @@ from task.maintenance import recover_completing_uploads
 from task.maintenance import redispatch_pending_tasks
 from task.maintenance import retry_aborting_uploads
 from task.parse_document import parse_document
-from task.upload import accept_upload
 
 __all__ = [
-    "accept_upload",
     "cleanup_old_sessions",
     "cleanup_orphan_mpu",
     "cleanup_orphan_object",

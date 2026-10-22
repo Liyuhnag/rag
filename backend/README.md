@@ -9,12 +9,10 @@ Python 环境使用 [uv](https://docs.astral.sh/uv/)。解释器版本见 `.pyth
 ```bash
 cd backend
 uv sync --all-groups
-uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
-uv run celery -A main.celery_app worker --loglevel=info -Q celery
-uv run celery -A main.celery_app worker --loglevel=info -Q maintenance --concurrency=1
-uv run celery -A main.celery_app beat --loglevel=info
-uv run celery -A main.celery_app flower
+./start.sh
 ```
+
+`start.sh` 会拉起接口、解析 worker、维护 worker、定时任务和 Flower。Ctrl+C 会停掉这次启动的全部进程。接口默认 `0.0.0.0:8000`，可用 `API_PORT` 改端口。
 
 接口进程、Celery worker、beat 和 Flower 要在同一台机器上。上传分片由 API 直接写入对象存储；解析任务走 `celery` 队列，补投和清理任务走独立的 `maintenance` 队列。Redis 只监听 `127.0.0.1:6379`。Flower 监控页是 `http://<主机>:5555`，登录账号在 `FLOWER_BASIC_AUTH`。
 
@@ -32,7 +30,6 @@ uv run pytest
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `MAX_UPLOAD_BYTES` | `20971520` | 单个文件上限，20MB |
 | `MAX_DOCUMENT_BYTES` | `1048576000` | 大文件上传上限，1000MiB |
 | `UPLOAD_CHUNK_BYTES` | `8388608` | 分片大小，8MiB |
 | `UPLOAD_SESSION_TTL_HOURS` | `24` | 上传会话有效期 |
@@ -53,7 +50,6 @@ uv run pytest
 | `MYSQL_PASSWORD` | 无 | 数据库密码 |
 | `MYSQL_DATABASE` | 无 | 数据库名 |
 | `REDIS_URL` | `redis://127.0.0.1:6379/0` | Celery 队列地址 |
-| `TASK_QUEUE_LIMIT` | `200` | 等待中的任务达到此数量时拒绝新上传 |
 | `FLOWER_BASIC_AUTH` | 无 | Flower 登录，格式 `用户名:密码` |
 | `FLOWER_ADDRESS` | `0.0.0.0` | Flower 监听地址 |
 | `FLOWER_PORT` | `5555` | Flower 端口 |
@@ -75,12 +71,11 @@ uv run pytest
 | --- | --- | --- |
 | `GET` | `/api/health` | 健康检查 |
 | `GET` | `/api/documents` | 分页返回已上传文档 |
-| `POST` | `/api/documents` | 校验文件后提交异步处理，返回任务。队列已满返回 429，队列不可用返回 503 |
-| `GET` | `/api/tasks/{id}` | 返回异步任务状态；完成后带有文档 ID |
+| `GET` | `/api/tasks/{id}` | 返回解析任务状态 |
 | `GET` | `/api/documents/{id}` | 返回一条文档记录 |
 | `DELETE` | `/api/documents/{id}` | 删除文档记录和对象 |
 | `POST` | `/api/chat` | 校验问题后返回 `501`，检索生成尚未接入 |
 
 允许的扩展名：`pdf`、`md`、`markdown`、`doc`、`docx`、`txt`、`xls`、`xlsx`、`csv`。
 
-列表查询参数为 `page`、`pageSize`、`sortBy`、`sortOrder`。上传表单字段为 `file`。这些成功响应的字段结构已经写在 OpenAPI 里。
+列表查询参数为 `page`、`pageSize`、`sortBy`、`sortOrder`。文件通过 `/api/uploads` 分片上传。这些成功响应的字段结构已经写在 OpenAPI 里。

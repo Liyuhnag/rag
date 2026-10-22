@@ -8,7 +8,6 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 
-DEFAULT_MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 DEFAULT_MAX_DOCUMENT_BYTES = 1000 * 1024 * 1024
 DEFAULT_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
 DEFAULT_UPLOAD_SESSION_TTL_HOURS = 24
@@ -17,7 +16,6 @@ DEFAULT_ORPHAN_MPU_GRACE_HOURS = 24
 DEFAULT_ORPHAN_OBJECT_RETENTION_DAYS = 7
 DEFAULT_SESSION_RETENTION_DAYS = 30
 DEFAULT_CLEANUP_BATCH_SIZE = 50
-DEFAULT_TASK_QUEUE_LIMIT = 200
 ALLOWED_FILE_TYPES = frozenset(
     {
         "pdf",
@@ -73,7 +71,6 @@ def _first_present(*names: str) -> str:
 class Settings:
     """API 进程使用的配置。"""
 
-    max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES
     max_document_bytes: int = DEFAULT_MAX_DOCUMENT_BYTES
     upload_chunk_bytes: int = DEFAULT_UPLOAD_CHUNK_BYTES
     upload_session_ttl_hours: int = DEFAULT_UPLOAD_SESSION_TTL_HOURS
@@ -98,23 +95,11 @@ class Settings:
     mysql_database: str = ""
     file_base_url: str = ""
     redis_url: str = "redis://127.0.0.1:6379/0"
-    task_queue_limit: int = DEFAULT_TASK_QUEUE_LIMIT
 
 
 def load_settings() -> Settings:
     """从环境变量构造配置。非法数值在启动时直接失败。"""
     load_dotenv(ENV_FILE, override=False)
-    raw_max = os.getenv(
-        "MAX_UPLOAD_BYTES",
-        str(DEFAULT_MAX_UPLOAD_BYTES),
-    )
-    try:
-        max_upload_bytes = int(raw_max)
-    except ValueError as exc:
-        raise RuntimeError("MAX_UPLOAD_BYTES 必须是整数") from exc
-    if max_upload_bytes < 1:
-        raise RuntimeError("MAX_UPLOAD_BYTES 必须大于 0")
-
     raw_max_document = os.getenv(
         "MAX_DOCUMENT_BYTES",
         str(DEFAULT_MAX_DOCUMENT_BYTES),
@@ -175,16 +160,6 @@ def load_settings() -> Settings:
     redis_url = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0").strip()
     if not redis_url:
         raise RuntimeError("REDIS_URL 不能为空")
-    raw_queue_limit = os.getenv(
-        "TASK_QUEUE_LIMIT",
-        str(DEFAULT_TASK_QUEUE_LIMIT),
-    )
-    try:
-        task_queue_limit = int(raw_queue_limit)
-    except ValueError as exc:
-        raise RuntimeError("TASK_QUEUE_LIMIT 必须是整数") from exc
-    if task_queue_limit < 1:
-        raise RuntimeError("TASK_QUEUE_LIMIT 必须大于 0")
 
     raw_port = os.getenv("MYSQL_PORT", "3306").strip()
     try:
@@ -195,7 +170,6 @@ def load_settings() -> Settings:
         raise RuntimeError("MYSQL_PORT 必须在 1 到 65535 之间")
 
     return Settings(
-        max_upload_bytes=max_upload_bytes,
         max_document_bytes=max_document_bytes,
         upload_chunk_bytes=upload_chunk_bytes,
         upload_session_ttl_hours=upload_session_ttl_hours,
@@ -223,5 +197,4 @@ def load_settings() -> Settings:
         mysql_database=_required("MYSQL_DATABASE"),
         file_base_url=file_base_url,
         redis_url=redis_url,
-        task_queue_limit=task_queue_limit,
     )

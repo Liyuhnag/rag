@@ -5,12 +5,13 @@ from types import SimpleNamespace
 
 from services.parsing import dispatch as task_dispatch
 from task import maintenance
+from task.parse_document import parse_document
 
 
 def test_dispatch_task_success(monkeypatch):
     calls: list[str] = []
     monkeypatch.setattr(
-        task_dispatch.parse_document,
+        parse_document,
         "delay",
         lambda task_id: calls.append(task_id),
     )
@@ -23,7 +24,7 @@ def test_dispatch_task_swallows_broker_error(monkeypatch):
     def boom(_task_id: str) -> None:
         raise RuntimeError("redis down")
 
-    monkeypatch.setattr(task_dispatch.parse_document, "delay", boom)
+    monkeypatch.setattr(parse_document, "delay", boom)
 
     assert task_dispatch.dispatch_task("task-2") is False
 

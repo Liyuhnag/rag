@@ -41,3 +41,4 @@ backend/data/
 # Temporary files
 *.tmp
 *.temp
+backend/.run/

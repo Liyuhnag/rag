@@ -7,6 +7,3 @@ export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localho
 
 // 请求超时时间（毫秒）
 export const REQUEST_TIMEOUT = 30000
-
-// 文件上传超时时间（毫秒）
-export const UPLOAD_TIMEOUT = 300000

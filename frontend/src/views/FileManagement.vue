@@ -56,7 +56,6 @@ const columnWidths = ref({
   name: 3,
   type: 0.8,
   size: 0.8,
-  chunks: 0.8,
   time: 1.5,
   actions: 0.8
 })
@@ -68,7 +67,7 @@ const startWidth = ref(0)
 const tableRef = ref(null)
 const nextColumn = ref(null)
 const startNextWidth = ref(0)
-const columnOrder = ['name', 'type', 'size', 'chunks', 'time', 'actions']
+const columnOrder = ['name', 'type', 'size', 'time', 'actions']
 
 const startResize = (column, event) => {
   if (!tableRef.value) return
@@ -118,7 +117,7 @@ const stopResize = () => {
 }
 
 const gridTemplateColumns = computed(() => {
-  return `${columnWidths.value.name}fr ${columnWidths.value.type}fr ${columnWidths.value.size}fr ${columnWidths.value.chunks}fr ${columnWidths.value.time}fr ${columnWidths.value.actions}fr`
+  return `${columnWidths.value.name}fr ${columnWidths.value.type}fr ${columnWidths.value.size}fr ${columnWidths.value.time}fr ${columnWidths.value.actions}fr`
 })
 
 // === 当前页的文件列表 ===
@@ -345,7 +344,6 @@ const loadFiles = async () => {
       name: doc.name,
       type: doc.type,
       size: formatFileSize(doc.sizeBytes),
-      chunks: doc.chunkCount,
       status: doc.status.toLowerCase(),
       uploadedAt: formatDateTime(doc.uploadedAt),
       operator: doc.operator || 'Unknown',
@@ -402,10 +400,6 @@ onMounted(() => {
             <div class="resize-handle" @mousedown="startResize('size', $event)"></div>
           </div>
           <div class="header-cell">
-            <span>分块数</span>
-            <div class="resize-handle" @mousedown="startResize('chunks', $event)"></div>
-          </div>
-          <div class="header-cell">
             <span>上传时间</span>
             <div class="resize-handle" @mousedown="startResize('time', $event)"></div>
           </div>
@@ -445,7 +439,6 @@ onMounted(() => {
               </span>
             </div>
             <div class="cell cell-size">{{ file.size }}</div>
-            <div class="cell cell-chunks">{{ file.chunks }}</div>
             <div class="cell cell-time">{{ file.uploadedAt }}</div>
             <div class="cell cell-actions">
               <button
