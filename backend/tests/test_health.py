@@ -19,3 +19,14 @@ def test_health_allows_frontend_origin(client):
     assert response.headers["access-control-allow-origin"] == (
         "http://localhost:5173"
     )
+
+
+def test_health_allows_local_frontend_on_another_port(client):
+    response = client.get(
+        "/api/health",
+        headers={"Origin": "http://127.0.0.1:5174"},
+    )
+
+    assert response.headers["access-control-allow-origin"] == (
+        "http://127.0.0.1:5174"
+    )

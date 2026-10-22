@@ -1,0 +1,46 @@
+# -*- coding: utf-8 -*-
+"""文档异步处理。先写入对象存储和文档记录。"""
+
+from pathlib import Path
+
+from celery.exceptions import SoftTimeLimitExceeded
+
+from model.task import orm as task_orm
+from services.document import store as document_store
+from task.app import celery_app
+
+
+@celery_app.task(
+    name="rag.process_document",
+    ignore_result=True,
+    soft_time_limit=60,
+    time_limit=90,
+)
+def process_document(task_id: str) -> None:
+    """执行一条文档处理任务。
+
+    当前完成对象存储和文档入库。文本分块、向量化接在这次入库之后。
+    """
+    task = task_orm.get(task_id)
+    if task is None:
+        return
+    path = Path(task.temp_path)
+    if not path.is_file():
+        task_orm.fail(task_id, "临时文件不存在")
+        return
+    try:
+        task_orm.set_status(task_id, "STORING")
+        document = document_store.add(
+            task.name,
+            task.file_type,
+            path.read_bytes(),
+        )
+        task_orm.finish(task_id, document.id)
+    except Exception as exc:
+        message = "处理超时" if isinstance(exc, SoftTimeLimitExceeded) else (
+            str(exc) or "处理失败"
+        )
+        task_orm.fail(task_id, message)
+        path.unlink(missing_ok=True)
+        raise
+    path.unlink(missing_ok=True)

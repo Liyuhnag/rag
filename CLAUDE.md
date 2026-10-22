@@ -19,10 +19,14 @@ RAG (Retrieval-Augmented Generation) 智能对话系统，通过向量检索技�
 
 ### 后端技术（规划中）
 - **语言**：Python 3.10+
+- **Web 框架**：FastAPI
 - **向量数据库**：Chroma / Pinecone / Milvus（待选型）
 - **LLM 接口**：Anthropic Claude API / OpenAI API
 - **文档处理**：LangChain / LlamaIndex
 - **向量模型**：sentence-transformers
+- **任务队列**：Celery + Redis / RQ（异步处理）
+- **消息代理**：Redis
+- **进度通知**：WebSocket / SSE（Server-Sent Events）
 
 ## Git 工作流规范
 
@@ -472,3 +476,463 @@ npm run build
 - 类名：PascalCase（`VectorStore`）
 - 函数/变量：snake_case（`get_embeddings`）
 - 常量：UPPER_SNAKE_CASE（`MAX_CHUNK_SIZE`）
+
+## 异步上传处理方案
+
+### 业务场景
+
+大文件上传后需要经过耗时的处理流程：
+1. 文件解析（PDF、Word 等格式）
+2. 文本分块（按语义切分）
+3. 向量化（调用 embedding 模型）
+4. 向量存储（写入向量数据库）
+
+这些操作可能需要数十秒甚至数分钟，不能让前端同步等待。
+
+### 架构设计
+
+#### 方案对比
+
+| 方案 | 技术栈 | 优点 | 缺点 | 推荐场景 |
+|------|--------|------|------|----------|
+| **Celery + Redis** | Celery 分布式任务队列 | 成熟稳定、功能强大、支持分布式 | 依赖重、配置复杂 | 生产环境、大规模任务 |
+| **RQ** | Python-RQ 轻量任务队列 | 简单易用、纯 Python | 功能较少、不支持复杂调度 | 小型项目、快速开发 |
+| **FastAPI BackgroundTasks** | FastAPI 内置 | 无额外依赖、配置简单 | 不持久化、重启丢失任务 | 简单异步、MVP 阶段 |
+| **asyncio + 数据库** | 纯 Python 异步 | 无外部依赖 | 需要自己实现队列逻辑 | 特殊场景 |
+
+**推荐方案：**
+- **MVP 阶段**：FastAPI BackgroundTasks（快速验证）
+- **生产环境**：Celery + Redis（稳定可靠）
+
+### 实现方案
+
+#### 阶段一：FastAPI BackgroundTasks（MVP）
+
+```python
+# api/documents.py
+from fastapi import BackgroundTasks, UploadFile
+from services.document_processor import process_document
+
+@app.post("/documents")
+async def upload_document(
+    file: UploadFile,
+    background_tasks: BackgroundTasks
+):
+    # 1. 保存文件到临时目录
+    file_path = await save_upload_file(file)
+
+    # 2. 创建任务记录
+    task = await db.tasks.create({
+        "filename": file.filename,
+        "status": "pending",
+        "progress": 0
+    })
+
+    # 3. 添加后台任务
+    background_tasks.add_task(
+        process_document,
+        task_id=task.id,
+        file_path=file_path
+    )
+
+    # 4. 立即返回
+    return {
+        "task_id": task.id,
+        "status": "pending",
+        "message": "文件上传成功，正在处理中"
+    }
+
+# 查询任务状态
+@app.get("/tasks/{task_id}")
+async def get_task_status(task_id: str):
+    task = await db.tasks.get(task_id)
+    return {
+        "task_id": task.id,
+        "status": task.status,  # pending/processing/completed/failed
+        "progress": task.progress,  # 0-100
+        "result": task.result,
+        "error": task.error
+    }
+```
+
+**前端轮询：**
+```javascript
+// 上传文件
+const { task_id } = await uploadDocument(file)
+
+// 轮询任务状态
+const pollTaskStatus = setInterval(async () => {
+  const { status, progress } = await getTaskStatus(task_id)
+
+  if (status === 'completed') {
+    clearInterval(pollTaskStatus)
+    showToast('success', '文件处理完成')
+  } else if (status === 'failed') {
+    clearInterval(pollTaskStatus)
+    showToast('error', '文件处理失败')
+  } else {
+    updateProgress(progress)
+  }
+}, 2000) // 每 2 秒轮询一次
+```
+
+**限制：**
+- ❌ 服务重启后任务丢失
+- ❌ 无法分布式部署
+- ❌ 无任务优先级、重试机制
+- ✅ 适合 MVP 快速验证
+
+#### 阶段二：Celery + Redis（生产环境）
+
+**架构图：**
+```
+前端上传文件
+  ↓
+FastAPI 接收文件，创建任务
+  ↓
+Celery 任务队列（Redis）
+  ↓
+Celery Worker 异步处理
+  ↓
+更新任务状态到数据库
+  ↓
+前端轮询/WebSocket 获取进度
+```
+
+**后端实现：**
+
+```python
+# celery_app.py
+from celery import Celery
+
+celery_app = Celery(
+    "rag",
+    broker="redis://localhost:6379/0",
+    backend="redis://localhost:6379/1"
+)
+
+celery_app.conf.update(
+    task_serializer='json',
+    result_serializer='json',
+    accept_content=['json'],
+    timezone='Asia/Shanghai',
+    enable_utc=True,
+)
+
+# tasks/document_tasks.py
+from celery_app import celery_app
+from services.document_processor import DocumentProcessor
+
+@celery_app.task(bind=True)
+def process_document_task(self, task_id: str, file_path: str):
+    """
+    异步处理文档
+    self: Celery task 实例，用于更新进度
+    """
+    processor = DocumentProcessor()
+
+    try:
+        # 更新状态：处理中
+        self.update_state(
+            state='PROCESSING',
+            meta={'progress': 0, 'step': '解析文档'}
+        )
+
+        # 1. 解析文档
+        text = processor.parse_document(file_path)
+        self.update_state(
+            state='PROCESSING',
+            meta={'progress': 25, 'step': '文本分块'}
+        )
+
+        # 2. 文本分块
+        chunks = processor.split_text(text)
+        self.update_state(
+            state='PROCESSING',
+            meta={'progress': 50, 'step': '向量化'}
+        )
+
+        # 3. 向量化
+        embeddings = processor.get_embeddings(chunks)
+        self.update_state(
+            state='PROCESSING',
+            meta={'progress': 75, 'step': '存储向量'}
+        )
+
+        # 4. 存储向量
+        document_id = processor.store_vectors(
+            task_id, chunks, embeddings
+        )
+
+        # 5. 清理临时文件
+        os.remove(file_path)
+
+        return {
+            'status': 'completed',
+            'document_id': document_id,
+            'chunks_count': len(chunks)
+        }
+
+    except Exception as e:
+        # 失败处理
+        self.update_state(
+            state='FAILURE',
+            meta={'error': str(e)}
+        )
+        raise
+
+# api/documents.py
+from tasks.document_tasks import process_document_task
+
+@app.post("/documents")
+async def upload_document(file: UploadFile):
+    # 1. 保存文件
+    file_path = await save_upload_file(file)
+
+    # 2. 创建任务记录
+    task = await db.tasks.create({
+        "filename": file.filename,
+        "status": "pending"
+    })
+
+    # 3. 提交 Celery 任务
+    celery_task = process_document_task.apply_async(
+        args=[task.id, file_path],
+        task_id=task.id
+    )
+
+    return {
+        "task_id": celery_task.id,
+        "status": "pending"
+    }
+
+@app.get("/tasks/{task_id}")
+async def get_task_status(task_id: str):
+    # 从 Celery 获取任务状态
+    task_result = celery_app.AsyncResult(task_id)
+
+    if task_result.state == 'PENDING':
+        response = {
+            'status': 'pending',
+            'progress': 0
+        }
+    elif task_result.state == 'PROCESSING':
+        response = {
+            'status': 'processing',
+            'progress': task_result.info.get('progress', 0),
+            'step': task_result.info.get('step', '')
+        }
+    elif task_result.state == 'SUCCESS':
+        response = {
+            'status': 'completed',
+            'progress': 100,
+            'result': task_result.result
+        }
+    elif task_result.state == 'FAILURE':
+        response = {
+            'status': 'failed',
+            'error': str(task_result.info)
+        }
+
+    return response
+```
+
+**启动 Worker：**
+```bash
+# 启动 Celery Worker
+celery -A celery_app worker --loglevel=info
+
+# 启动 Flower（Web 监控界面）
+celery -A celery_app flower
+```
+
+**优点：**
+- ✅ 任务持久化（Redis 做 broker 和 backend）
+- ✅ 支持分布式部署（多个 Worker）
+- ✅ 自动重试、优先级队列
+- ✅ 任务监控（Flower）
+- ✅ 生产环境稳定可靠
+
+#### 阶段三：WebSocket 实时推送（可选）
+
+替代轮询，使用 WebSocket 实时推送进度：
+
+```python
+# api/websocket.py
+from fastapi import WebSocket
+
+@app.websocket("/ws/tasks/{task_id}")
+async def task_progress_websocket(
+    websocket: WebSocket,
+    task_id: str
+):
+    await websocket.accept()
+
+    try:
+        while True:
+            # 获取任务最新状态
+            task_result = celery_app.AsyncResult(task_id)
+
+            # 推送状态
+            await websocket.send_json({
+                'status': task_result.state,
+                'progress': task_result.info.get('progress', 0),
+                'step': task_result.info.get('step', '')
+            })
+
+            # 任务完成或失败，关闭连接
+            if task_result.state in ['SUCCESS', 'FAILURE']:
+                break
+
+            await asyncio.sleep(1)
+
+    except WebSocketDisconnect:
+        pass
+```
+
+**前端 WebSocket：**
+```javascript
+const ws = new WebSocket(`ws://localhost:8000/ws/tasks/${taskId}`)
+
+ws.onmessage = (event) => {
+  const { status, progress, step } = JSON.parse(event.data)
+
+  if (status === 'SUCCESS') {
+    showToast('success', '处理完成')
+    ws.close()
+  } else {
+    updateProgress(progress, step)
+  }
+}
+```
+
+### 数据库表结构
+
+```sql
+-- 任务表
+CREATE TABLE tasks (
+    id VARCHAR(36) PRIMARY KEY,
+    filename VARCHAR(255) NOT NULL,
+    file_size BIGINT,
+    status VARCHAR(20) NOT NULL,  -- pending/processing/completed/failed
+    progress INT DEFAULT 0,
+    step VARCHAR(100),
+    document_id VARCHAR(36),
+    chunks_count INT,
+    error TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+-- 文档表
+CREATE TABLE documents (
+    id VARCHAR(36) PRIMARY KEY,
+    task_id VARCHAR(36),
+    filename VARCHAR(255),
+    file_type VARCHAR(20),
+    chunks_count INT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (task_id) REFERENCES tasks(id)
+);
+```
+
+### 前端改造
+
+**API 调用：**
+```javascript
+// api/tasks.js
+export async function getTaskStatus(taskId) {
+  return get(`/tasks/${taskId}`)
+}
+
+// composables/useUploadManager.js
+async function startUpload(task) {
+  task.status = UPLOAD_STATUS.UPLOADING
+
+  try {
+    // 1. 上传文件，获取 task_id
+    const { task_id } = await uploadDocument(task.file, config.operator)
+    task.taskId = task_id
+
+    // 2. 轮询任务状态
+    const pollInterval = setInterval(async () => {
+      const result = await getTaskStatus(task_id)
+
+      task.progress = result.progress
+      task.step = result.step
+
+      if (result.status === 'completed') {
+        clearInterval(pollInterval)
+        task.status = UPLOAD_STATUS.SUCCESS
+        task.documentId = result.result.document_id
+      } else if (result.status === 'failed') {
+        clearInterval(pollInterval)
+        task.status = UPLOAD_STATUS.ERROR
+        task.error = result.error
+      }
+    }, 2000)
+
+  } catch (error) {
+    task.status = UPLOAD_STATUS.ERROR
+    task.error = error.message
+  }
+}
+```
+
+### 部署架构
+
+```
+┌─────────────┐
+│   Nginx     │  反向代理
+└──────┬──────┘
+       │
+┌──────▼──────┐
+│   FastAPI   │  Web 服务（多实例）
+└──────┬──────┘
+       │
+┌──────▼──────┐
+│    Redis    │  消息队列 + 任务状态存储
+└──────┬──────┘
+       │
+┌──────▼──────┐
+│   Celery    │  异步 Worker（多实例）
+│   Worker    │
+└──────┬──────┘
+       │
+┌──────▼──────┐
+│   Chroma    │  向量数据库
+└─────────────┘
+```
+
+### 监控与运维
+
+**Celery Flower 监控：**
+- 访问 `http://localhost:5555`
+- 查看任务队列、执行状态、Worker 状态
+- 手动重试失败任务
+
+**日志记录：**
+```python
+import logging
+
+logger = logging.getLogger(__name__)
+
+@celery_app.task(bind=True)
+def process_document_task(self, task_id: str, file_path: str):
+    logger.info(f"开始处理文档: {task_id}")
+
+    try:
+        # 处理逻辑
+        logger.info(f"文档处理完成: {task_id}")
+    except Exception as e:
+        logger.error(f"文档处理失败: {task_id}, 错误: {str(e)}")
+        raise
+```
+
+### 性能优化
+
+1. **批量处理** - 多个文档合并成一个批次向量化
+2. **Worker 并发** - 根据服务器资源调整 Worker 数量
+3. **任务优先级** - 小文件优先处理
+4. **缓存** - 相同文件检测（文件 hash），避免重复处理
+5. **限流** - 控制上传频率，防止队列堵塞

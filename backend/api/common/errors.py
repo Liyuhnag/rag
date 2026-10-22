@@ -10,7 +10,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from api.common.schemas import error_payload
+from services.common.exceptions import BrokerUnavailable
 from services.common.exceptions import FeatureNotReady
+from services.common.exceptions import QueueFull
 from services.common.exceptions import StorageError
 
 logger = logging.getLogger("rag.api")
@@ -65,6 +67,33 @@ def register_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=502,
             content=error_payload("STORAGE_UNAVAILABLE", exc.message),
+        )
+
+    @app.exception_handler(QueueFull)
+    async def handle_queue_full(
+        request: Request,
+        exc: QueueFull,
+    ) -> JSONResponse:
+        del request
+        return JSONResponse(
+            status_code=429,
+            content=error_payload("QUEUE_FULL", exc.message),
+        )
+
+    @app.exception_handler(BrokerUnavailable)
+    async def handle_broker_unavailable(
+        request: Request,
+        exc: BrokerUnavailable,
+    ) -> JSONResponse:
+        logger.error(
+            "broker unavailable on %s %s: %s",
+            request.method,
+            request.url.path,
+            exc.message,
+        )
+        return JSONResponse(
+            status_code=503,
+            content=error_payload("BROKER_UNAVAILABLE", exc.message),
         )
 
     @app.exception_handler(FeatureNotReady)

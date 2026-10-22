@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""FastAPI 应用入口。"""
+"""应用入口。HTTP 服务和 Celery 都从这里启动。"""
 
 import logging
 from collections.abc import Callable
@@ -11,12 +11,17 @@ from api.chat import router as chat_router
 from api.common.errors import register_exception_handlers
 from api.documents import router as document_router
 from api.health import router as health_router
+from api.tasks import router as task_router
+from api.uploads import router as upload_router
 from config import Settings
 from config import load_settings
 from services.chat.service import ChatService
-from services.common import connect_storage
+from services.common.connect import connect_storage
+from task.app import celery_app
 
 logger = logging.getLogger("rag.api")
+
+__all__ = ["celery_app", "create_app"]
 
 
 def create_app(
@@ -35,8 +40,9 @@ def create_app(
     application.add_middleware(
         CORSMiddleware,
         allow_origins=list(active.cors_origins),
+        allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
         allow_credentials=False,
-        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["*"],
     )
 
@@ -50,6 +56,8 @@ def create_app(
 
     application.include_router(health_router, prefix="/api")
     application.include_router(document_router, prefix="/api")
+    application.include_router(upload_router, prefix="/api")
+    application.include_router(task_router, prefix="/api")
     application.include_router(chat_router, prefix="/api")
     logger.debug("RAG API ready")
     return application
@@ -58,7 +66,13 @@ def create_app(
 def __getattr__(name: str) -> FastAPI:
     """uvicorn 读取 main:app 时再连接存储，避免导入模块就建连。"""
     if name == "app":
-        application = create_app()
+        try:
+            application = create_app()
+        except AttributeError:
+            # uvicorn 会把这里的 AttributeError 误报成“没有 app”，
+            # 先记录真实堆栈，避免错误被掩盖。
+            logger.exception("创建 FastAPI 应用失败")
+            raise
         globals()["app"] = application
         return application
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

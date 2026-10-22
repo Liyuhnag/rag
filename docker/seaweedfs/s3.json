@@ -1,0 +1,14 @@
+{
+  "identities": [
+    {
+      "name": "rag-admin",
+      "credentials": [
+        {
+          "accessKey": "rag-admin",
+          "secretKey": "rag-dev-secret"
+        }
+      ],
+      "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+    }
+  ]
+}

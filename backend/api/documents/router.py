@@ -17,11 +17,14 @@ from api.documents.schemas import DocumentListResponse
 from api.documents.schemas import DocumentResponse
 from api.documents.schemas import to_document_list
 from api.documents.schemas import to_document_response
+from api.tasks.schemas import TaskResponse
+from api.tasks.schemas import to_task_response
 from api.documents.validators import extract_file_type
 from api.documents.validators import normalize_filename
 from api.documents.validators import read_upload
 from config import Settings
 from services.document import store as document_store
+from task import accept_upload
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -49,16 +52,17 @@ def list_documents(
     )
 
 
-@router.post("", response_model=DocumentResponse, status_code=201)
+@router.post("", response_model=TaskResponse, status_code=202)
 async def upload_document(
     file: UploadFile = File(...),
     settings: Settings = Depends(get_settings),
-) -> DocumentResponse:
-    """上传一个文档。
+) -> TaskResponse:
+    """接收一个文档并提交异步处理。
 
     表单字段 file 为文件。
-    文件写入对象存储，记录写入数据库，成功返回 201。
+    请求只保存临时文件并返回任务，对象存储和文档记录由任务写入。
     空文件返回 422，超过大小限制返回 413。
+    等待中的任务达到上限返回 429，任务队列查不到返回 503。
     """
     filename = normalize_filename(file.filename)
     file_type = extract_file_type(filename)
@@ -66,12 +70,13 @@ async def upload_document(
         content = await read_upload(file, settings.max_upload_bytes)
     finally:
         await file.close()
-    record = document_store.add(
-        name=filename,
-        file_type=file_type,
-        content=content,
+    task = accept_upload(
+        filename,
+        file_type,
+        content,
+        settings.task_queue_limit,
     )
-    return to_document_response(record)
+    return to_task_response(task)
 
 
 @router.get("/{document_id}", response_model=DocumentResponse)
