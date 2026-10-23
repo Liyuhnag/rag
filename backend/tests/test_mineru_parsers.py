@@ -19,7 +19,6 @@ from services.parsing.models import ParseSubmission
 from services.parsing.models import ParsedDocument
 from services.parsing.parsers.doc import DocParser
 from services.parsing.parsers.docx import DocxParser
-from services.parsing.parsers.pdf import PdfParser
 from services.parsing.service import DocumentParsingService
 from services.parsing.service import FinishedParse
 from services.parsing.service import SubmittedParse
@@ -63,7 +62,6 @@ def _source(file_type: str, size_bytes: int) -> ParseInput:
 @pytest.mark.parametrize(
     ("parser_cls", "file_type", "message"),
     [
-        (PdfParser, "pdf", "需要先拆分"),
         (DocParser, "doc", "不能直接提交"),
         (DocxParser, "docx", "不能直接提交"),
     ],
@@ -83,7 +81,6 @@ def test_recorded_size_is_rejected_before_reading(parser_cls, file_type, message
 @pytest.mark.parametrize(
     ("parser_cls", "file_type"),
     [
-        (PdfParser, "pdf"),
         (DocParser, "doc"),
         (DocxParser, "docx"),
     ],
@@ -103,7 +100,6 @@ def test_actual_size_is_rejected_after_reading(parser_cls, file_type):
 @pytest.mark.parametrize(
     ("parser_cls", "file_type"),
     [
-        (PdfParser, "pdf"),
         (DocParser, "doc"),
         (DocxParser, "docx"),
     ],
@@ -128,10 +124,10 @@ def test_file_within_limit_is_submitted(parser_cls, file_type):
 def test_service_turns_submission_into_submitted_parse(monkeypatch):
     class _Parser:
         def parse(self, source: ParseInput) -> ParseSubmission:
-            return PdfParser(
+            return DocxParser(
                 mineru=_MinerU(),
-                reader=_Reader(b"pdf"),
-                max_bytes=4,
+                reader=_Reader(b"word"),
+                max_bytes=8,
             ).parse(source)
 
     class _Registry:
@@ -139,7 +135,7 @@ def test_service_turns_submission_into_submitted_parse(monkeypatch):
             return _Parser()
 
     monkeypatch.setattr(parsing_service, "build_default_registry", lambda: _Registry())
-    document = _document("pdf", 3)
+    document = _document("docx", 4)
 
     outcome = DocumentParsingService().parse(document, 2)
 

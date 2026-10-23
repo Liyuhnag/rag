@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """对象存储适配器。"""
 
+from pathlib import Path
+
 from services.common.object_storage import client as storage_client
 
 
@@ -10,6 +12,10 @@ class StorageObjectReader:
     def read_object(self, key: str) -> bytes:
         """读取完整对象。"""
         return storage_client().get_object(key)
+
+    def download_object(self, key: str, path: Path) -> None:
+        """把对象下载到本地文件。"""
+        storage_client().download(key, str(path))
 
     def write_object(self, key: str, content: bytes, content_type: str) -> None:
         """写入解析产物。"""

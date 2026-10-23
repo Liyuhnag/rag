@@ -43,6 +43,10 @@ class MemoryObjectStorage(ObjectStorage):
             raise StorageError("对象不存在")
         return content
 
+    def download(self, key: str, path: str) -> None:
+        with open(path, "wb") as handle:
+            handle.write(self.get_object(key))
+
     def delete(self, key: str) -> None:
         self.objects.pop(key, None)
 

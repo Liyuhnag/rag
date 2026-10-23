@@ -36,6 +36,9 @@ class ObjectStorage:
     def get_object(self, key: str) -> bytes:
         raise NotImplementedError
 
+    def download(self, key: str, path: str) -> None:
+        raise NotImplementedError
+
     def delete(self, key: str) -> None:
         raise NotImplementedError
 
@@ -122,6 +125,17 @@ class S3ObjectStorage(ObjectStorage):
             if body is None:
                 raise StorageError("对象存储返回空响应")
             return body.read()
+        except ClientError as exc:
+            if _error_code(exc) in {"NoSuchKey", "404", "NotFound"}:
+                raise StorageError("对象不存在") from exc
+            raise StorageError("对象存储读取失败") from exc
+        except BotoCoreError as exc:
+            raise StorageError("对象存储读取失败") from exc
+
+    def download(self, key: str, path: str) -> None:
+        """把对象下载到本地文件，避免整份读进内存。"""
+        try:
+            self._client.download_file(self.bucket, key, path)
         except ClientError as exc:
             if _error_code(exc) in {"NoSuchKey", "404", "NotFound"}:
                 raise StorageError("对象不存在") from exc

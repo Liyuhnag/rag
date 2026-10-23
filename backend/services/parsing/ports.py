@@ -6,6 +6,7 @@
 """
 
 from datetime import datetime
+from pathlib import Path
 from typing import Protocol
 
 from model.document.model import Document
@@ -21,6 +22,10 @@ class ObjectReader(Protocol):
 
     def read_object(self, key: str) -> bytes:
         """读取完整对象。"""
+        ...
+
+    def download_object(self, key: str, path: Path) -> None:
+        """把对象下载到本地文件。"""
         ...
 
     def write_object(self, key: str, content: bytes, content_type: str) -> None:

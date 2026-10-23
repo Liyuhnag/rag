@@ -24,7 +24,8 @@ parsers/
 ├── xlsx.py           # XlsxParser
 ├── docx.py           # DocxParser
 ├── doc.py            # DocParser
-└── pdf.py            # PdfParser
+├── pdf.py            # PdfParser
+└── pdf_split.py      # 按页和大小拆分 PDF
 ```
 
 ## MinerU
@@ -54,7 +55,7 @@ adapters/
 
 适配器由解析器内部默认创建，调用方不需要传；测试或替换实现时可以通过构造函数注入。
 
-Markdown 原样保留文本。TXT 把标题作为一级标题，正文按空行保留段落。CSV 和 XLSX 按表头转成 JSON 对象数组。PDF、DOC 和 DOCX 先在解析器里判断是否超过 180MiB，不超过就交给 MinerU 提交后返回，不等待解析结束。
+Markdown 原样保留文本。TXT 把标题作为一级标题，正文按空行保留段落。CSV 和 XLSX 按表头转成 JSON 对象数组。PDF 先下载到本地，超过 180 页或 180MiB 就按页拆开，再逐段交给 MinerU。DOC 和 DOCX 超过 180MiB 直接失败。提交后不等待解析结束。
 
 Worker 已接入解析服务。解析、上传或落库抛出 `FeatureNotReady` 时，暂时把任务标成完成，避免上传链路回归。实现具体解析器后移除该兜底。
 
@@ -79,5 +80,5 @@ DocumentParsingService
 
 ## 待实现
 
-1. PDF 超过 180MiB 时拆分，以及 MinerU 轮询和结果合并；
+1. MinerU 轮询和分段结果合并；
 2. 实现解析产物上传和落库。
