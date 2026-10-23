@@ -4,6 +4,7 @@
 import hashlib
 from datetime import datetime
 from datetime import timezone
+from pathlib import Path
 
 import pytest
 
@@ -32,6 +33,10 @@ class _Reader:
     def read_object(self, key: str) -> bytes:
         self.reads += 1
         return self.content
+
+    def download_object(self, key: str, path: Path) -> None:
+        self.reads += 1
+        path.write_bytes(self.content)
 
     def write_object(self, key: str, content: bytes, content_type: str) -> None:
         raise AssertionError("解析时不应写对象")

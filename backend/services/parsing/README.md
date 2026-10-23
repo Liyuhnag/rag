@@ -11,6 +11,7 @@
 | `service.py` | `DocumentParsingService`：解析、上传、落库 |
 | `dispatch.py` | 只负责把 `document_tasks` 投递到解析 Worker |
 | `errors.py` | 解析业务异常 |
+| `merge.py` | 按页码把分段 Markdown 合成一份 |
 
 ## 解析器
 
@@ -24,6 +25,7 @@ parsers/
 ├── xlsx.py           # XlsxParser
 ├── docx.py           # DocxParser
 ├── doc.py            # DocParser
+├── office.py         # Word 下载后整份提交
 ├── pdf.py            # PdfParser
 └── pdf_split.py      # 按页和大小拆分 PDF
 ```
@@ -55,7 +57,7 @@ adapters/
 
 适配器由解析器内部默认创建，调用方不需要传；测试或替换实现时可以通过构造函数注入。
 
-Markdown 原样保留文本。TXT 把标题作为一级标题，正文按空行保留段落。CSV 和 XLSX 按表头转成 JSON 对象数组。PDF 先下载到本地，超过 180 页或 180MiB 就按页拆开，再逐段交给 MinerU。DOC 和 DOCX 超过 180MiB 直接失败。提交后不等待解析结束。
+Markdown 原样保留文本。TXT 把标题作为一级标题，正文按空行保留段落。CSV 和 XLSX 按表头转成 JSON 对象数组。PDF 先下载到本地，超过 180 页或 180MiB 就按页拆开，再逐段交给 MinerU。DOC 和 DOCX 同样先下载，不超过 180MiB 就整份提交，超过则失败。PDF 分段和 Word 的 Markdown 都按起始页合成一份，并在每页前写入 `<!-- page: N -->`。提交后不等待解析结束。
 
 Worker 已接入解析服务。解析、上传或落库抛出 `FeatureNotReady` 时，暂时把任务标成完成，避免上传链路回归。实现具体解析器后移除该兜底。
 
