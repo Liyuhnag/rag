@@ -2,11 +2,13 @@
 """parse_jobs 表的 SQL。"""
 
 from datetime import datetime
+from datetime import timedelta
 
 from model.common.database import as_aware
 from model.common.database import as_utc
 from model.common.database import execute
 from model.common.database import execute_count
+from model.common.database import transaction
 from model.parse_job.model import ParseJob
 from model.parse_job.model import ParseJobStatus
 
@@ -148,6 +150,135 @@ def set_status(
             "now": as_utc(now),
         },
     )
+
+
+def claim_due(now: datetime, limit: int) -> list[ParseJob]:
+    """领取到期的分段，并把下次轮询时间往后推，避免两个调度同时查。"""
+    if limit <= 0:
+        return []
+    poll_lease = now + timedelta(seconds=10)
+    download_lease = now + timedelta(seconds=300)
+    with transaction() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT * FROM parse_jobs
+                WHERE next_poll_at IS NOT NULL
+                  AND next_poll_at <= %(now)s
+                  AND (
+                    status IN ('SUBMITTED', 'RUNNING')
+                    OR (status = 'DOWNLOADING' AND result_key IS NULL)
+                  )
+                ORDER BY next_poll_at
+                LIMIT %(limit)s
+                FOR UPDATE SKIP LOCKED
+                """,
+                {"now": as_utc(now), "limit": limit},
+            )
+            rows = list(cursor.fetchall())
+            if not rows:
+                return []
+            holders = ", ".join(f"%(id_{index})s" for index in range(len(rows)))
+            params: dict[str, object] = {
+                f"id_{index}": row["id"] for index, row in enumerate(rows)
+            }
+            params["poll_lease"] = as_utc(poll_lease)
+            params["download_lease"] = as_utc(download_lease)
+            params["now"] = as_utc(now)
+            cursor.execute(
+                f"""
+                UPDATE parse_jobs
+                SET next_poll_at = CASE
+                        WHEN status = 'DOWNLOADING' THEN %(download_lease)s
+                        ELSE %(poll_lease)s
+                    END,
+                    updated_at = %(now)s
+                WHERE id IN ({holders})
+                """,
+                params,
+            )
+    return [_from_row(row) for row in rows]
+
+
+def mark_retry(
+    job_id: str,
+    next_poll_at: datetime,
+    error_message: str | None,
+    now: datetime,
+) -> None:
+    """安排重新提交。轮询先跳过这段，等提交任务写回新的 job id。"""
+    execute_count(
+        """
+        UPDATE parse_jobs
+        SET status = %(status)s,
+            next_poll_at = %(next_poll_at)s,
+            error_message = %(error_message)s,
+            updated_at = %(now)s
+        WHERE id = %(id)s
+        """,
+        {
+            "id": job_id,
+            "status": ParseJobStatus.SUBMITTED.value,
+            "next_poll_at": as_utc(next_poll_at),
+            "error_message": error_message,
+            "now": as_utc(now),
+        },
+    )
+
+
+def record_submission(
+    job_id: str,
+    previous_job_id: str | None,
+    file_id: str,
+    mineru_job_id: str,
+    next_poll_at: datetime,
+    now: datetime,
+) -> bool:
+    """重新提交成功后写回 MinerU 编号。旧编号已被替换时不再加次数。"""
+    count = execute_count(
+        """
+        UPDATE parse_jobs
+        SET mineru_file_id = %(file_id)s,
+            mineru_job_id = %(mineru_job_id)s,
+            status = %(status)s,
+            attempts = attempts + 1,
+            next_poll_at = %(next_poll_at)s,
+            error_message = NULL,
+            updated_at = %(now)s
+        WHERE id = %(id)s
+          AND mineru_job_id <=> %(previous_job_id)s
+        """,
+        {
+            "id": job_id,
+            "previous_job_id": previous_job_id,
+            "file_id": file_id,
+            "mineru_job_id": mineru_job_id,
+            "status": ParseJobStatus.SUBMITTED.value,
+            "next_poll_at": as_utc(next_poll_at),
+            "now": as_utc(now),
+        },
+    )
+    return count == 1
+
+
+def save_zip(job_id: str, zip_key: str, now: datetime) -> bool:
+    """记下已下载的压缩包。只有第一次写入成功。"""
+    count = execute_count(
+        """
+        UPDATE parse_jobs
+        SET result_key = %(zip_key)s,
+            updated_at = %(now)s
+        WHERE id = %(id)s
+          AND status = 'DOWNLOADING'
+          AND result_key IS NULL
+        """,
+        {
+            "id": job_id,
+            "zip_key": zip_key,
+            "now": as_utc(now),
+        },
+    )
+    return count == 1
 
 
 def record_result(job_id: str, result_key: str, now: datetime) -> None:

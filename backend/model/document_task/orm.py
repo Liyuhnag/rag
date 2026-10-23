@@ -115,6 +115,28 @@ def update_progress(
     )
 
 
+def begin_merge(task_id: str, now: datetime) -> bool:
+    """只有一个调度能把解析阶段推进到合并。"""
+    count = execute_count(
+        """
+        UPDATE document_tasks
+        SET stage = %(stage)s,
+            progress = 80,
+            step = '正在合并',
+            updated_at = %(now)s
+        WHERE id = %(id)s
+          AND status = 'RUNNING'
+          AND stage = 'PARSING'
+        """,
+        {
+            "id": task_id,
+            "stage": DocumentTaskStage.MERGING.value,
+            "now": as_utc(now),
+        },
+    )
+    return count == 1
+
+
 def complete(task_id: str, step: str, now: datetime) -> None:
     """把 RUNNING 任务推进到 COMPLETED/DONE。"""
     execute_count(

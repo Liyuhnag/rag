@@ -73,6 +73,10 @@ celery_app.conf.beat_schedule = {
         "task": "rag.redispatch_pending_tasks",
         "schedule": 300.0,
     },
+    "poll-parse-jobs": {
+        "task": "rag.poll_parse_jobs",
+        "schedule": 10.0,
+    },
 }
 
 

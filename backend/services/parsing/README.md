@@ -1,6 +1,6 @@
 # 文档解析服务
 
-本目录把源文件解析成 `ParsedDocument`，再上传解析产物并写入数据库。父子块切分在 `services/chunking`。任务领取、状态流转和 Celery 适配由 `task/parse_document.py` 编排。
+本目录把源文件解析成 `ParsedDocument`，再上传解析产物并写入数据库。父子块切分在 `services/chunking`。任务领取、状态流转和 Celery 适配由 `task/parse_document.py` 编排。完整过程见 [文件解析实现说明](../../../docs/design/文件解析实现说明.md)。
 
 ## 文件
 
@@ -12,6 +12,8 @@
 | `dispatch.py` | 只负责把 `document_tasks` 投递到解析 Worker |
 | `errors.py` | 解析业务异常 |
 | `merge.py` | 按页码把分段 Markdown 合成一份 |
+| `collect.py` | 收集分段结果，合并后生成对象存储文件 |
+| `poll.py` | 轮询 MinerU、重新提交、下载并在分段到齐后合并 |
 
 ## 解析器
 
@@ -59,7 +61,7 @@ adapters/
 
 Markdown 原样保留文本。TXT 把标题作为一级标题，正文按空行保留段落。CSV 和 XLSX 按表头转成 JSON 对象数组。PDF 先下载到本地，超过 180 页或 180MiB 就按页拆开，再逐段交给 MinerU。DOC 和 DOCX 同样先下载，不超过 180MiB 就整份提交，超过则失败。PDF 分段和 Word 的 Markdown 都按起始页合成一份，并在每页前写入 `<!-- page: N -->`。提交后不等待解析结束。
 
-Worker 已接入解析服务。解析、上传或落库抛出 `FeatureNotReady` 时，暂时把任务标成完成，避免上传链路回归。实现具体解析器后移除该兜底。
+Worker 已接入解析服务。本地解析结果会写入 `documents/{文档}/parsed/{版本}/merged.md`。MinerU 分段提交后由维护任务每 10 秒轮询。状态为完成时，解析 Worker 下载 `result.zip`。同一版本的分段都下载后合并写入同一位置，并带上图片。MinerU 失败或任务丢失时，最多再提交两次。
 
 ## 模型层
 
@@ -75,12 +77,12 @@ task/parse_document.py
     -> 解析已完成时：upload()、persist()
     -> 分段已提交时：写入 parse_jobs，记录进度并返回
 
+task/poll_parse.py
+    -> 每 10 秒查询 SUBMITTED、RUNNING 的分段
+    -> 完成后下载 result.zip
+    -> 分段到齐后 DocumentParsingService.collect()
+
 DocumentParsingService
     -> ParserRegistry
     -> 解析器自行读取对象存储
 ```
-
-## 待实现
-
-1. MinerU 轮询和分段结果合并；
-2. 实现解析产物上传和落库。
