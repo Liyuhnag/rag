@@ -139,7 +139,7 @@ def test_service_turns_submission_into_submitted_parse(monkeypatch):
         def get(self, file_type: str) -> _Parser:
             return _Parser()
 
-    monkeypatch.setattr(parsing_service, "build_default_registry", lambda: _Registry())
+    monkeypatch.setattr(parsing_service, "build_default_registry", lambda **kwargs: _Registry())
     document = _document("docx", 4)
 
     outcome = DocumentParsingService().parse(document, 2)
@@ -170,7 +170,7 @@ def test_service_keeps_finished_parse(monkeypatch):
         def get(self, file_type: str) -> _Parser:
             return _Parser()
 
-    monkeypatch.setattr(parsing_service, "build_default_registry", lambda: _Registry())
+    monkeypatch.setattr(parsing_service, "build_default_registry", lambda **kwargs: _Registry())
 
     outcome = DocumentParsingService().parse(_document("txt", 3), 1)
 

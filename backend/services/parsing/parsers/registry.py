@@ -7,6 +7,7 @@
 from collections.abc import Iterable
 
 from services.parsing.errors import UnsupportedFileType
+from services.parsing.ports import ObjectReader
 from services.parsing.parsers.base import BaseParser
 from services.parsing.parsers.csv import CsvParser
 from services.parsing.parsers.doc import DocParser
@@ -47,18 +48,18 @@ class ParserRegistry:
         return file_type in self._parsers
 
 
-def build_default_registry() -> ParserRegistry:
+def build_default_registry(reader: ObjectReader | None = None) -> ParserRegistry:
     """构造默认解析器集合。"""
     registry = ParserRegistry()
     registry.register_all(
         [
-            TxtParser(),
-            MarkdownParser(),
-            CsvParser(),
-            XlsxParser(),
-            PdfParser(),
-            DocxParser(),
-            DocParser(),
+            TxtParser(reader),
+            MarkdownParser(reader),
+            CsvParser(reader),
+            XlsxParser(reader),
+            PdfParser(reader=reader),
+            DocxParser(reader=reader),
+            DocParser(reader=reader),
         ]
     )
     return registry

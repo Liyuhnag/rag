@@ -4,6 +4,10 @@
 import io
 import json
 import zipfile
+from collections.abc import Iterator
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from xml.etree.ElementTree import ParseError
 from datetime import date
 from datetime import datetime
 from math import isfinite
@@ -14,10 +18,12 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from services.parsing.adapters.object_reader import StorageObjectReader
 from services.parsing.errors import ParseFailed
+from services.parsing.errors import UnsupportedFileType
 from services.parsing.models import ParseInput
 from services.parsing.models import ParsedBlock
 from services.parsing.models import ParsedDocument
 from services.parsing.parsers.base import BaseParser
+from services.parsing.parsers._xlsx_stream import iter_xlsx
 from services.parsing.ports import ObjectReader
 
 _MAX_SHEETS = 50
@@ -41,13 +47,45 @@ class XlsxParser(BaseParser):
         max_columns: int = _MAX_COLUMNS,
         max_cells: int = _MAX_CELLS,
         max_uncompressed: int = _MAX_UNCOMPRESSED,
+        batch_rows: int = 128,
     ) -> None:
+        if batch_rows < 1:
+            raise ValueError("batch_rows 必须大于 0")
+        self._batch_rows = batch_rows
         self._reader = reader or StorageObjectReader()
         self._max_sheets = max_sheets
         self._max_rows = max_rows
         self._max_columns = max_columns
         self._max_cells = max_cells
         self._max_uncompressed = max_uncompressed
+
+    def iter_blocks(self, source: ParseInput) -> Iterator[ParsedBlock]:
+        """下载后借助临时 SQLite 逐批输出；调用方应关闭提前结束的迭代器。"""
+        if not self.supports(source.request.file_type):
+            raise UnsupportedFileType(
+                f"解析器不支持文件类型: {source.request.file_type}"
+            )
+        with TemporaryDirectory(prefix="rag-xlsx-") as directory:
+            path = Path(directory) / "source.xlsx"
+            self._reader.download_object(source.request.object_key, path)
+            try:
+                yield from iter_xlsx(
+                    path,
+                    Path(directory) / "index.sqlite",
+                    self,
+                    _value,
+                    (_headers, _extend_headers, _check_cells),
+                )
+            except (
+                zipfile.BadZipFile,
+                ParseError,
+                ValueError,
+                KeyError,
+                IndexError,
+                OSError,
+                OverflowError,
+            ) as exc:
+                raise ParseFailed("XLSX 无法解析") from exc
 
     def _parse(self, source: ParseInput) -> ParsedDocument:
         raw = self._reader.read_object(source.request.object_key)

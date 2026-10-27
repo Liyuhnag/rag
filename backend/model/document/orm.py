@@ -148,12 +148,13 @@ def exists(document_id: str) -> bool:
     )
     return bool(rows)
 
+
 def begin_parse(
     document_id: str,
     parse_version: int,
     now: datetime,
 ) -> None:
-    """开始一个新解析版本：置 PROCESSING 并记录 parse_version。"""
+    """开始解析版本，仅允许同版本重试或版本递增。"""
     execute(
         """
         UPDATE documents
@@ -161,7 +162,7 @@ def begin_parse(
             parse_version = %(parse_version)s,
             error_message = NULL,
             updated_at = %(now)s
-        WHERE id = %(id)s
+        WHERE id = %(id)s AND parse_version <= %(parse_version)s
         """,
         {
             "id": document_id,
@@ -201,22 +202,26 @@ def mark_failed(
     document_id: str,
     message: str,
     now: datetime,
+    *,
+    expected_version: int | None = None,
 ) -> None:
-    """解析或索引失败：置 FAILED 并记录原因。"""
-    execute(
-        """
+    """记录失败；指定版本时避免旧任务覆盖新版本状态。"""
+    sql = """
         UPDATE documents
         SET status = 'FAILED',
             error_message = %(message)s,
             updated_at = %(now)s
         WHERE id = %(id)s
-        """,
-        {
-            "id": document_id,
-            "message": message[:1024],
-            "now": as_utc(now),
-        },
-    )
+    """
+    params: dict[str, object] = {
+        "id": document_id,
+        "message": message[:1024],
+        "now": as_utc(now),
+    }
+    if expected_version is not None:
+        sql += " AND parse_version = %(expected_version)s"
+        params["expected_version"] = expected_version
+    execute(sql, params)
 
 
 def set_parsed_artifacts(
@@ -224,20 +229,24 @@ def set_parsed_artifacts(
     parsed_md_key: str | None,
     parsed_json_key: str | None,
     now: datetime,
+    *,
+    expected_version: int | None = None,
 ) -> None:
-    """记录解析产物对象 key，便于重试和回溯。"""
-    execute(
-        """
+    """记录解析产物；指定版本时仅更新仍处于该版本的文档。"""
+    sql = """
         UPDATE documents
         SET parsed_md_key = %(parsed_md_key)s,
             parsed_json_key = %(parsed_json_key)s,
             updated_at = %(now)s
         WHERE id = %(id)s
-        """,
-        {
-            "id": document_id,
-            "parsed_md_key": parsed_md_key,
-            "parsed_json_key": parsed_json_key,
-            "now": as_utc(now),
-        },
-    )
+    """
+    params: dict[str, object] = {
+        "id": document_id,
+        "parsed_md_key": parsed_md_key,
+        "parsed_json_key": parsed_json_key,
+        "now": as_utc(now),
+    }
+    if expected_version is not None:
+        sql += " AND parse_version = %(expected_version)s"
+        params["expected_version"] = expected_version
+    execute(sql, params)

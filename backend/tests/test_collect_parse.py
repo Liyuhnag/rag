@@ -27,6 +27,9 @@ class _Store:
     def download_object(self, key: str, path: Path) -> None:
         path.write_bytes(self.read_object(key))
 
+    def upload_file(self, key: str, path: Path, content_type: str) -> None:
+        self.write_object(key, path.read_bytes(), content_type)
+
     def write_object(self, key: str, content: bytes, content_type: str) -> None:
         self.objects[key] = (content, content_type)
 
@@ -34,6 +37,25 @@ class _Store:
 def test_mineru_parts_are_merged_and_stored():
     store = _Store()
     service = DocumentParsingService(reader=store)
+    store.objects["part2"] = (
+        _zip(
+            {
+                "content.md": "后半\n\n![图](images/b.png)".encode(),
+                "images/b.png": b"png-b",
+            }
+        ),
+        "application/zip",
+    )
+    store.objects["part1"] = (
+        _zip(
+            {
+                "auto/demo.md": "前半\n\n![图](images/a.png)".encode(),
+                "auto/images/a.png": b"png-a",
+                "auto/content.json": b"{}",
+            }
+        ),
+        "application/zip",
+    )
     result = service.collect(
         "doc-1",
         2,
@@ -44,24 +66,13 @@ def test_mineru_parts_are_merged_and_stored():
                 part_index=2,
                 page_start=3,
                 page_end=4,
-                content=_zip(
-                    {
-                        "content.md": "后半\n\n![图](images/b.png)".encode(),
-                        "images/b.png": b"png-b",
-                    }
-                ),
+                result_key="part2",
             ),
             PartZip(
                 part_index=1,
                 page_start=1,
                 page_end=2,
-                content=_zip(
-                    {
-                        "auto/demo.md": "前半\n\n![图](images/a.png)".encode(),
-                        "auto/images/a.png": b"png-a",
-                        "auto/content.json": b"{}",
-                    }
-                ),
+                result_key="part1",
             ),
         ],
     )
@@ -77,15 +88,11 @@ def test_mineru_parts_are_merged_and_stored():
         "![图](assets/part-2/images/b.png)\n"
     )
     assert (
-        store.objects[
-            "documents/doc-1/parsed/2/assets/part-1/images/a.png"
-        ][0]
+        store.objects["documents/doc-1/parsed/2/assets/part-1/images/a.png"][0]
         == b"png-a"
     )
     assert (
-        store.objects[
-            "documents/doc-1/parsed/2/assets/part-2/images/b.png"
-        ][0]
+        store.objects["documents/doc-1/parsed/2/assets/part-2/images/b.png"][0]
         == b"png-b"
     )
     assert result.part_results == (
@@ -100,9 +107,7 @@ def test_mineru_parts_are_merged_and_stored():
     )
     saved = json.loads(store.objects[result.json_key][0])
     assert saved["page_count"] == 4
-    assert store.objects[
-        "documents/doc-1/parse/2/parts/1/content.json"
-    ][0] == b"{}"
+    assert store.objects["documents/doc-1/parse/2/parts/1/content.json"][0] == b"{}"
 
 
 def test_local_document_is_stored_without_page_markers():
@@ -135,8 +140,8 @@ def test_persist_records_artifact_keys(monkeypatch):
     monkeypatch.setattr(
         parsing_service.document_orm,
         "set_parsed_artifacts",
-        lambda document_id, md_key, json_key, now: recorded.append(
-            (document_id, md_key, json_key)
+        lambda document_id, md_key, json_key, now, **kwargs: recorded.append(
+            (document_id, md_key, json_key, kwargs["expected_version"])
         ),
     )
     parsed = ParsedDocument(
@@ -156,11 +161,13 @@ def test_persist_records_artifact_keys(monkeypatch):
         parsing_service.StoredParseResult("md-key", "json-key"),
     )
 
-    assert recorded == [("doc-1", "md-key", "json-key")]
+    assert recorded == [("doc-1", "md-key", "json-key", 1)]
 
 
 def test_unsafe_zip_is_rejected():
-    service = DocumentParsingService(reader=_Store())
+    store = _Store()
+    store.objects["zip"] = (_zip({"../evil.md": b"x"}), "application/zip")
+    service = DocumentParsingService(reader=store)
 
     with pytest.raises(ParseFailed, match="路径不安全"):
         service.collect(
@@ -168,12 +175,14 @@ def test_unsafe_zip_is_rejected():
             1,
             "pdf",
             "documents/doc-1/source/demo.pdf",
-            [PartZip(1, 1, 1, _zip({"../evil.md": b"x"}))],
+            [PartZip(1, 1, 1, "zip")],
         )
 
 
 def test_zip_without_markdown_is_rejected():
-    service = DocumentParsingService(reader=_Store())
+    store = _Store()
+    store.objects["zip"] = (_zip({"images/a.png": b"png"}), "application/zip")
+    service = DocumentParsingService(reader=store)
 
     with pytest.raises(ParseFailed, match="没有 Markdown"):
         service.collect(
@@ -181,7 +190,7 @@ def test_zip_without_markdown_is_rejected():
             1,
             "pdf",
             "documents/doc-1/source/demo.pdf",
-            [PartZip(1, 1, 1, _zip({"images/a.png": b"png"}))],
+            [PartZip(1, 1, 1, "zip")],
         )
 
 

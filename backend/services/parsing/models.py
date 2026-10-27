@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """文档解析服务的数据结构。"""
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from dataclasses import field
 from typing import Literal
@@ -42,11 +43,11 @@ class ParsedBlock:
 
 @dataclass
 class ParsedDocument:
-    """一个文档版本的完整解析结果。"""
+    """一个文档版本的块流。blocks 可能只能消费一次，调用方负责关闭迭代器。"""
 
     request: ParseRequest
     title: str
-    blocks: list[ParsedBlock] = field(default_factory=list)
+    blocks: Iterable[ParsedBlock] = field(default_factory=list)
     metadata: dict[str, object] = field(default_factory=dict)
 
 

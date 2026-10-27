@@ -67,7 +67,9 @@ def parse_document(task_id: str) -> None:
         message = str(exc) or "解析失败"
         logger.exception("解析任务失败: %s", task_id)
         task_orm.fail(task_id, message, now)
-        document_orm.mark_failed(document.id, message, now)
+        document_orm.mark_failed(
+            document.id, message, now, expected_version=task.version
+        )
         raise
 
 

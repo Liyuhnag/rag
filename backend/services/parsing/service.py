@@ -9,14 +9,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
+from pathlib import Path
 
 from model.document import orm as document_orm
 from model.document.model import Document
 from services.parsing.adapters.object_reader import StorageObjectReader
-from services.parsing.collect import CollectedParse
 from services.parsing.collect import PartZip
-from services.parsing.collect import StoredObject
-from services.parsing.collect import collect_document
 from services.parsing.collect import collect_parts
 from services.parsing.models import ParseInput
 from services.parsing.models import ParseRequest
@@ -71,7 +69,14 @@ class DocumentParsingService:
             filename=document.name,
             size_bytes=document.size_bytes,
         )
-        parser = build_default_registry().get(document.file_type)
+        parser = build_default_registry(reader=self._reader).get(document.file_type)
+        if hasattr(parser, "iter_blocks"):
+            parsed = ParsedDocument(
+                request=request,
+                title=Path(document.name).stem,
+                blocks=parser.iter_blocks(ParseInput(request)),
+            )
+            return FinishedParse(parsed)
         outcome = parser.parse(ParseInput(request=request))
         if isinstance(outcome, ParseSubmission):
             return SubmittedParse(parts=outcome.parts)
@@ -79,7 +84,12 @@ class DocumentParsingService:
 
     def upload(self, parsed: ParsedDocument) -> StoredParseResult:
         """把本地解析结果合并后写入对象存储。"""
-        return self._store(collect_document(parsed, _now()))
+        from services.parsing.local_artifacts import store_document
+
+        keys = store_document(parsed, self._reader, _now())
+        return StoredParseResult(
+            keys.md_key, keys.json_key, keys.manifest_key, keys.part_results
+        )
 
     def collect(
         self,
@@ -97,8 +107,14 @@ class DocumentParsingService:
             source_key,
             parts,
             _now(),
+            self._reader,
         )
-        return self._store(collected)
+        return StoredParseResult(
+            collected.md_key,
+            collected.json_key,
+            collected.manifest_key,
+            collected.part_results,
+        )
 
     def persist(
         self,
@@ -111,23 +127,8 @@ class DocumentParsingService:
             stored.md_key,
             stored.json_key,
             _now(),
+            expected_version=parsed.request.version,
         )
-
-    def _store(self, collected: CollectedParse) -> StoredParseResult:
-        """把收集结果写入对象存储。"""
-        self._write(collected.objects)
-        keys = collected.result
-        return StoredParseResult(
-            md_key=keys.md_key,
-            json_key=keys.json_key,
-            manifest_key=keys.manifest_key,
-            part_results=keys.part_results,
-        )
-
-    def _write(self, objects: Sequence[StoredObject]) -> None:
-        """按清单逐个写入。"""
-        for item in objects:
-            self._reader.write_object(item.key, item.body, item.content_type)
 
 
 def _now() -> datetime:

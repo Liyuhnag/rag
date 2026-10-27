@@ -5,12 +5,16 @@ import csv
 import io
 import json
 import re
+from collections.abc import Iterator
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from services.parsing.adapters.object_reader import StorageObjectReader
 from services.parsing.errors import ParseFailed
 from services.parsing.models import ParseInput
 from services.parsing.models import ParsedBlock
 from services.parsing.models import ParsedDocument
+from services.parsing.parsers._text_stream import file_encoding
 from services.parsing.parsers.base import BaseParser
 from services.parsing.ports import ObjectReader
 
@@ -36,6 +40,22 @@ class CsvParser(BaseParser):
         self._reader = reader or StorageObjectReader()
         self._max_rows = max_rows
         self._max_cells = max_cells
+
+    def iter_blocks(self, source: ParseInput) -> Iterator[ParsedBlock]:
+        """两遍扫描确定动态表头，逐行输出，单记录最多 1Mi 字符。"""
+        from services.parsing.parsers._csv_stream import iter_tables
+
+        with TemporaryDirectory(prefix="parse-csv-") as directory:
+            path = Path(directory) / "source"
+            self._reader.download_object(source.request.object_key, path)
+            encoding = file_encoding(path, "CSV", allow_gbk=True)
+            yield from iter_tables(
+                path,
+                encoding,
+                _title(source.request.filename),
+                self._max_rows,
+                self._max_cells,
+            )
 
     def _parse(self, source: ParseInput) -> ParsedDocument:
         raw = self._reader.read_object(source.request.object_key)
@@ -79,9 +99,7 @@ def _decode(raw: bytes) -> str:
 def _detect_delimiter(text: str) -> str:
     """在逗号、制表符和分号中选择表头行出现最多的分隔符。"""
     line = next((item for item in text.splitlines() if item.strip()), "")
-    counts = {
-        delimiter: _count_unquoted(line, delimiter) for delimiter in _DELIMITERS
-    }
+    counts = {delimiter: _count_unquoted(line, delimiter) for delimiter in _DELIMITERS}
     chosen = max(counts, key=lambda delimiter: counts[delimiter])
     if counts[chosen] == 0:
         return ","

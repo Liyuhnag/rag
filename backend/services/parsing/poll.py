@@ -234,7 +234,7 @@ def merge_ready(job: ParseJob, reader: ObjectReader, now: datetime) -> None:
                 part_index=item.part_index,
                 page_start=item.page_start,
                 page_end=item.page_end,
-                content=reader.read_object(item.result_key),
+                result_key=item.result_key,
             )
         )
     try:
@@ -250,6 +250,7 @@ def merge_ready(job: ParseJob, reader: ObjectReader, now: datetime) -> None:
             stored.md_key,
             stored.json_key,
             now,
+            expected_version=job.version,
         )
         keys = dict(stored.part_results)
         for item in jobs:
@@ -296,12 +297,14 @@ def _backoff(attempts: int) -> timedelta:
 
 
 def _submit_source(job, filename, mineru, reader):
-    content = reader.read_object(job.source_key)
-    digest = hashlib.sha256(content).hexdigest()
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / filename
-        path.write_bytes(content)
-        return mineru.submit(path, filename, digest)
+        reader.download_object(job.source_key, path)
+        digest = hashlib.sha256()
+        with path.open("rb") as source:
+            while chunk := source.read(65536):
+                digest.update(chunk)
+        return mineru.submit(path, filename, digest.hexdigest())
 
 
 def _store_zip(job, mineru, reader, now: datetime) -> bool:
@@ -310,7 +313,13 @@ def _store_zip(job, mineru, reader, now: datetime) -> bool:
         apply_plan(job, plan_lost(job, now), now)
         return False
     try:
-        body = _read_zip(mineru, job.mineru_job_id)
+        with tempfile.TemporaryDirectory() as directory:
+            path = mineru.download(job.mineru_job_id, Path(directory))
+            key = (
+                f"documents/{job.document_id}/parse/{job.version}"
+                f"/parts/{job.part_index}/result.zip"
+            )
+            reader.upload_file(key, path, "application/zip")
     except MinerUJobLost:
         apply_plan(job, plan_lost(job, now), now)
         return False
@@ -326,19 +335,19 @@ def _store_zip(job, mineru, reader, now: datetime) -> bool:
     except MinerURequestError as exc:
         apply_plan(job, plan_rejected(job, exc.message, now), now)
         return False
-    key = (
-        f"documents/{job.document_id}/parse/{job.version}"
-        f"/parts/{job.part_index}/result.zip"
-    )
-    reader.write_object(key, body, "application/zip")
+    except Exception as exc:
+        # 下载或对象存储故障走现有延迟重试。
+        logger.exception("下载或保存分段失败: %s", job.id)
+        parse_job_orm.set_status(
+            job.id,
+            ParseJobStatus.DOWNLOADING,
+            now,
+            now + _backoff(job.attempts),
+            str(exc) or "保存分段失败",
+        )
+        return False
     parse_job_orm.save_zip(job.id, key, now)
     return True
-
-
-def _read_zip(mineru: MinerUClient, job_id: str) -> bytes:
-    with tempfile.TemporaryDirectory() as directory:
-        path = mineru.download(job_id, Path(directory))
-        return path.read_bytes()
 
 
 def _all_downloaded(jobs: list[ParseJob]) -> bool:
@@ -352,7 +361,9 @@ def _all_downloaded(jobs: list[ParseJob]) -> bool:
 
 def _fail_document(job: ParseJob, message: str, now: datetime) -> None:
     task_orm.fail(job.task_id, message, now)
-    document_orm.mark_failed(job.document_id, message, now)
+    document_orm.mark_failed(
+        job.document_id, message, now, expected_version=job.version
+    )
 
 
 def _enqueue_download(job_id: str) -> None:

@@ -110,6 +110,9 @@ class _Reader:
         self.objects[key] = content
         self.written.append((key, content_type))
 
+    def upload_file(self, key, path, content_type):
+        self.write_object(key, path.read_bytes(), content_type)
+
     def download_object(self, key, path):
         path.write_bytes(self.objects[key])
 
@@ -187,7 +190,9 @@ def test_poll_lost_job_enqueues_resubmit(monkeypatch):
         "mark_retry",
         lambda job_id, next_poll_at, error, moment: retries.append(error),
     )
-    monkeypatch.setattr(poll, "_enqueue_resubmit", lambda job_id: downloads.append(job_id))
+    monkeypatch.setattr(
+        poll, "_enqueue_resubmit", lambda job_id: downloads.append(job_id)
+    )
     poll_job(_job(attempts=1), _Mineru(exc=MinerUJobLost("丢失")), now)
     assert retries == ["MinerU 任务不存在"]
     assert downloads == ["job-1"]
@@ -202,7 +207,7 @@ def test_poll_rejected_fails_document(monkeypatch):
         "fail",
         lambda task_id, message, moment: failed.append(message),
     )
-    monkeypatch.setattr(poll.document_orm, "mark_failed", lambda *args: None)
+    monkeypatch.setattr(poll.document_orm, "mark_failed", lambda *args, **kwargs: None)
     poll_job(_job(), _Mineru(exc=MinerURequestError("拒绝")), now)
     assert failed == ["拒绝"]
 
@@ -282,7 +287,11 @@ def test_download_waits_when_a_sibling_is_missing(monkeypatch):
         "list_by_document_version",
         lambda document_id, version: [job, sibling],
     )
-    monkeypatch.setattr(poll.task_orm, "begin_merge", lambda task_id, moment: merged.append(task_id) or True)
+    monkeypatch.setattr(
+        poll.task_orm,
+        "begin_merge",
+        lambda task_id, moment: merged.append(task_id) or True,
+    )
     download_job(job.id, _Mineru(body=b"PK"), reader, now)
     assert saved == ["documents/doc-1/parse/2/parts/1/result.zip"]
     assert reader.written[0][1] == "application/zip"
@@ -340,7 +349,7 @@ def test_download_merges_when_every_part_has_a_zip(monkeypatch):
     monkeypatch.setattr(
         poll.document_orm,
         "set_parsed_artifacts",
-        lambda document_id, md_key, json_key, moment: recorded.append(md_key),
+        lambda document_id, md_key, json_key, moment, **kwargs: recorded.append(md_key),
     )
     monkeypatch.setattr(
         poll.parse_job_orm,
@@ -392,7 +401,9 @@ def test_apply_failure_marks_job_and_document(monkeypatch):
     monkeypatch.setattr(
         poll.document_orm,
         "mark_failed",
-        lambda *args: marked.append("document"),
+        lambda *args, **kwargs: marked.append("document"),
     )
-    apply_plan(_job(attempts=3), plan_status(_job(attempts=3), "failed", "坏了", now), now)
+    apply_plan(
+        _job(attempts=3), plan_status(_job(attempts=3), "failed", "坏了", now), now
+    )
     assert marked == [ParseJobStatus.FAILED, "task", "document"]
