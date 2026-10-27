@@ -17,6 +17,10 @@ class StorageObjectReader:
         """把对象下载到本地文件。"""
         storage_client().download(key, str(path))
 
+    def upload_file(self, key: str, path: Path, content_type: str) -> None:
+        """从本地文件上传对象。"""
+        storage_client().upload_file(key, str(path), content_type)
+
     def write_object(self, key: str, content: bytes, content_type: str) -> None:
         """写入解析产物。"""
         storage_client().put(key, content, content_type)

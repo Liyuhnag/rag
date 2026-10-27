@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime
 
 import boto3
+from boto3.exceptions import S3UploadFailedError
+from boto3.s3.transfer import TransferConfig
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError
 from botocore.exceptions import ClientError
@@ -37,6 +39,9 @@ class ObjectStorage:
         raise NotImplementedError
 
     def download(self, key: str, path: str) -> None:
+        raise NotImplementedError
+
+    def upload_file(self, key: str, path: str, content_type: str) -> None:
         raise NotImplementedError
 
     def delete(self, key: str) -> None:
@@ -142,6 +147,19 @@ class S3ObjectStorage(ObjectStorage):
             raise StorageError("对象存储读取失败") from exc
         except BotoCoreError as exc:
             raise StorageError("对象存储读取失败") from exc
+
+    def upload_file(self, key: str, path: str, content_type: str) -> None:
+        """从本地文件上传对象。"""
+        try:
+            self._client.upload_file(
+                path,
+                self.bucket,
+                key,
+                ExtraArgs={"ContentType": content_type},
+                Config=TransferConfig(max_concurrency=1, use_threads=False),
+            )
+        except (BotoCoreError, ClientError, S3UploadFailedError, OSError) as exc:
+            raise StorageError("对象存储写入失败") from exc
 
     def delete(self, key: str) -> None:
         try:
@@ -294,9 +312,7 @@ class S3ObjectStorage(ObjectStorage):
                 if not response.get("IsTruncated"):
                     break
                 key_marker = str(response.get("NextKeyMarker", ""))
-                upload_id_marker = str(
-                    response.get("NextUploadIdMarker", "")
-                )
+                upload_id_marker = str(response.get("NextUploadIdMarker", ""))
         except (BotoCoreError, ClientError) as exc:
             raise StorageError("查询分片上传列表失败") from exc
         return uploads

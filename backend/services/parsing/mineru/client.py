@@ -13,8 +13,12 @@ import logging
 import os
 import time
 from collections.abc import Callable
+from collections.abc import Iterable
+from collections.abc import Iterator
 from dataclasses import dataclass
+from http.client import HTTPException
 from pathlib import Path
+from typing import BinaryIO
 from typing import Literal
 from typing import Protocol
 from urllib.error import HTTPError
@@ -36,6 +40,8 @@ _JOBS_PATH = "/v1/jobs"
 _READ_TIMEOUT = 60
 _TRANSFER_TIMEOUT = 300
 _MAX_ATTEMPTS = 3
+_TRANSFER_CHUNK_SIZE = 64 * 1024
+_MAX_JSON_RESPONSE = 1024 * 1024
 _RETRYABLE = frozenset({408, 429, 500, 502, 503, 504})
 MinerUState = Literal["queued", "running", "completed", "failed"]
 _STATES: dict[str, MinerUState] = {
@@ -71,17 +77,27 @@ class HttpResponse:
 
 
 class Transport(Protocol):
-    """发送一次 HTTP 请求。测试注入假实现，避免连真实 MinerU。"""
+    """控制面响应有界；上传 iterable 必须可重放并显式指定 Content-Length。"""
 
     def send(
         self,
         method: str,
         url: str,
         headers: dict[str, str],
-        body: bytes | None,
+        body: bytes | Iterable[bytes] | None,
         timeout: float,
     ) -> HttpResponse:
         """返回响应。连接失败时抛出 OSError。"""
+        ...
+
+    def download(
+        self,
+        url: str,
+        headers: dict[str, str],
+        target: Path,
+        timeout: float,
+    ) -> HttpResponse:
+        """流式写入 target，成功 body 为空；失败不得发布最终文件。"""
         ...
 
 
@@ -93,18 +109,61 @@ class UrllibTransport:
         method: str,
         url: str,
         headers: dict[str, str],
-        body: bytes | None,
+        body: bytes | Iterable[bytes] | None,
         timeout: float,
     ) -> HttpResponse:
         """发送请求。4xx 和 5xx 作为响应返回，由客户端决定是否重试。"""
         request = Request(url, data=body, headers=headers, method=method)
         try:
             with urlopen(request, timeout=timeout) as response:
-                return HttpResponse(response.status, response.read())
+                return HttpResponse(response.status, _read_json_response(response))
         except HTTPError as exc:
-            return HttpResponse(exc.code, exc.read())
+            with exc:
+                return HttpResponse(exc.code, exc.read(_MAX_JSON_RESPONSE))
         except URLError as exc:
             raise OSError(str(exc.reason)) from exc
+        except HTTPException as exc:
+            raise OSError("MinerU HTTP 传输中断") from exc
+
+    def download(
+        self,
+        url: str,
+        headers: dict[str, str],
+        target: Path,
+        timeout: float,
+    ) -> HttpResponse:
+        """以固定缓冲写文件，异常时删除不完整的临时产物。"""
+        request = Request(url, headers=headers, method="GET")
+        completed = False
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                if not 200 <= response.status < 300:
+                    return HttpResponse(response.status, b"")
+                length_header = response.headers.get("Content-Length")
+                try:
+                    expected = int(length_header) if length_header is not None else None
+                except ValueError as exc:
+                    raise OSError("MinerU 下载长度无效") from exc
+                received = 0
+                with target.open("wb") as output:
+                    while chunk := response.read(_TRANSFER_CHUNK_SIZE):
+                        output.write(chunk)
+                        received += len(chunk)
+                if expected is not None and received != expected:
+                    raise OSError("MinerU 下载内容不完整")
+                completed = True
+                return HttpResponse(response.status, b"")
+        except HTTPError as exc:
+            with exc:
+                return HttpResponse(exc.code, b"")
+        except URLError as exc:
+            raise OSError(str(exc.reason)) from exc
+        except HTTPException as exc:
+            raise OSError("MinerU HTTP 传输中断") from exc
+        finally:
+            # 客户端负责成功发布；传输失败时也不保留半个 ZIP。
+            if not completed:
+                target.unlink(missing_ok=True)
 
 
 class MinerUClient:
@@ -126,13 +185,15 @@ class MinerUClient:
 
     def submit(self, file_path: Path, filename: str, sha256: str) -> MinerUJob:
         """上传文件并提交解析任务。调用方不等待解析结束。"""
-        content = file_path.read_bytes()
-        body, content_type = _multipart(filename, content, sha256)
+        body, content_type = _multipart(filename, file_path, sha256)
         uploaded = self._request(
             "POST",
             _FILES_PATH,
             body,
-            {"Content-Type": content_type},
+            {
+                "Content-Type": content_type,
+                "Content-Length": str(body.content_length),
+            },
             _TRANSFER_TIMEOUT,
         )
         file_id = _require_id(_json_object(uploaded.body), "file_id")
@@ -175,29 +236,35 @@ class MinerUClient:
     def download(self, job_id: str, target_dir: Path) -> Path:
         """把结果 zip 下载到目标目录，返回 zip 路径。"""
         safe_id = _check_job_id(job_id)
-        response = self._request(
-            "GET",
-            f"{_JOBS_PATH}/{quote(safe_id, safe='')}/result",
-            None,
-            {},
-            _TRANSFER_TIMEOUT,
-            lost_on_404=True,
-        )
         target_dir.mkdir(parents=True, exist_ok=True)
         path = (target_dir / f"{safe_id}.zip").resolve()
         if target_dir.resolve() not in path.parents:
             raise MinerURequestError("MinerU job_id 无效")
-        path.write_bytes(response.body)
+        temporary = path.with_name(f".{path.name}.{uuid4().hex}.part")
+        try:
+            self._request(
+                "GET",
+                f"{_JOBS_PATH}/{quote(safe_id, safe='')}/result",
+                None,
+                {},
+                _TRANSFER_TIMEOUT,
+                lost_on_404=True,
+                target=temporary,
+            )
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
         return path
 
     def _request(
         self,
         method: str,
         path: str,
-        body: bytes | None,
+        body: bytes | Iterable[bytes] | None,
         headers: dict[str, str],
         timeout: float,
         lost_on_404: bool = False,
+        target: Path | None = None,
     ) -> HttpResponse:
         """发送请求。429、408 和 5xx 退避重试，其余 4xx 不重试。"""
         url = f"{self._require_base()}{path}"
@@ -206,23 +273,33 @@ class MinerUClient:
             request_headers["Authorization"] = f"Bearer {self._api_key}"
         for attempt in range(1, self._max_attempts + 1):
             try:
-                response = self._transport.send(
-                    method,
-                    url,
-                    request_headers,
-                    body,
-                    timeout,
-                )
+                if target is None:
+                    response = self._transport.send(
+                        method,
+                        url,
+                        request_headers,
+                        body,
+                        timeout,
+                    )
+                else:
+                    target.unlink(missing_ok=True)
+                    response = self._transport.download(
+                        url,
+                        request_headers,
+                        target,
+                        timeout,
+                    )
             except OSError as exc:
+                if target is not None:
+                    target.unlink(missing_ok=True)
                 if attempt == self._max_attempts:
                     logger.warning("MinerU 连接失败")
                     raise ParserUnavailable("MinerU 连接失败") from exc
                 self._sleep(float(2 ** (attempt - 1)))
                 continue
-            if (
-                response.status in _RETRYABLE
-                and attempt < self._max_attempts
-            ):
+            if response.status in _RETRYABLE and attempt < self._max_attempts:
+                if target is not None:
+                    target.unlink(missing_ok=True)
                 logger.warning("MinerU 请求将重试: status=%s", response.status)
                 self._sleep(float(2 ** (attempt - 1)))
                 continue
@@ -291,7 +368,11 @@ def _check_job_id(job_id: str) -> str:
     return job_id
 
 
-def _multipart(filename: str, content: bytes, sha256: str) -> tuple[bytes, str]:
+def _multipart(
+    filename: str,
+    path: Path,
+    sha256: str,
+) -> tuple["MultipartBody", str]:
     """组装文件、文件名和 SHA-256。"""
     boundary = f"mineru{uuid4().hex}"
     safe_name = _header_filename(filename)
@@ -311,7 +392,7 @@ def _multipart(filename: str, content: bytes, sha256: str) -> tuple[bytes, str]:
         f"--{boundary}--\r\n"
     ).encode()
     content_type = f"multipart/form-data; boundary={boundary}"
-    return prefix + content + suffix, content_type
+    return MultipartBody(path, path.stat().st_size, prefix, suffix), content_type
 
 
 def _header_filename(filename: str) -> str:
@@ -319,3 +400,39 @@ def _header_filename(filename: str) -> str:
     name = Path(filename).name.replace('"', "").replace("\r", "")
     name = name.replace("\n", "")
     return name or "document"
+
+
+@dataclass(frozen=True)
+class MultipartBody:
+    """可重放的请求体，每次迭代重开文件，不缓存完整文件。"""
+
+    path: Path
+    size: int
+    prefix: bytes
+    suffix: bytes
+
+    @property
+    def content_length(self) -> int:
+        return len(self.prefix) + self.size + len(self.suffix)
+
+    def __iter__(self) -> Iterator[bytes]:
+        with self.path.open("rb") as source:
+            if os.fstat(source.fileno()).st_size != self.size:
+                raise MinerURequestError("MinerU 上传文件大小已改变")
+            yield self.prefix
+            remaining = self.size
+            while remaining:
+                chunk = source.read(min(_TRANSFER_CHUNK_SIZE, remaining))
+                if not chunk:
+                    raise MinerURequestError("MinerU 上传文件已截断")
+                remaining -= len(chunk)
+                yield chunk
+            yield self.suffix
+
+
+def _read_json_response(response: BinaryIO) -> bytes:
+    """JSON 控制面响应最多 1MiB，额外一字节用于检测超限。"""
+    content = response.read(_MAX_JSON_RESPONSE + 1)
+    if len(content) > _MAX_JSON_RESPONSE:
+        raise MinerURequestError("MinerU 响应体过大")
+    return content

@@ -72,9 +72,9 @@ class PdfParser(BaseParser):
                 f"/parse/{source.request.version}/parts/{index}/source.pdf"
             )
             part_name = f"{Path(filename).stem}-part-{index}.pdf"
-            self._reader.write_object(
+            self._reader.upload_file(
                 key,
-                segment.path.read_bytes(),
+                segment.path,
                 "application/pdf",
             )
         job = self._mineru.submit(segment.path, part_name, segment.sha256)

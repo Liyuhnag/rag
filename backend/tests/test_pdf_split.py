@@ -29,7 +29,12 @@ class _Reader:
         path.write_bytes(self.content)
 
     def write_object(self, key: str, content: bytes, content_type: str) -> None:
-        self.writes.append((key, content))
+        raise AssertionError("PDF 分段必须通过文件上传")
+
+    def upload_file(self, key: str, path: Path, content_type: str) -> None:
+        assert content_type == "application/pdf"
+        with path.open("rb") as handle:
+            self.writes.append((key, handle.read()))
 
 
 class _MinerU:
