@@ -2,6 +2,8 @@
 
 本目录把源文件解析成 `ParsedDocument`，再上传解析产物并写入数据库。父子块切分在 `services/chunking`。任务领取、状态流转和 Celery 适配由 `task/parse_document.py` 编排。完整过程见 [文件解析实现说明](../../../docs/design/文件解析实现说明.md)。
 
+当前生产链路采用块迭代器和磁盘暂存，大内容不再通过完整 bytes 在模块间传递。设计、兼容性变化、内存实测及限制见 [文档转换有界内存重构](../../../docs/design/文档转换有界内存重构.md)。
+
 ## 文件
 
 | 文件 | 职责 |
@@ -12,6 +14,7 @@
 | `dispatch.py` | 只负责把 `document_tasks` 投递到解析 Worker |
 | `errors.py` | 解析业务异常 |
 | `merge.py` | 按页码把分段 Markdown 合成一份 |
+| `local_artifacts.py` | 单遍消费本地块，增量写产物并上传 |
 | `collect.py` | 收集分段结果，合并后生成对象存储文件 |
 | `poll.py` | 轮询 MinerU、重新提交、下载并在分段到齐后合并 |
 
