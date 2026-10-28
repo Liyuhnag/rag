@@ -323,7 +323,11 @@ def _block(title, headers, batch):
         kind="table",
         text=json.dumps(batch, ensure_ascii=False),
         sheet=title,
-        metadata={"row_count": len(batch), "column_count": len(headers)},
+        metadata={
+            "row_count": len(batch),
+            "column_count": len(headers),
+            "headers": headers,
+        },
     )
 
 

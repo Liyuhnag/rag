@@ -96,6 +96,7 @@ def test_csv_stream_validates_limits_before_emitting_rows():
 def test_csv_header_only_emits_empty_table():
     blocks = list(CsvParser(DownloadReader(b"a,b\n")).iter_blocks(source("csv")))
     assert len(blocks) == 1 and json.loads(blocks[0].text) == []
+    assert blocks[0].metadata["headers"] == ["a", "b"]
 
 
 @pytest.mark.parametrize(

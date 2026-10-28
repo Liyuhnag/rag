@@ -23,6 +23,7 @@ from services.common.exceptions import FeatureNotReady
 from services.parsing.service import DocumentParsingService
 from services.parsing.service import SubmittedParse
 from services.parsing.service import StoredParseResult
+from services.structured.service import StructuredSchemaService
 from task.app import celery_app
 
 logger = logging.getLogger("rag.task")
@@ -68,10 +69,18 @@ def parse_document(task_id: str) -> None:
                 return
             stored = service.upload(outcome.parsed)
             service.persist(outcome.parsed, stored)
-        if document.file_type in {"csv", "xlsx"}:
-            task_orm.complete(task_id, "解析完成，待结构化入库", _now())
-            return
         chunking = True
+        if document.file_type in {"csv", "xlsx"}:
+            task_orm.update_progress(
+                task_id, DocumentTaskStage.CHUNKING, 85, "表结构保存中", _now()
+            )
+            result = StructuredSchemaService().run(
+                document, task.version, stored.md_key, stored.json_key
+            )
+            if result is False:
+                return
+            task_orm.complete(task_id, "结构已保存，待数据入库", _now())
+            return
         task_orm.update_progress(
             task_id, DocumentTaskStage.CHUNKING, 85, "文档切分中", _now()
         )

@@ -96,6 +96,7 @@ def iter_tables(
         "delimiter": delimiter,
         "row_count": row_count,
         "column_count": len(headers),
+        "headers": headers,
     }
     if row_count == 0:
         yield ParsedBlock(kind="table", text="[]", sheet=title, metadata=metadata)

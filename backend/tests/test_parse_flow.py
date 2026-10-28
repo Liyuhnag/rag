@@ -230,7 +230,10 @@ def test_finished_parse_uploads_and_persists(monkeypatch, error, chunk_result):
 
 
 @pytest.mark.parametrize("file_type", ["csv", "xlsx"])
-def test_structured_files_persist_json_without_chunking(monkeypatch, file_type):
+@pytest.mark.parametrize("schema_result", [True, False])
+def test_structured_files_persist_schema_without_chunking(
+    monkeypatch, file_type, schema_result
+):
     _prepare(monkeypatch)
     document = _document()
     document.file_type = file_type
@@ -260,8 +263,19 @@ def test_structured_files_persist_json_without_chunking(monkeypatch, file_type):
     monkeypatch.setattr(
         worker.document_orm, "mark_failed", lambda *args, **kwargs: None
     )
+
+    class _Schema:
+        def run(self, document, version, md_key, json_key):
+            calls.append(("schema", version, md_key, json_key))
+            return schema_result
+
     monkeypatch.setattr(worker, "DocumentChunkingService", unexpected)
-    monkeypatch.setattr(worker.task_orm, "update_progress", unexpected)
+    monkeypatch.setattr(worker, "StructuredSchemaService", _Schema, raising=False)
+    monkeypatch.setattr(
+        worker.task_orm,
+        "update_progress",
+        lambda task_id, stage, percent, step, now: calls.append((stage, percent)),
+    )
     monkeypatch.setattr(worker.document_orm, "mark_ready", unexpected)
     monkeypatch.setattr(
         worker.task_orm,
@@ -272,8 +286,46 @@ def test_structured_files_persist_json_without_chunking(monkeypatch, file_type):
     assert calls == [
         "upload",
         ("persist", "parsed.json"),
-        ("complete", "解析完成，待结构化入库"),
-    ]
+        (DocumentTaskStage.CHUNKING, 85),
+        ("schema", 1, "parsed.md", "parsed.json"),
+    ] + ([("complete", "结构已保存，待数据入库")] if schema_result else [])
+
+
+@pytest.mark.parametrize(
+    "schema_error", [RuntimeError("结构保存失败"), FeatureNotReady("结构保存不可用")]
+)
+def test_schema_failure_fails_task_and_preserves_version_guard(
+    monkeypatch, schema_error
+):
+    _prepare(monkeypatch)
+    document = _document()
+    document.file_type = "csv"
+    document.parsed_md_key = "stored.md"
+    document.parsed_json_key = "stored.json"
+    task = _task()
+    task.stage = DocumentTaskStage.CHUNKING
+    calls = []
+    monkeypatch.setattr(worker.task_orm, "claim", lambda *args: task)
+    monkeypatch.setattr(worker.document_orm, "get", lambda *args: document)
+
+    class _Schema:
+        def run(self, *args):
+            raise schema_error
+
+    monkeypatch.setattr(worker, "StructuredSchemaService", _Schema, raising=False)
+    monkeypatch.setattr(worker.task_orm, "update_progress", lambda *args: None)
+    monkeypatch.setattr(worker.task_orm, "fail", lambda *args: calls.append("failed"))
+    monkeypatch.setattr(
+        worker.document_orm,
+        "mark_failed",
+        lambda *args, **kwargs: calls.append(kwargs["expected_version"]),
+    )
+    monkeypatch.setattr(
+        worker.task_orm, "complete", lambda *args: pytest.fail("失败不能完成")
+    )
+    with pytest.raises(type(schema_error), match=str(schema_error)):
+        worker.parse_document.run("task-1")
+    assert calls == ["failed", 1]
 
 
 def test_recovered_parse_resumes_stored_artifacts(monkeypatch):

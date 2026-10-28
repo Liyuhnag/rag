@@ -13,7 +13,7 @@
 
 ## 行为边界
 
-- XLSX/CSV 在解析任务中分流：保存 JSON 解析产物后，当前任务以“解析完成，待结构化入库”结束，不进入 CHUNKING、不创建父子块、不标记文档 READY。结构化入库与 Text2SQL 尚未实现；不能把解析任务完成理解为数据已可查询。PDF 等文档中的表格仍随正文进入 RAG。
+- XLSX/CSV 在解析任务中分流：保存 JSON 解析产物后，由 `services/structured/service.py` 扫描并保存每个工作表的 `schema_json` 与来源信息，不创建父子块、不标记文档 READY。结构保存复用 CHUNKING 阶段的进度与中断恢复机制，步骤文案为“表结构保存中”；任务成功显示“结构已保存，待数据入库”。数据行导入与 Text2SQL 尚未实现，目录状态 `SCHEMA_READY` 不表示数据已可查询。PDF 等文档中的表格仍随正文进入 RAG。
 - 采用框架原生文本处理行为，包括去除块首尾空白。块内容用于检索，不承诺逐字符重建原文件。
 - token 计数使用 `cl100k_base`，不再使用中文/ASCII 字符估算。首次初始化可能由 tiktoken 下载词表，离线环境应在构建阶段预热相同缓存。它并不等同于目标 embedding 模型 tokenizer，接入模型时应统一计数器。句子 tokenizer 使用 NLTK 原生 `PunktSentenceTokenizer`，无需运行时下载 NLTK 数据。
 - 来源信息按输入组保守继承，不声称子块具有精确字符偏移；不会跨不同页、工作表或已有标题路径混合来源。

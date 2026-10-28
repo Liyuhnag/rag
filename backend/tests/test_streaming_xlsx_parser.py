@@ -59,6 +59,15 @@ def test_streaming_preserves_merges_dates_and_late_columns():
     assert reader.path is not None and not reader.path.exists()
 
 
+def test_header_only_sheet_keeps_columns_for_schema_storage():
+    book = Workbook()
+    book.active.append(["name", "amount"])
+    blocks = list(XlsxParser(DownloadReader(save(book))).iter_blocks(source()))
+    assert len(blocks) == 1
+    assert json.loads(blocks[0].text) == []
+    assert blocks[0].metadata["headers"] == ["name", "amount"]
+
+
 def test_streaming_reads_shared_strings_and_cached_formula():
     book = Workbook()
     sheet = book.active
