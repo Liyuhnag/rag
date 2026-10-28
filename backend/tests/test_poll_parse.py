@@ -5,7 +5,10 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 
+import pytest
+
 from model.document.model import Document
+from model.document_task.model import DocumentTaskStage
 from model.document.model import DocumentStatus
 from model.parse_job.model import ParseJob
 from model.parse_job.model import ParseJobStatus
@@ -73,6 +76,7 @@ def _document() -> Document:
         file_url="",
         previewable=False,
         preview_url=None,
+        parse_version=2,
     )
 
 
@@ -298,7 +302,8 @@ def test_download_waits_when_a_sibling_is_missing(monkeypatch):
     assert merged == []
 
 
-def test_download_merges_when_every_part_has_a_zip(monkeypatch):
+@pytest.mark.parametrize("error", [None, RuntimeError("切分失败")])
+def test_download_merges_when_every_part_has_a_zip(monkeypatch, error):
     now = _now()
     first = _job(
         status=ParseJobStatus.DOWNLOADING,
@@ -361,11 +366,55 @@ def test_download_merges_when_every_part_has_a_zip(monkeypatch):
         "complete",
         lambda task_id, step, moment: completed.append(step),
     )
+
+    class _Chunking:
+        def run(self, document, version, md_key, json_key):
+            recorded.append(("chunk", document.id, version, md_key, json_key))
+            if error is not None:
+                raise error
+
+    monkeypatch.setattr(
+        poll.task_orm,
+        "fail",
+        lambda task_id, message, moment: completed.append(("fail", message)),
+    )
+    monkeypatch.setattr(
+        poll.document_orm,
+        "mark_failed",
+        lambda document_id, message, moment, **kwargs: completed.append(
+            ("document_failed", kwargs["expected_version"])
+        ),
+    )
+    monkeypatch.setattr(poll, "DocumentChunkingService", _Chunking, raising=False)
+    monkeypatch.setattr(
+        poll.task_orm,
+        "update_progress",
+        lambda task_id, stage, percent, step, moment: recorded.append((stage, percent)),
+    )
     monkeypatch.setattr(poll, "DocumentParsingService", _Service)
-    download_job(first.id, _Mineru(), reader, now)
+    if error is None:
+        download_job(first.id, _Mineru(), reader, now)
+    else:
+        with pytest.raises(RuntimeError, match="切分失败"):
+            download_job(first.id, _Mineru(), reader, now)
     assert collected == [("documents/doc-1/demo.pdf", [1, 2])]
-    assert recorded[0] == "documents/doc-1/parsed/2/merged.md"
-    assert completed == ["解析完成"]
+    assert recorded == [
+        "documents/doc-1/parsed/2/merged.md",
+        ("job-1", "documents/doc-1/parse/2/parts/1/manifest.json"),
+        ("job-2", "documents/doc-1/parse/2/parts/2/manifest.json"),
+        (DocumentTaskStage.CHUNKING, 85),
+        (
+            "chunk",
+            "doc-1",
+            2,
+            "documents/doc-1/parsed/2/merged.md",
+            "documents/doc-1/parsed/2/merged.json",
+        ),
+    ]
+    if error is None:
+        assert completed == ["解析与切分完成"]
+    else:
+        assert completed == [("fail", "切分失败"), ("document_failed", 2)]
 
 
 def test_second_merge_claim_does_not_collect(monkeypatch):
@@ -387,6 +436,30 @@ def test_second_merge_claim_does_not_collect(monkeypatch):
     )
     merge_ready(job, _Reader({job.result_key: b"zip"}), _now())
     assert called == []
+
+
+def test_stale_download_does_not_merge_or_chunk(monkeypatch):
+    job = _job(
+        status=ParseJobStatus.DOWNLOADING,
+        result_key="parts/result.zip",
+    )
+    document = _document()
+    document.parse_version = 3
+    monkeypatch.setattr(poll.parse_job_orm, "get", lambda job_id: job)
+    monkeypatch.setattr(
+        poll.parse_job_orm,
+        "list_by_document_version",
+        lambda document_id, version: [job],
+    )
+    monkeypatch.setattr(poll.task_orm, "begin_merge", lambda *args: True)
+    monkeypatch.setattr(poll.document_orm, "get", lambda document_id: document)
+
+    def unexpected(*args):
+        pytest.fail("旧版本结果不应继续合并或切分")
+
+    monkeypatch.setattr(poll, "DocumentParsingService", unexpected)
+    monkeypatch.setattr(poll, "DocumentChunkingService", unexpected)
+    download_job(job.id, _Mineru(), _Reader(), _now())
 
 
 def test_apply_failure_marks_job_and_document(monkeypatch):

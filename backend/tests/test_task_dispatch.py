@@ -36,8 +36,14 @@ def test_redispatch_pending_tasks(monkeypatch):
         "find_pending",
         lambda _older_than, _limit: [SimpleNamespace(id="task-3")],
     )
+    monkeypatch.setattr(
+        maintenance.task_orm,
+        "recover_chunking",
+        lambda older_than, now, limit: [SimpleNamespace(id="recovered")],
+        raising=False,
+    )
     monkeypatch.setattr(maintenance, "dispatch_task", calls.append)
 
     maintenance.redispatch_pending_tasks()
 
-    assert calls == ["task-3"]
+    assert calls == ["recovered", "task-3"]

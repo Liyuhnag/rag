@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
 """对象存储。文件正文和分片放在 S3 兼容服务里。"""
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
+from typing import BinaryIO
+from typing import ContextManager
 
 import boto3
 from boto3.exceptions import S3UploadFailedError
@@ -36,6 +40,10 @@ class ObjectStorage:
         raise NotImplementedError
 
     def get_object(self, key: str) -> bytes:
+        raise NotImplementedError
+
+    def open_object(self, key: str) -> ContextManager[BinaryIO]:
+        """打开二进制响应流，退出上下文时关闭。"""
         raise NotImplementedError
 
     def download(self, key: str, path: str) -> None:
@@ -124,12 +132,21 @@ class S3ObjectStorage(ObjectStorage):
             raise StorageError("对象存储写入失败") from exc
 
     def get_object(self, key: str) -> bytes:
+        with self.open_object(key) as body:
+            return body.read()
+
+    @contextmanager
+    def open_object(self, key: str) -> Iterator[BinaryIO]:
+        """直接读取 S3 响应流，并在消费结束或失败时关闭。"""
         try:
             response = self._client.get_object(Bucket=self.bucket, Key=key)
             body = response.get("Body")
             if body is None:
                 raise StorageError("对象存储返回空响应")
-            return body.read()
+            try:
+                yield body
+            finally:
+                body.close()
         except ClientError as exc:
             if _error_code(exc) in {"NoSuchKey", "404", "NotFound"}:
                 raise StorageError("对象不存在") from exc

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """document_chunks 表的 SQL。"""
 
+from collections.abc import Iterable
 from datetime import datetime
 from datetime import timezone
 
@@ -20,32 +21,22 @@ def _from_row(row: dict[str, object]) -> DocumentChunk:
         document_id=str(row["document_id"]),
         version=int(row["version"]),
         chunk_level=ChunkLevel(str(row["chunk_level"])),
-        parent_id=(
-            None if row["parent_id"] is None else str(row["parent_id"])
-        ),
+        parent_id=(None if row["parent_id"] is None else str(row["parent_id"])),
         parent_index=(
             None if row["parent_index"] is None else int(row["parent_index"])
         ),
-        child_order=(
-            None if row["child_order"] is None else int(row["child_order"])
-        ),
+        child_order=(None if row["child_order"] is None else int(row["child_order"])),
         chunk_index=int(row["chunk_index"]),
         child_count=int(row["child_count"]),
         file_type=str(row["file_type"]),
-        page_start=(
-            None if row["page_start"] is None else int(row["page_start"])
-        ),
-        page_end=(
-            None if row["page_end"] is None else int(row["page_end"])
-        ),
+        page_start=(None if row["page_start"] is None else int(row["page_start"])),
+        page_end=(None if row["page_end"] is None else int(row["page_end"])),
         locator=str(row["locator"]),
         heading_path=str(row["heading_path"]),
         content=str(row["content"]),
         token_count=int(row["token_count"]),
         embedding_model=(
-            None
-            if row["embedding_model"] is None
-            else str(row["embedding_model"])
+            None if row["embedding_model"] is None else str(row["embedding_model"])
         ),
         created_at=as_aware(row["created_at"]),
     )
@@ -104,7 +95,7 @@ def list_by_version(
     rows = execute(
         f"""
         SELECT * FROM document_chunks
-        WHERE {' AND '.join(conditions)}
+        WHERE {" AND ".join(conditions)}
         ORDER BY chunk_level DESC, chunk_index ASC
         """,
         params,
@@ -133,7 +124,7 @@ def count_by_version(
         f"""
         SELECT COUNT(*) AS total
         FROM document_chunks
-        WHERE {' AND '.join(conditions)}
+        WHERE {" AND ".join(conditions)}
         """,
         params,
     )
@@ -177,6 +168,82 @@ def replace_for_version(
                     """,
                     [_insert_params(chunk, now) for chunk in chunks],
                 )
+
+
+def replace_current_version(
+    document_id: str,
+    version: int,
+    chunks: Iterable[DocumentChunk],
+) -> bool:
+    """持有文档版本锁，分批写块与计数；异常整体回滚。"""
+    now = datetime.now(timezone.utc)
+    with transaction() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT parse_version FROM documents WHERE id = %(id)s FOR UPDATE",
+                {"id": document_id},
+            )
+            row = cursor.fetchone()
+            if row is None or int(row["parse_version"]) != version:
+                return False
+            cursor.execute(
+                "DELETE FROM document_chunks WHERE document_id = %(id)s "
+                "AND version = %(version)s",
+                {"id": document_id, "version": version},
+            )
+            parents = 0
+            children = 0
+            batch = []
+            iterator = iter(chunks)
+            try:
+                for chunk in iterator:
+                    if chunk.document_id != document_id or chunk.version != version:
+                        raise ValueError("切分块的文档或版本不匹配")
+                    parents += chunk.chunk_level == ChunkLevel.PARENT
+                    children += chunk.chunk_level == ChunkLevel.CHILD
+                    batch.append(_insert_params(chunk, now))
+                    if len(batch) == 200:
+                        _insert_batch(cursor, batch)
+                        batch = []
+                if batch:
+                    _insert_batch(cursor, batch)
+            finally:
+                close = getattr(iterator, "close", None)
+                if close is not None:
+                    close()
+            cursor.execute(
+                "UPDATE documents SET parent_chunk_count = %(parents)s, "
+                "chunk_count = %(children)s, updated_at = %(now)s "
+                "WHERE id = %(id)s AND parse_version = %(version)s",
+                {
+                    "parents": parents,
+                    "children": children,
+                    "now": as_utc(now),
+                    "id": document_id,
+                    "version": version,
+                },
+            )
+    return True
+
+
+def _insert_batch(cursor, batch):
+    cursor.executemany(
+        """
+        INSERT INTO document_chunks (
+            id, document_id, version, chunk_level, parent_id, parent_index,
+            child_order, chunk_index, child_count, file_type, page_start,
+            page_end, locator, heading_path, content, token_count,
+            embedding_model, created_at
+        ) VALUES (
+            %(id)s, %(document_id)s, %(version)s, %(chunk_level)s,
+            %(parent_id)s, %(parent_index)s, %(child_order)s, %(chunk_index)s,
+            %(child_count)s, %(file_type)s, %(page_start)s, %(page_end)s,
+            %(locator)s, %(heading_path)s, %(content)s, %(token_count)s,
+            %(embedding_model)s, %(created_at)s
+        )
+        """,
+        batch,
+    )
 
 
 def delete_for_version(document_id: str, version: int) -> int:

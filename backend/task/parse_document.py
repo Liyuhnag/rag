@@ -18,9 +18,11 @@ from model.document_task.model import DocumentTaskStage
 from model.parse_job import orm as parse_job_orm
 from model.parse_job.model import ParseJob
 from model.parse_job.model import ParseJobStatus
+from services.chunking.service import DocumentChunkingService
 from services.common.exceptions import FeatureNotReady
 from services.parsing.service import DocumentParsingService
 from services.parsing.service import SubmittedParse
+from services.parsing.service import StoredParseResult
 from task.app import celery_app
 
 logger = logging.getLogger("rag.task")
@@ -43,29 +45,50 @@ def parse_document(task_id: str) -> None:
     if document is None:
         return
 
+    if document.parse_version != task.version:
+        return
+
     now = _now()
-    service = DocumentParsingService()
+    chunking = task.stage == DocumentTaskStage.CHUNKING
     try:
-        outcome = service.parse(document, task.version)
-        if isinstance(outcome, SubmittedParse):
-            _record_parts(task, outcome, now)
-            task_orm.update_progress(
-                task_id,
-                DocumentTaskStage.PARSING,
-                5,
-                "分段已提交",
-                now,
-            )
+        if chunking and document.parsed_md_key and document.parsed_json_key:
+            stored = StoredParseResult(document.parsed_md_key, document.parsed_json_key)
+        else:
+            service = DocumentParsingService()
+            outcome = service.parse(document, task.version)
+            if isinstance(outcome, SubmittedParse):
+                _record_parts(task, outcome, now)
+                task_orm.update_progress(
+                    task_id,
+                    DocumentTaskStage.PARSING,
+                    5,
+                    "分段已提交",
+                    now,
+                )
+                return
+            stored = service.upload(outcome.parsed)
+            service.persist(outcome.parsed, stored)
+        if document.file_type in {"csv", "xlsx"}:
+            task_orm.complete(task_id, "解析完成，待结构化入库", _now())
             return
-        stored = service.upload(outcome.parsed)
-        service.persist(outcome.parsed, stored)
-        task_orm.complete(task_id, "解析完成", now)
-    except FeatureNotReady as exc:
-        # 解析、上传或落库尚未实现时保留原有联调行为。
-        task_orm.complete(task_id, str(exc), now)
+        chunking = True
+        task_orm.update_progress(
+            task_id, DocumentTaskStage.CHUNKING, 85, "文档切分中", _now()
+        )
+        result = DocumentChunkingService().run(
+            document, task.version, stored.md_key, stored.json_key
+        )
+        if result is False:
+            return
+        task_orm.complete(task_id, "解析与切分完成", _now())
     except Exception as exc:
+        # 任务边界统一记录解析或切分失败，再交由 worker 处理异常。
+        if isinstance(exc, FeatureNotReady) and not chunking:
+            task_orm.complete(task_id, str(exc), _now())
+            return
         message = str(exc) or "解析失败"
         logger.exception("解析任务失败: %s", task_id)
+        now = _now()
         task_orm.fail(task_id, message, now)
         document_orm.mark_failed(
             document.id, message, now, expected_version=task.version

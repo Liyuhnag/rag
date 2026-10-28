@@ -7,13 +7,16 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
+from datetime import timezone
 from pathlib import Path
 
 from model.document import orm as document_orm
 from model.document_task import orm as task_orm
+from model.document_task.model import DocumentTaskStage
 from model.parse_job import orm as parse_job_orm
 from model.parse_job.model import ParseJob
 from model.parse_job.model import ParseJobStatus
+from services.chunking.service import DocumentChunkingService
 from services.parsing.adapters.object_reader import StorageObjectReader
 from services.parsing.collect import PartZip
 from services.parsing.errors import MinerUJobLost
@@ -224,6 +227,8 @@ def merge_ready(job: ParseJob, reader: ObjectReader, now: datetime) -> None:
     if document is None:
         _fail_document(job, "文档不存在", now)
         return
+    if document.parse_version != job.version:
+        return
     parts: list[PartZip] = []
     for item in jobs:
         if not item.result_key:
@@ -245,6 +250,7 @@ def merge_ready(job: ParseJob, reader: ObjectReader, now: datetime) -> None:
             document.object_key,
             parts,
         )
+        now = datetime.now(timezone.utc)
         document_orm.set_parsed_artifacts(
             document.id,
             stored.md_key,
@@ -259,11 +265,24 @@ def merge_ready(job: ParseJob, reader: ObjectReader, now: datetime) -> None:
                 keys.get(item.part_index, ""),
                 now,
             )
-        task_orm.complete(job.task_id, "解析完成", now)
+        task_orm.update_progress(
+            job.task_id,
+            DocumentTaskStage.CHUNKING,
+            85,
+            "文档切分中",
+            datetime.now(timezone.utc),
+        )
+        result = DocumentChunkingService().run(
+            document, job.version, stored.md_key, stored.json_key
+        )
+        if result is False:
+            return
+        task_orm.complete(job.task_id, "解析与切分完成", datetime.now(timezone.utc))
     except Exception as exc:
+        # 合并与切分是同一个任务边界，任一步失败都不能完成任务。
         message = str(exc) or "合并失败"
         logger.exception("合并分段失败: %s", job.task_id)
-        _fail_document(job, message, now)
+        _fail_document(job, message, datetime.now(timezone.utc))
         raise
 
 

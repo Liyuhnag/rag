@@ -66,13 +66,47 @@ def find_pending(
     return [_from_row(row) for row in rows]
 
 
+def recover_chunking(
+    older_than: datetime,
+    now: datetime,
+    limit: int,
+) -> list[DocumentTask]:
+    """条件重置失联的切分任务，返回本次成功恢复的任务用于立即补投。"""
+    rows = execute(
+        """
+        SELECT * FROM document_tasks
+        WHERE status = 'RUNNING' AND stage = 'CHUNKING'
+          AND updated_at < %(older_than)s
+        ORDER BY updated_at ASC
+        LIMIT %(limit)s
+        """,
+        {"older_than": as_utc(older_than), "limit": limit},
+    )
+    recovered = []
+    for row in rows:
+        count = execute_count(
+            """
+            UPDATE document_tasks
+            SET status = 'PENDING', updated_at = %(now)s
+            WHERE id = %(id)s AND status = 'RUNNING'
+              AND stage = 'CHUNKING' AND updated_at < %(older_than)s
+            """,
+            {"id": row["id"], "now": as_utc(now), "older_than": as_utc(older_than)},
+        )
+        if count == 1:
+            task = _from_row(row)
+            task.status = DocumentTaskStatus.PENDING
+            recovered.append(task)
+    return recovered
+
+
 def claim(task_id: str, now: datetime) -> DocumentTask | None:
     """条件抢占 PENDING → RUNNING。"""
     count = execute_count(
         """
         UPDATE document_tasks
         SET status = %(status)s,
-            stage = %(stage)s,
+            stage = CASE WHEN stage = 'CHUNKING' THEN stage ELSE %(stage)s END,
             progress = 0,
             step = '解析中',
             updated_at = %(now)s

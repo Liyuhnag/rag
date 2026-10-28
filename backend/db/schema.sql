@@ -102,7 +102,7 @@ CREATE TABLE IF NOT EXISTS document_chunks (
     page_start INT NULL COMMENT '起始页',
     page_end INT NULL COMMENT '结束页',
     locator VARCHAR(512) NOT NULL DEFAULT '' COMMENT '页码或表格位置',
-    heading_path VARCHAR(1024) NOT NULL DEFAULT '' COMMENT '标题路径',
+    heading_path TEXT NOT NULL COMMENT '标题路径',
     content MEDIUMTEXT NOT NULL COMMENT 'chunk 正文',
     token_count INT NOT NULL COMMENT '估算 token 数',
     embedding_model VARCHAR(128) NULL COMMENT '子块向量模型；父块为 NULL',

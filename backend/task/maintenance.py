@@ -13,6 +13,7 @@ from task.app import celery_app
 
 _REDISPATCH_MIN_AGE_SECONDS = 300
 _REDISPATCH_BATCH = 100
+_CHUNKING_LEASE_SECONDS = 600
 
 
 @celery_app.task(
@@ -107,9 +108,13 @@ def cleanup_old_sessions() -> None:
     queue="maintenance",
 )
 def redispatch_pending_tasks() -> None:
-    """补投超过 5 分钟仍未执行的 PENDING 任务。"""
-    older_than = datetime.now(timezone.utc) - timedelta(
-        seconds=_REDISPATCH_MIN_AGE_SECONDS
+    """恢复失联切分任务，并补投超过 5 分钟仍未执行的 PENDING 任务。"""
+    now = datetime.now(timezone.utc)
+    recovered = task_orm.recover_chunking(
+        now - timedelta(seconds=_CHUNKING_LEASE_SECONDS), now, _REDISPATCH_BATCH
     )
+    for task in recovered:
+        dispatch_task(task.id)
+    older_than = now - timedelta(seconds=_REDISPATCH_MIN_AGE_SECONDS)
     for task in task_orm.find_pending(older_than, _REDISPATCH_BATCH):
         dispatch_task(task.id)
