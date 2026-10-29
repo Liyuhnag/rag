@@ -294,6 +294,7 @@ def _completed_document(session: UploadSession, now: datetime) -> Document:
         file_url=file_url(session.object_key),
         previewable=False,
         preview_url=None,
+        parse_version=1,
     )
 
 

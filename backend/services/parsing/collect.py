@@ -179,7 +179,11 @@ def _stage_part(document_id, version, part, archive_path, root, ordinal):
     markdown = [name for name in files if Path(name).suffix.lower() in _MARKDOWN]
     if not markdown:
         raise ParseFailed("MinerU 结果没有 Markdown")
-    preferred = [name for name in markdown if Path(name).name.lower() == "content.md"]
+    preferred = [name for name in markdown if Path(name).name.lower() == "full.md"]
+    if not preferred:
+        preferred = [
+            name for name in markdown if Path(name).name.lower() == "content.md"
+        ]
     name = (
         preferred[0]
         if len(preferred) == 1
@@ -188,6 +192,14 @@ def _stage_part(document_id, version, part, archive_path, root, ordinal):
     prefix = f"documents/{document_id}/parse/{version}/parts/{part.part_index}"
     assets = f"documents/{document_id}/parsed/{version}/assets/part-{part.part_index}"
     objects = [(f"{prefix}/content.md", files[name][0], _CONTENT_TYPES[".md"])]
+    # 官方 ZIP 使用 *_content_list.json/layout.json；保留所有 JSON，避免丢失结构化结果。
+    json_keys = []
+    for json_name in sorted(files):
+        if Path(json_name).suffix.lower() != ".json":
+            continue
+        key = f"{prefix}/json/{json_name}"
+        json_keys.append(key)
+        objects.append((key, files[json_name][0], _CONTENT_TYPES[".json"]))
     sibling = (Path(name).parent / "content.json").as_posix()
     if sibling in files:
         objects.append(
@@ -210,6 +222,7 @@ def _stage_part(document_id, version, part, archive_path, root, ordinal):
                 "page_end": part.page_end,
                 "markdown_key": f"{prefix}/content.md",
                 "images": image_keys,
+                "json_keys": json_keys,
             }
         )
     )

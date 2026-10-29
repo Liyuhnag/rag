@@ -1,11 +1,8 @@
 # -*- coding: utf-8 -*-
-"""MinerU HTTP 客户端。
+"""MinerU v4 单文件批次客户端。
 
-调用顺序是创建上传、上传文件、提交任务、查询状态、下载 zip。
-下面的路径按这个顺序约定，仓库里没有另一份已抓到的接口说明。
-服务端路径不同时，只改这些常量。
-
-文件大小由解析器判断，这里收到文件就提交。
+官方契约：https://mineru.net/doc/docs/index.html
+申请上传链接后直接 PUT 文件，服务端自动提交解析；job_id 即 batch_id。
 """
 
 import json
@@ -24,6 +21,7 @@ from typing import Protocol
 from urllib.error import HTTPError
 from urllib.error import URLError
 from urllib.parse import quote
+from urllib.parse import urlsplit
 from urllib.request import Request
 from urllib.request import urlopen
 from uuid import uuid4
@@ -34,20 +32,22 @@ from services.parsing.errors import ParserUnavailable
 
 logger = logging.getLogger(__name__)
 
-# 与设计里的调用生命周期对应，不是从已抓包的 MinerU 文档抄来的。
-_FILES_PATH = "/v1/files"
-_JOBS_PATH = "/v1/jobs"
+_FILES_PATH = "/api/v4/file-urls/batch"
+_JOBS_PATH = "/api/v4/extract-results/batch"
 _READ_TIMEOUT = 60
 _TRANSFER_TIMEOUT = 300
 _MAX_ATTEMPTS = 3
 _TRANSFER_CHUNK_SIZE = 64 * 1024
 _MAX_JSON_RESPONSE = 1024 * 1024
 _RETRYABLE = frozenset({408, 429, 500, 502, 503, 504})
+_RETRYABLE_CODES = frozenset({-10001, -60001, -60007, -60009})
 MinerUState = Literal["queued", "running", "completed", "failed"]
 _STATES: dict[str, MinerUState] = {
-    "queued": "queued",
+    "waiting-file": "queued",
+    "pending": "queued",
     "running": "running",
-    "completed": "completed",
+    "converting": "running",
+    "done": "completed",
     "failed": "failed",
 }
 
@@ -113,7 +113,11 @@ class UrllibTransport:
         timeout: float,
     ) -> HttpResponse:
         """发送请求。4xx 和 5xx 作为响应返回，由客户端决定是否重试。"""
-        request = Request(url, data=body, headers=headers, method=method)
+        request = _UploadRequest(url, data=body, headers=headers, method=method)
+        authorization = request.headers.pop("Authorization", None)
+        if authorization:
+            # Authorization 不应被 urllib 的重定向复制到其它地址。
+            request.add_unredirected_header("Authorization", authorization)
         try:
             with urlopen(request, timeout=timeout) as response:
                 return HttpResponse(response.status, _read_json_response(response))
@@ -184,32 +188,38 @@ class MinerUClient:
         self._max_attempts = max_attempts
 
     def submit(self, file_path: Path, filename: str, sha256: str) -> MinerUJob:
-        """上传文件并提交解析任务。调用方不等待解析结束。"""
-        body, content_type = _multipart(filename, file_path, sha256)
-        uploaded = self._request(
+        """创建单文件批次并流式上传，上传成功即由服务端自动提交。"""
+        body = FileBody(file_path, file_path.stat().st_size)
+        response = self._request(
             "POST",
             _FILES_PATH,
-            body,
-            {
-                "Content-Type": content_type,
-                "Content-Length": str(body.content_length),
-            },
-            _TRANSFER_TIMEOUT,
-        )
-        file_id = _require_id(_json_object(uploaded.body), "file_id")
-        submitted = self._request(
-            "POST",
-            _JOBS_PATH,
-            json.dumps({"file_id": file_id}).encode(),
+            json.dumps(
+                {
+                    "files": [{"name": Path(filename).name, "data_id": sha256}],
+                    "model_version": "vlm",
+                }
+            ).encode(),
             {"Content-Type": "application/json"},
             _READ_TIMEOUT,
         )
-        job_id = _require_id(_json_object(submitted.body), "job_id")
-        logger.info("MinerU 任务已提交: job_id=%s", job_id)
-        return MinerUJob(file_id=file_id, job_id=job_id)
+        data = _business_data(response.body)
+        batch_id = _check_job_id(_require_id(data, "batch_id"))
+        urls = data.get("file_urls")
+        if not isinstance(urls, list) or len(urls) != 1:
+            raise MinerURequestError("MinerU 必须返回一个上传链接")
+        self._request(
+            "PUT",
+            _signed_url(urls[0]),
+            body,
+            {"Content-Length": str(body.size)},
+            _TRANSFER_TIMEOUT,
+            signed=True,
+        )
+        logger.info("MinerU 任务已提交: job_id=%s", batch_id)
+        return MinerUJob(file_id=sha256, job_id=batch_id)
 
-    def status(self, job_id: str) -> MinerUStatus:
-        """查询任务状态。404 表示任务索引已丢失。"""
+    def _result(self, job_id: str) -> dict[str, object]:
+        """重新查询单文件批次，不依赖进程内提交记录。"""
         safe_id = _check_job_id(job_id)
         response = self._request(
             "GET",
@@ -219,23 +229,35 @@ class MinerUClient:
             _READ_TIMEOUT,
             lost_on_404=True,
         )
-        payload = _json_object(response.body)
-        found = _STATES.get(str(payload.get("status", "")).lower())
+        data = _business_data(response.body)
+        results = data.get("extract_result")
+        if (
+            not isinstance(results, list)
+            or len(results) != 1
+            or not isinstance(results[0], dict)
+        ):
+            raise MinerURequestError("MinerU 必须返回一个文件结果")
+        return results[0]
+
+    def status(self, job_id: str) -> MinerUStatus:
+        """把官方批次文件状态转换为稳定的公共状态。"""
+        result = self._result(job_id)
+        found = _STATES.get(str(result.get("state", "")))
         if found is None:
             raise MinerURequestError("MinerU 返回了未知状态")
-        error = payload.get("error")
+        error = result.get("err_msg")
         error_text = None if error in (None, "") else str(error)
-        if found == "failed":
-            logger.info(
-                "MinerU 任务失败: job_id=%s error=%s",
-                safe_id,
-                error_text or "",
-            )
+        if error_text and self._api_key:
+            error_text = error_text.replace(self._api_key, "[redacted]")
         return MinerUStatus(state=found, error=error_text)
 
     def download(self, job_id: str, target_dir: Path) -> Path:
-        """把结果 zip 下载到目标目录，返回 zip 路径。"""
+        """查询结果后从签名地址下载 ZIP，完整传输后原子发布。"""
         safe_id = _check_job_id(job_id)
+        result = self._result(safe_id)
+        if result.get("state") != "done":
+            raise MinerURequestError("MinerU 任务尚未完成，无法下载")
+        url = _signed_url(result.get("full_zip_url"))
         target_dir.mkdir(parents=True, exist_ok=True)
         path = (target_dir / f"{safe_id}.zip").resolve()
         if target_dir.resolve() not in path.parents:
@@ -244,12 +266,13 @@ class MinerUClient:
         try:
             self._request(
                 "GET",
-                f"{_JOBS_PATH}/{quote(safe_id, safe='')}/result",
+                url,
                 None,
                 {},
                 _TRANSFER_TIMEOUT,
                 lost_on_404=True,
                 target=temporary,
+                signed=True,
             )
             temporary.replace(path)
         finally:
@@ -265,11 +288,12 @@ class MinerUClient:
         timeout: float,
         lost_on_404: bool = False,
         target: Path | None = None,
+        signed: bool = False,
     ) -> HttpResponse:
         """发送请求。429、408 和 5xx 退避重试，其余 4xx 不重试。"""
-        url = f"{self._require_base()}{path}"
+        url = path if signed else f"{self._require_base()}{path}"
         request_headers = dict(headers)
-        if self._api_key:
+        if self._api_key and not signed:
             request_headers["Authorization"] = f"Bearer {self._api_key}"
         for attempt in range(1, self._max_attempts + 1):
             try:
@@ -303,7 +327,16 @@ class MinerUClient:
                 logger.warning("MinerU 请求将重试: status=%s", response.status)
                 self._sleep(float(2 ** (attempt - 1)))
                 continue
-            return _checked(response, lost_on_404)
+            checked = _checked(response, lost_on_404)
+            if not signed:
+                try:
+                    _business_data(checked.body)
+                except ParserUnavailable:
+                    if attempt == self._max_attempts:
+                        raise
+                    self._sleep(float(2 ** (attempt - 1)))
+                    continue
+            return checked
         raise ParserUnavailable("MinerU 暂不可用")
 
     def _require_base(self) -> str:
@@ -368,58 +401,66 @@ def _check_job_id(job_id: str) -> str:
     return job_id
 
 
-def _multipart(
-    filename: str,
-    path: Path,
-    sha256: str,
-) -> tuple["MultipartBody", str]:
-    """组装文件、文件名和 SHA-256。"""
-    boundary = f"mineru{uuid4().hex}"
-    safe_name = _header_filename(filename)
-    prefix = (
-        f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="file"; '
-        f'filename="{safe_name}"\r\n'
-        f"Content-Type: application/octet-stream\r\n\r\n"
-    ).encode()
-    suffix = (
-        f"\r\n--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="filename"\r\n\r\n'
-        f"{safe_name}\r\n"
-        f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="sha256"\r\n\r\n'
-        f"{sha256}\r\n"
-        f"--{boundary}--\r\n"
-    ).encode()
-    content_type = f"multipart/form-data; boundary={boundary}"
-    return MultipartBody(path, path.stat().st_size, prefix, suffix), content_type
+def _business_data(body: bytes) -> dict[str, object]:
+    """检查 HTTP 200 中的官方业务码，错误消息不包含上游原文。"""
+    payload = _json_object(body)
+    code = payload.get("code")
+    if not isinstance(code, (int, str)) or isinstance(code, bool):
+        raise MinerURequestError("MinerU 缺少有效业务码")
+    if code == -60012:
+        raise MinerUJobLost("MinerU 任务不存在或已过期")
+    if code in _RETRYABLE_CODES:
+        raise ParserUnavailable(f"MinerU 暂不可用: code={code}")
+    if code != 0:
+        # 仅输出受信任的码类别，避免上游业务码夹带密钥或签名地址。
+        if code in {"A0202", "A0211"}:
+            raise MinerURequestError("MinerU 认证失败或 Token 已过期")
+        raise MinerURequestError("MinerU 拒绝请求: 业务错误")
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise MinerURequestError("MinerU 没有返回有效 data")
+    return data
 
 
-def _header_filename(filename: str) -> str:
-    """只保留文件名，去掉引号和换行。"""
-    name = Path(filename).name.replace('"', "").replace("\r", "")
-    name = name.replace("\n", "")
-    return name or "document"
+def _signed_url(value: object) -> str:
+    """只允许无内嵌凭证的 HTTP(S) 文件链接。"""
+    if not isinstance(value, str) or any(ord(char) < 33 for char in value):
+        raise MinerURequestError("MinerU 返回的文件链接无效")
+    try:
+        parsed = urlsplit(value)
+        valid = (
+            parsed.scheme in {"http", "https"}
+            and parsed.hostname
+            and parsed.username is None
+            and parsed.password is None
+        )
+    except ValueError as exc:
+        raise MinerURequestError("MinerU 返回的文件链接无效") from exc
+    if not valid:
+        raise MinerURequestError("MinerU 返回的文件链接无效")
+    return value
+
+
+class _UploadRequest(Request):
+    """签名 PUT 不接受 urllib 自动补上的表单 Content-Type。"""
+
+    def add_unredirected_header(self, key: str, val: str) -> None:
+        if self.get_method() == "PUT" and key.lower() == "content-type":
+            return
+        super().add_unredirected_header(key, val)
 
 
 @dataclass(frozen=True)
-class MultipartBody:
-    """可重放的请求体，每次迭代重开文件，不缓存完整文件。"""
+class FileBody:
+    """可重放的原始文件流，每次重试重开文件且固定缓冲大小。"""
 
     path: Path
     size: int
-    prefix: bytes
-    suffix: bytes
-
-    @property
-    def content_length(self) -> int:
-        return len(self.prefix) + self.size + len(self.suffix)
 
     def __iter__(self) -> Iterator[bytes]:
         with self.path.open("rb") as source:
             if os.fstat(source.fileno()).st_size != self.size:
                 raise MinerURequestError("MinerU 上传文件大小已改变")
-            yield self.prefix
             remaining = self.size
             while remaining:
                 chunk = source.read(min(_TRANSFER_CHUNK_SIZE, remaining))
@@ -427,7 +468,6 @@ class MultipartBody:
                     raise MinerURequestError("MinerU 上传文件已截断")
                 remaining -= len(chunk)
                 yield chunk
-            yield self.suffix
 
 
 def _read_json_response(response: BinaryIO) -> bytes:

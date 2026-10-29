@@ -384,12 +384,12 @@ def complete_session(
                 INSERT INTO documents (
                     id, name, file_type, size_bytes, chunk_count,
                     status, object_key, file_url, previewable,
-                    preview_url, uploaded_at, updated_at
+                    preview_url, parse_version, uploaded_at, updated_at
                 ) VALUES (
                     %(id)s, %(name)s, %(file_type)s, %(size_bytes)s,
                     %(chunk_count)s, %(status)s, %(object_key)s,
                     %(file_url)s, %(previewable)s, %(preview_url)s,
-                    %(uploaded_at)s, %(updated_at)s
+                    %(parse_version)s, %(uploaded_at)s, %(updated_at)s
                 )
                 """,
                 {
@@ -403,6 +403,7 @@ def complete_session(
                     "file_url": document.file_url,
                     "previewable": int(document.previewable),
                     "preview_url": document.preview_url,
+                    "parse_version": document.parse_version,
                     "uploaded_at": as_utc(document.uploaded_at),
                     "updated_at": as_utc(document.updated_at),
                 },
