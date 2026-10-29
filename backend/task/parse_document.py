@@ -20,6 +20,7 @@ from model.parse_job.model import ParseJob
 from model.parse_job.model import ParseJobStatus
 from services.chunking.service import DocumentChunkingService
 from services.common.exceptions import FeatureNotReady
+from services.indexing.flow import enqueue_indexing
 from services.parsing.service import DocumentParsingService
 from services.parsing.service import SubmittedParse
 from services.parsing.service import StoredParseResult
@@ -50,8 +51,11 @@ def parse_document(task_id: str) -> None:
         return
 
     now = _now()
-    chunking = task.stage == DocumentTaskStage.CHUNKING
+    chunking = task.stage in {DocumentTaskStage.CHUNKING, DocumentTaskStage.INDEXING}
     try:
+        if task.stage == DocumentTaskStage.INDEXING:
+            enqueue_indexing(task_id)
+            return
         if chunking and document.parsed_md_key and document.parsed_json_key:
             stored = StoredParseResult(document.parsed_md_key, document.parsed_json_key)
         else:
@@ -89,9 +93,9 @@ def parse_document(task_id: str) -> None:
         )
         if result is False:
             return
-        task_orm.complete(task_id, "解析与切分完成", _now())
+        enqueue_indexing(task_id)
     except Exception as exc:
-        # 任务边界统一记录解析或切分失败，再交由 worker 处理异常。
+        # 任务边界统一记录解析、切分或索引失败，再交由 worker 处理异常。
         if isinstance(exc, FeatureNotReady) and not chunking:
             task_orm.complete(task_id, str(exc), _now())
             return

@@ -2,6 +2,7 @@
 """document_chunks 表的 SQL。"""
 
 from collections.abc import Iterable
+from contextlib import contextmanager
 from datetime import datetime
 from datetime import timezone
 
@@ -264,3 +265,61 @@ def delete_by_document(document_id: str) -> int:
         "DELETE FROM document_chunks WHERE document_id = %(document_id)s",
         {"document_id": document_id},
     )
+
+
+@contextmanager
+def index_current_version(document_id: str, version: int):
+    """版本锁覆盖外部写入，阻止重解析和同文档并发索引交错。"""
+    with transaction() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT parse_version, chunk_count FROM documents WHERE id = %(id)s FOR UPDATE",
+                {"id": document_id},
+            )
+            row = cursor.fetchone()
+            if row is None or int(row["parse_version"]) != version:
+                yield None
+                return
+            yield IndexingSession(cursor, document_id, version, int(row["chunk_count"]))
+
+
+class IndexingSession:
+    """持有当前版本行锁的有界读取与状态提交。"""
+
+    def __init__(self, cursor, document_id: str, version: int, expected_count: int):
+        self.cursor = cursor
+        self.params = {"id": document_id, "version": version}
+        self.expected_count = expected_count
+
+    def iter_children(self, batch_size: int):
+        after = -1
+        while True:
+            self.cursor.execute(
+                "SELECT * FROM document_chunks WHERE document_id = %(id)s "
+                "AND version = %(version)s AND chunk_level = 'CHILD' "
+                "AND chunk_index > %(after)s ORDER BY chunk_index LIMIT %(limit)s",
+                dict(self.params, after=after, limit=batch_size),
+            )
+            rows = self.cursor.fetchall()
+            if not rows:
+                return
+            yield [_from_row(row) for row in rows]
+            after = int(rows[-1]["chunk_index"])
+
+    def finish(self, embedding_model: str, count: int) -> None:
+        if count != self.expected_count:
+            raise RuntimeError("实际索引子块数量与文档计数不一致")
+        self.cursor.execute(
+            "UPDATE document_chunks SET embedding_model = %(model)s "
+            "WHERE document_id = %(id)s AND version = %(version)s AND chunk_level = 'CHILD'",
+            dict(self.params, model=embedding_model),
+        )
+        self.cursor.execute(
+            "DELETE FROM document_chunks WHERE document_id = %(id)s AND version < %(version)s",
+            self.params,
+        )
+        self.cursor.execute(
+            "UPDATE documents SET status = 'READY', error_message = NULL, updated_at = %(now)s "
+            "WHERE id = %(id)s AND parse_version = %(version)s",
+            dict(self.params, now=as_utc(datetime.now(timezone.utc))),
+        )

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 一键启动后端：接口、解析 worker、维护 worker、定时任务、Flower。
+# 一键启动后端：接口、解析 worker、索引 worker、维护 worker、定时任务、Flower。
 # 在仓库根目录执行 ./backend/start.sh，或在 backend 目录执行 ./start.sh。
 # Ctrl+C 会停掉这次启动的全部进程。
 
@@ -125,6 +125,11 @@ start "解析" uv run celery -A main.celery_app worker \
   --loglevel=info \
   -Q celery \
   -n "parse@%h"
+start "索引" uv run celery -A main.celery_app worker \
+  --loglevel=info \
+  -Q index \
+  --concurrency=2 \
+  -n "index@%h"
 start "维护" uv run celery -A main.celery_app worker \
   --loglevel=info \
   -Q maintenance \

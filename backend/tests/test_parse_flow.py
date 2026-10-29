@@ -71,6 +71,7 @@ def _parsed() -> ParsedDocument:
 def _prepare(monkeypatch):
     monkeypatch.setattr(worker.task_orm, "claim", lambda task_id, now: _task())
     monkeypatch.setattr(worker.document_orm, "get", lambda document_id: _document())
+    monkeypatch.setattr(worker, "enqueue_indexing", lambda *args: None, raising=False)
 
 
 def test_submitted_parse_does_not_upload(monkeypatch):
@@ -206,17 +207,20 @@ def test_finished_parse_uploads_and_persists(monkeypatch, error, chunk_result):
         lambda task_id, step, now: calls.append(("complete", step)),
     )
 
+    monkeypatch.setattr(
+        worker,
+        "enqueue_indexing",
+        lambda task_id: calls.append(("index", task_id)),
+    )
     if error is None:
         worker.parse_document.run("task-1")
     else:
         with pytest.raises(type(error), match=str(error)):
             worker.parse_document.run("task-1")
 
-    expected_end = [("complete", "解析与切分完成")]
+    expected_end = [("index", "task-1")] if chunk_result is not False else []
     if error is not None:
         expected_end = [("fail", str(error)), ("document_failed", 1)]
-    elif chunk_result is False:
-        expected_end = []
     assert (
         calls
         == [
@@ -351,8 +355,26 @@ def test_recovered_parse_resumes_stored_artifacts(monkeypatch):
     monkeypatch.setattr(worker, "DocumentChunkingService", _Chunking)
     monkeypatch.setattr(worker.task_orm, "update_progress", lambda *args: None)
     monkeypatch.setattr(worker.task_orm, "complete", lambda *args: calls.append("done"))
+    monkeypatch.setattr(worker, "enqueue_indexing", lambda *args: calls.append("index"))
     worker.parse_document.run("task-1")
-    assert calls == [(1, "stored.md", "stored.json"), "done"]
+    assert calls == [(1, "stored.md", "stored.json"), "index"]
+
+
+def test_recovered_indexing_does_not_parse_or_split(monkeypatch):
+    _prepare(monkeypatch)
+    task = _task()
+    task.stage = DocumentTaskStage.INDEXING
+    monkeypatch.setattr(worker.task_orm, "claim", lambda *args: task)
+    calls = []
+
+    def unexpected(*args):
+        pytest.fail("索引恢复只重放 MySQL 子块")
+
+    monkeypatch.setattr(worker, "DocumentParsingService", unexpected)
+    monkeypatch.setattr(worker, "DocumentChunkingService", unexpected)
+    monkeypatch.setattr(worker, "enqueue_indexing", lambda *args: calls.append("index"))
+    worker.parse_document.run("task-1")
+    assert calls == ["index"]
 
 
 def test_stale_parse_does_not_run_services(monkeypatch):

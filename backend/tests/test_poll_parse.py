@@ -387,6 +387,12 @@ def test_download_merges_when_every_part_has_a_zip(monkeypatch, error):
     )
     monkeypatch.setattr(poll, "DocumentChunkingService", _Chunking, raising=False)
     monkeypatch.setattr(
+        poll,
+        "enqueue_indexing",
+        lambda *args: completed.append("索引完成"),
+        raising=False,
+    )
+    monkeypatch.setattr(
         poll.task_orm,
         "update_progress",
         lambda task_id, stage, percent, step, moment: recorded.append((stage, percent)),
@@ -412,7 +418,7 @@ def test_download_merges_when_every_part_has_a_zip(monkeypatch, error):
         ),
     ]
     if error is None:
-        assert completed == ["解析与切分完成"]
+        assert completed == ["索引完成"]
     else:
         assert completed == [("fail", "切分失败"), ("document_failed", 2)]
 
