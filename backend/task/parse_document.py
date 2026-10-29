@@ -48,6 +48,9 @@ def parse_document(task_id: str) -> None:
         return
 
     if document.parse_version != task.version:
+        if task.stage == DocumentTaskStage.INDEXING:
+            # 维护任务会反复领取未结束的索引任务，版本过期时必须停在失败。
+            task_orm.fail(task_id, "文档版本已变化，索引任务已过期", _now())
         return
 
     now = _now()

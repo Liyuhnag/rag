@@ -13,6 +13,7 @@ from services.indexing.service import DocumentIndexingService
 from task.app import celery_app
 
 logger = logging.getLogger("rag.task")
+_STALE_VERSION = "文档版本已变化，索引任务已过期"
 
 
 @celery_app.task(
@@ -36,6 +37,7 @@ def index_document(task_id: str) -> None:
         task_orm.fail(task_id, "文档不存在", datetime.now(timezone.utc))
         return
     if document.parse_version != task.version:
+        _fail_stale_version(task_id)
         return
 
     def heartbeat(completed: int, total: int, last_chunk_id: str):
@@ -51,6 +53,9 @@ def index_document(task_id: str) -> None:
             document, task.version, heartbeat=heartbeat, lease=lease
         ):
             task_orm.complete(task_id, "解析与索引完成", datetime.now(timezone.utc))
+        else:
+            # 加锁后版本已变，外部索引未写入。只结束这条旧任务。
+            _fail_stale_version(task_id)
     except Exception as exc:
         # 外部存储边界统一记录失败，保留 MySQL 子块供重新索引。
         logger.exception("文档索引失败: %s", task_id)
@@ -61,3 +66,9 @@ def index_document(task_id: str) -> None:
             document.id, message, now, expected_version=task.version
         )
         raise
+
+
+def _fail_stale_version(task_id: str) -> None:
+    """旧版本不再索引。不修改文档，避免把新版本标成失败。"""
+    logger.error("索引任务版本已过期: %s", task_id)
+    task_orm.fail(task_id, _STALE_VERSION, datetime.now(timezone.utc))

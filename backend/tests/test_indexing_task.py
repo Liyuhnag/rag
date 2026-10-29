@@ -141,16 +141,17 @@ def test_indexing_task_completes_only_after_success(monkeypatch, outcome):
         assert calls == ["heartbeat", "fail", {"expected_version": 2}]
     else:
         worker.index_document.run("task")
-        assert calls == ["heartbeat"] + (["complete"] if outcome else [])
+        assert calls == ["heartbeat"] + (["complete"] if outcome else ["fail"])
 
 
-def test_stale_index_task_does_not_call_service(monkeypatch):
+def test_stale_index_task_fails_without_indexing_or_changing_document(monkeypatch):
     task = SimpleNamespace(
         document_id="doc",
         version=1,
         status=DocumentTaskStatus.RUNNING,
         stage=DocumentTaskStage.INDEXING,
     )
+    calls = []
     monkeypatch.setattr(worker.task_orm, "get", lambda task_id: task)
     monkeypatch.setattr(
         worker.document_orm, "get", lambda doc_id: SimpleNamespace(parse_version=2)
@@ -158,7 +159,14 @@ def test_stale_index_task_does_not_call_service(monkeypatch):
     monkeypatch.setattr(
         worker, "DocumentIndexingService", lambda: pytest.fail("过期任务不能索引")
     )
+    monkeypatch.setattr(worker.task_orm, "fail", lambda *args: calls.append(args[1]))
+    monkeypatch.setattr(
+        worker.document_orm,
+        "mark_failed",
+        lambda *args, **kwargs: calls.append("document"),
+    )
     worker.index_document.run("task")
+    assert calls == ["文档版本已变化，索引任务已过期"]
 
 
 def test_finished_parse_dispatches_index_queue(monkeypatch):

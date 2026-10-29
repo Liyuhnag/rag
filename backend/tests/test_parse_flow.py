@@ -377,6 +377,34 @@ def test_recovered_indexing_does_not_parse_or_split(monkeypatch):
     assert calls == ["index"]
 
 
+def test_stale_indexing_fails_without_reindex(monkeypatch):
+    _prepare(monkeypatch)
+    document = _document()
+    document.parse_version = 2
+    task = _task()
+    task.stage = DocumentTaskStage.INDEXING
+    calls = []
+    monkeypatch.setattr(worker.task_orm, "claim", lambda *args: task)
+    monkeypatch.setattr(worker.document_orm, "get", lambda document_id: document)
+    monkeypatch.setattr(worker.task_orm, "fail", lambda *args: calls.append(args[1]))
+    monkeypatch.setattr(
+        worker.document_orm,
+        "mark_failed",
+        lambda *args, **kwargs: calls.append("document"),
+    )
+    monkeypatch.setattr(
+        worker, "enqueue_indexing", lambda *args: calls.append("index")
+    )
+
+    def unexpected(*args):
+        pytest.fail("旧版本索引不应再解析或切分")
+
+    monkeypatch.setattr(worker, "DocumentParsingService", unexpected)
+    monkeypatch.setattr(worker, "DocumentChunkingService", unexpected)
+    worker.parse_document.run("task-1")
+    assert calls == ["文档版本已变化，索引任务已过期"]
+
+
 def test_stale_parse_does_not_run_services(monkeypatch):
     _prepare(monkeypatch)
     document = _document()
