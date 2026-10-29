@@ -13,6 +13,26 @@ from model.document_task.model import DocumentTaskStage
 from model.document_task.model import DocumentTaskStatus
 
 worker = importlib.import_module("task.index_document")
+audit_worker = importlib.import_module("task.audit_index")
+
+
+def test_audit_task_only_checks_ready_documents(monkeypatch):
+    from model.document.model import DocumentStatus
+
+    document = SimpleNamespace(id="doc", status=DocumentStatus.FAILED, parse_version=2)
+    monkeypatch.setattr(audit_worker.document_orm, "get", lambda _id: document)
+    calls = []
+
+    class Service:
+        def audit(self, record, version):
+            calls.append((record.id, version))
+            return True
+
+    monkeypatch.setattr(audit_worker, "DocumentIndexingService", Service)
+    assert not audit_worker.audit_document_index.run("doc")
+    document.status = DocumentStatus.READY
+    assert audit_worker.audit_document_index.run("doc")
+    assert calls == [("doc", 2)]
 
 
 @pytest.mark.parametrize("parse_version", [2, 3])

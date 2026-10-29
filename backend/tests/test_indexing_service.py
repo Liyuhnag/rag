@@ -207,3 +207,20 @@ def test_es_bulk_size_is_independent_of_embedding_batches(monkeypatch):
     assert keywords.batches == [["child-0", "child-1"]]
     assert leases == ["renewed", "renewed"]
     assert progress == [(2, 2, "child-1")]
+
+
+def test_read_only_audit_detects_missing_index_without_writing(monkeypatch):
+    store = Store()
+    service, embedding, vectors, keywords = setup_service(monkeypatch, store)
+    document = SimpleNamespace(id="doc", name="a")
+    service.run(document, 2)
+    embedded = list(embedding.texts)
+    vector_batches = list(vectors.batches)
+    keyword_batches = list(keywords.batches)
+    assert service.audit(document, 2)
+    assert embedding.texts == embedded
+    assert vectors.batches == vector_batches
+    assert keywords.batches == keyword_batches
+    del keywords.rows["child-0"]
+    with pytest.raises(RuntimeError, match="不一致"):
+        service.audit(document, 2)

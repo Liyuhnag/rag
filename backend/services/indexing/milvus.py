@@ -3,6 +3,7 @@
 
 import json
 import logging
+import time
 
 from config import Settings
 
@@ -10,10 +11,11 @@ logger = logging.getLogger("rag.indexing.milvus")
 
 
 class MilvusChunkStore:
-    def __init__(self, settings: Settings, client=None):
+    def __init__(self, settings: Settings, client=None, sleep=time.sleep):
         from pymilvus import MilvusClient
 
         self.settings = settings
+        self.sleep = sleep
         self.client = client or MilvusClient(
             uri=settings.milvus_uri,
             token=settings.milvus_token,
@@ -103,14 +105,27 @@ class MilvusChunkStore:
         self.client.load_collection(name, timeout=timeout)
 
     def upsert(self, rows: list[dict]) -> None:
-        result = self.client.upsert(
-            self.settings.milvus_collection,
-            data=rows,
-            timeout=self.settings.indexing_timeout_seconds,
-        )
-        if result.get("upsert_count") != len(rows):
-            raise RuntimeError("Milvus 未确认全部子块写入")
-        logger.info("milvus upsert count=%d", len(rows))
+        from pymilvus.exceptions import MilvusException
+
+        for attempt in range(4):
+            try:
+                result = self.client.upsert(
+                    self.settings.milvus_collection,
+                    data=rows,
+                    timeout=self.settings.indexing_timeout_seconds,
+                )
+            except MilvusException:
+                if attempt == 3:
+                    raise RuntimeError("Milvus 批量写入失败，重试耗尽") from None
+                logger.warning(
+                    "milvus upsert retry count=%d attempt=%d", len(rows), attempt + 1
+                )
+                self.sleep(2**attempt)
+                continue
+            if result.get("upsert_count") != len(rows):
+                raise RuntimeError("Milvus 未确认全部子块写入")
+            logger.info("milvus upsert count=%d", len(rows))
+            return
 
     def delete_version(self, document_id: str, version: int) -> None:
         self._delete(document_id, f"version == {int(version)}")

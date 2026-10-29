@@ -114,18 +114,48 @@ class DocumentIndexingService:
                 vectors.flush()
                 keywords.flush()
                 sample_ids = list(dict.fromkeys([*first_ids, *last_ids]))
-                vector_count = vectors.count_version(document.id, version)
-                keyword_count = keywords.count_version(document.id, version)
-                if vector_count != count or keyword_count != count:
-                    raise RuntimeError(
-                        "索引子块数量不一致："
-                        f"MySQL={count}, Milvus={vector_count}, Elasticsearch={keyword_count}"
-                    )
-                if not vectors.contains(document.id, version, sample_ids) or not keywords.contains(
-                    document.id, version, sample_ids
-                ):
-                    raise RuntimeError("Milvus、Elasticsearch 抽样子块与 MySQL 不一致")
+                self._verify(document.id, version, count, sample_ids, vectors, keywords)
                 vectors.prune_older(document.id, version)
                 keywords.prune_older(document.id, version)
                 session.finish(self.settings.embedding_model, count)
         return True
+
+    def audit(self, document: Document, version: int) -> bool:
+        """只读巡检已发布版本；过期版本不访问外部索引。"""
+        with chunk_orm.index_current_version(document.id, version) as session:
+            if session is None:
+                return False
+            session.validate_children()
+            first_ids = []
+            last_ids = deque(maxlen=5)
+            count = 0
+            for chunks in session.iter_children(self.settings.indexing_batch_size):
+                count += len(chunks)
+                for chunk in chunks:
+                    if len(first_ids) < 5:
+                        first_ids.append(chunk.id)
+                    last_ids.append(chunk.id)
+            if not count or count != session.expected_count:
+                raise RuntimeError("MySQL 文档子块计数不一致")
+            sample_ids = list(dict.fromkeys([*first_ids, *last_ids]))
+            with ExitStack() as stack:
+                vectors = self.vectors or stack.enter_context(MilvusChunkStore(self.settings))
+                keywords = self.keywords or stack.enter_context(
+                    ElasticsearchChunkStore(self.settings)
+                )
+                self._verify(document.id, version, count, sample_ids, vectors, keywords)
+        return True
+
+    @staticmethod
+    def _verify(document_id, version, count, sample_ids, vectors, keywords) -> None:
+        vector_count = vectors.count_version(document_id, version)
+        keyword_count = keywords.count_version(document_id, version)
+        if vector_count != count or keyword_count != count:
+            raise RuntimeError(
+                "索引子块数量不一致："
+                f"MySQL={count}, Milvus={vector_count}, Elasticsearch={keyword_count}"
+            )
+        if not vectors.contains(document_id, version, sample_ids) or not keywords.contains(
+            document_id, version, sample_ids
+        ):
+            raise RuntimeError("Milvus、Elasticsearch 抽样子块与 MySQL 不一致")

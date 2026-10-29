@@ -4,6 +4,7 @@
 from types import SimpleNamespace
 
 import pytest
+from pymilvus.exceptions import MilvusException
 
 from config import Settings
 from services.indexing.elasticsearch import ElasticsearchChunkStore
@@ -114,6 +115,24 @@ def test_milvus_upsert_must_confirm_every_child():
     )
     with pytest.raises(RuntimeError, match="未确认"):
         store.upsert([{"chunk_id": "child"}])
+
+
+def test_milvus_upsert_retries_transient_sdk_failure():
+    calls = []
+    waits = []
+
+    def upsert(*args, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise MilvusException(message="temporary")
+        return {"upsert_count": 1}
+
+    store = MilvusChunkStore(
+        Settings(), client=SimpleNamespace(upsert=upsert), sleep=waits.append
+    )
+    store.upsert([{"chunk_id": "child"}])
+    assert len(calls) == 2
+    assert waits == [1]
 
 
 def test_milvus_cleanup_escapes_document_id_and_preserves_newer_versions():

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """异步处理任务。"""
 
+from task.audit_index import audit_document_index
 from task.maintenance import cleanup_old_sessions
 from task.maintenance import cleanup_orphan_mpu
 from task.maintenance import cleanup_orphan_object
@@ -15,6 +16,7 @@ from task.poll_parse import poll_parse_jobs
 from task.poll_parse import resubmit_parse_part
 
 __all__ = [
+    "audit_document_index",
     "cleanup_old_sessions",
     "cleanup_orphan_mpu",
     "cleanup_orphan_object",
