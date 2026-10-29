@@ -121,6 +121,8 @@ def test_upload_complete_and_query_task(client):
     assert task_body["progress"] == 0
     assert task_body["step"] == "等待处理"
     assert task_body["version"] == 1
+    doc = client.app.state.upload_repository.documents[created["documentId"]]
+    assert doc.parse_version == 1
 
 
 def test_complete_is_idempotent(client):
@@ -355,4 +357,3 @@ def test_complete_merge_not_found_marks_failed(client, monkeypatch):
     assert response.status_code == 410
     assert response.json()["error"]["code"] == "UPLOAD_EXPIRED"
     assert session.status == "FAILED"
-

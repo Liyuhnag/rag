@@ -33,7 +33,7 @@ class Document:
     preview_url: str | None
     page_count: int = 0
     parent_chunk_count: int = 0
-    parse_version: int = 0
+    parse_version: int = 1
     parsed_md_key: str | None = None
     parsed_json_key: str | None = None
     source_sha256: str | None = None

@@ -197,6 +197,7 @@ class MemoryUploadRepository:
     def __init__(self) -> None:
         self.sessions: dict[str, UploadSession] = {}
         self.tasks: dict[tuple[str, int], DocumentTask] = {}
+        self.documents: dict[str, Document] = {}
 
     def find_active(
         self,
@@ -285,6 +286,7 @@ class MemoryUploadRepository:
         session.status = "COMPLETED"
         session.completed_at = now
         session.updated_at = now
+        self.documents[document.id] = document
         self.tasks[(task.document_id, task.version)] = task
 
     def get_task(self, task_id: str):

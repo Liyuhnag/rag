@@ -16,12 +16,13 @@ def insert(document: Document) -> None:
         INSERT INTO documents (
             id, name, file_type, size_bytes, chunk_count,
             status, uploaded_at, updated_at, object_key,
-            file_url, previewable, preview_url
+            file_url, previewable, preview_url, parse_version
         ) VALUES (
             %(id)s, %(name)s, %(file_type)s, %(size_bytes)s,
             %(chunk_count)s, %(status)s,
             %(uploaded_at)s, %(updated_at)s, %(object_key)s,
-            %(file_url)s, %(previewable)s, %(preview_url)s
+            %(file_url)s, %(previewable)s, %(preview_url)s,
+            %(parse_version)s
         )
     """
     execute(
@@ -39,6 +40,7 @@ def insert(document: Document) -> None:
             "file_url": document.file_url,
             "previewable": int(document.previewable),
             "preview_url": document.preview_url,
+            "parse_version": document.parse_version,
         },
     )
 

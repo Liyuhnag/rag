@@ -43,6 +43,14 @@ mineru/
 └── submit.py         # 把整文件提交出去
 ```
 
+官方接口协议见 [MinerU API 文档](https://mineru.net/doc/docs/index.html)。配置 `MINERU_API_URL=https://mineru.net`（域名，不含 `/api/v4`），`MINERU_API_KEY` 使用 MinerU 签发的 Bearer Token，不是 OpenXLab AK/SK。
+
+每个分段创建一个单文件批次：`POST /api/v4/file-urls/batch`（`model_version=vlm`）→ 向签名链接流式 `PUT` 原始文件 → 上传完成自动提交 → `GET /api/v4/extract-results/batch/{batch_id}` 轮询 → 从 `full_zip_url` 下载 ZIP。签名上传与下载不携带 API Token；数据传输有界且可重试。
+
+内部保留原任务字段：`mineru_job_id` 保存官方 `batch_id`，`mineru_file_id` 保存提交的 `data_id`（源文件 SHA-256）。waiting-file/pending 映射 queued，converting/running 映射 running，done 映射 completed。业务错误码也会校验，不把 HTTP 200 等同于成功。
+
+官方 ZIP 优先使用 `full.md`，保留 JSON 结果文件并在分段 manifest 的 `json_keys` 中记录来源；图片按相对路径发布到 S3。合并 JSON 是分段索引，chunk 正文读取合并 Markdown。
+
 ## 外部适配器
 
 ```text
@@ -65,6 +73,12 @@ adapters/
 Markdown 原样保留文本。TXT 把标题作为一级标题，正文按空行保留段落。CSV 和 XLSX 按表头转成 JSON 对象数组。PDF 先下载到本地，超过 180 页或 180MiB 就按页拆开，再逐段交给 MinerU。DOC 和 DOCX 同样先下载，不超过 180MiB 就整份提交，超过则失败。PDF 分段和 Word 的 Markdown 都按起始页合成一份，并在每页前写入 `<!-- page: N -->`。提交后不等待解析结束。
 
 Worker 已接入解析服务。本地解析结果会写入 `documents/{文档}/parsed/{版本}/merged.md`。MinerU 分段提交后由维护任务每 10 秒轮询。状态为完成时，解析 Worker 下载 `result.zip`。同一版本的分段都下载后合并写入同一位置，并带上图片。MinerU 失败或任务丢失时，最多再提交两次。
+
+## 官方服务验证
+
+2026-10-28 使用生成的单页 PDF，调用现有 `parse_document.run`、`poll_job`、`download_job`，真实访问 MinerU 官方 API、S3 和 MySQL，验证任务达到 COMPLETED（“解析与切分完成”），产物读回及正文匹配成功，落库 1 个父块、1 个子块。验证文档 ID 为 `bde5467d411a4d80bcf3f76032557538`，独立测试记录与产物保留用于检查。
+
+本次验证直接调用任务处理函数并同步触发下载，未覆盖 Redis 消息投递、Celery Worker/Beat 常驻调度、浏览器上传或大文件验收。后端回归为 306 passed，Ruff 检查通过。
 
 ## 模型层
 

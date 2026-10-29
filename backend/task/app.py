@@ -4,6 +4,8 @@
 import os
 
 from celery import Celery
+from celery import current_app
+from celery.app import trace
 from celery.signals import worker_process_init
 from dotenv import load_dotenv
 
@@ -29,6 +31,7 @@ celery_app = Celery(
     "rag",
     broker=_redis_url,
     backend=_result_backend(_redis_url),
+    include=["task"],
 )
 celery_app.conf.update(
     task_serializer="json",
@@ -83,6 +86,9 @@ celery_app.conf.beat_schedule = {
 @worker_process_init.connect
 def _open_storage(**_kwargs: object) -> None:
     """每个 worker 进程自己连接数据库和对象存储。"""
+    if not trace._localized:
+        trace.setup_worker_optimizations(current_app._get_current_object())
+
     from services.common.connect import connect_storage
 
     connect_storage(load_settings())

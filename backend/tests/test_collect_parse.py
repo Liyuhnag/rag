@@ -34,6 +34,32 @@ class _Store:
         self.objects[key] = (content, content_type)
 
 
+def test_official_zip_prefers_full_markdown_and_preserves_json_artifacts():
+    store = _Store()
+    store.objects["official.zip"] = (
+        _zip(
+            {
+                "full.md": b"Official parsed content",
+                "readme.md": b"unrelated " * 100,
+                "demo_content_list.json": b'[{"type":"text"}]',
+                "layout.json": b'{"pdf_info":[]}',
+            }
+        ),
+        "application/zip",
+    )
+    result = DocumentParsingService(reader=store).collect(
+        "doc-1", 1, "pdf", "source.pdf", [PartZip(1, 1, 1, "official.zip")]
+    )
+    assert b"Official parsed content" in store.objects[result.md_key][0]
+    assert b"unrelated" not in store.objects[result.md_key][0]
+    manifest_key = dict(result.part_results)[1]
+    manifest = json.loads(store.objects[manifest_key][0])
+    assert len(manifest["json_keys"]) == 2
+    for key in manifest["json_keys"]:
+        assert store.objects[key][1] == "application/json"
+    assert json.loads(store.objects[manifest["json_keys"][0]][0]) == [{"type": "text"}]
+
+
 def test_mineru_parts_are_merged_and_stored():
     store = _Store()
     service = DocumentParsingService(reader=store)
