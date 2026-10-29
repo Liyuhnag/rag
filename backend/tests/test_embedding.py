@@ -86,3 +86,46 @@ def test_invalid_vectors_are_rejected_before_writing(data):
 def test_missing_api_key_is_actionable():
     with pytest.raises(RuntimeError, match="DASHSCOPE_API_KEY"):
         DashScopeEmbedder(Settings())
+
+
+def test_token_limit_splits_batch_without_reordering():
+    import json
+
+    inputs = []
+
+    def handler(request):
+        texts = json.loads(request.content)["input"]
+        inputs.append(texts)
+        if len(texts) > 1:
+            return httpx.Response(400, json={"error": {"message": "too many tokens"}})
+        vector = [1, 0] if texts == ["一"] else [0, 1]
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": vector}]})
+
+    assert embedder(handler).embed(["一", "二"]) == [[1, 0], [0, 1]]
+    assert inputs == [["一", "二"], ["一"], ["二"]]
+
+
+def test_token_limit_splits_single_text_and_combines_vectors():
+    import json
+
+    def handler(request):
+        text = json.loads(request.content)["input"][0]
+        if len(text) > 4:
+            return httpx.Response(400, json={"error": {"message": "input length exceeded"}})
+        vector = [1, 0] if text == "abcd" else [0, 1]
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": vector}]})
+
+    vector = embedder(handler).embed(["abcdefgh"])[0]
+    assert vector == pytest.approx([2**-0.5, 2**-0.5])
+
+
+def test_other_bad_request_does_not_split():
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(400, json={"error": {"message": "model unavailable"}})
+
+    with pytest.raises(RuntimeError, match="400"):
+        embedder(handler).embed(["一", "二"])
+    assert len(calls) == 1

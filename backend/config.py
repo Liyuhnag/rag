@@ -110,6 +110,7 @@ class Settings:
     es_api_key: str = ""
     es_ca_certs: str = ""
     es_index: str = "document_chunks"
+    es_bulk_size: int = 500
     es_analyzer: str = "ik_max_word"
     es_search_analyzer: str = "ik_smart"
 
@@ -244,5 +245,6 @@ def load_settings() -> Settings:
         embedding_dim=_int_env("EMBEDDING_DIM", 1024),
         indexing_batch_size=indexing_batch_size,
         indexing_timeout_seconds=_int_env("INDEXING_TIMEOUT_SECONDS", 60),
+        es_bulk_size=_int_env("ES_BULK_SIZE", 500),
         **indexing_strings,
     )

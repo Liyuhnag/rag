@@ -1,14 +1,20 @@
 # -*- coding: utf-8 -*-
 """Elasticsearch 8 子块 BM25 索引。"""
 
+import logging
+import time
+
 from config import Settings
+
+logger = logging.getLogger("rag.indexing.elasticsearch")
 
 
 class ElasticsearchChunkStore:
-    def __init__(self, settings: Settings, client=None):
+    def __init__(self, settings: Settings, client=None, sleep=time.sleep):
         from elasticsearch import Elasticsearch
 
         self.settings = settings
+        self.sleep = sleep
         options = {
             "request_timeout": settings.indexing_timeout_seconds,
             "max_retries": 3,
@@ -103,16 +109,38 @@ class ElasticsearchChunkStore:
                     )
 
     def upsert(self, rows: list[dict]) -> None:
-        operations = []
-        for row in rows:
-            operations.extend(({"index": {"_id": row["chunk_id"]}}, row))
-        result = self.client.bulk(
-            index=self.settings.es_index, operations=operations, refresh="wait_for"
-        )
-        if result.get("errors") or len(result.get("items", [])) != len(rows):
-            raise RuntimeError("Elasticsearch 批量写入失败，当前版本可重放")
-        if any(item["index"]["status"] >= 300 for item in result["items"]):
-            raise RuntimeError("Elasticsearch 存在写入失败的子块")
+        pending = rows
+        for attempt in range(4):
+            operations = []
+            for row in pending:
+                operations.extend(({"index": {"_id": row["chunk_id"]}}, row))
+            result = self.client.bulk(
+                index=self.settings.es_index, operations=operations, refresh=False
+            )
+            items = result.get("items", [])
+            if len(items) != len(pending):
+                raise RuntimeError("Elasticsearch 批量写入结果数量不匹配")
+            retry = []
+            for row, item in zip(pending, items, strict=True):
+                status = item.get("index", {}).get("status", 0)
+                if 200 <= status < 300:
+                    continue
+                if status == 429 or status >= 500:
+                    retry.append(row)
+                else:
+                    raise RuntimeError("Elasticsearch 批量写入失败，请检查 mapping 或权限")
+            if not retry:
+                if result.get("errors"):
+                    raise RuntimeError("Elasticsearch 批量写入失败，当前版本可重放")
+                return
+            if attempt == 3:
+                raise RuntimeError("Elasticsearch 批量写入失败，重试耗尽")
+            logger.warning(
+                "elasticsearch bulk retry failed_items=%d attempt=%d",
+                len(retry), attempt + 1,
+            )
+            pending = retry
+            self.sleep(2**attempt)
 
     def delete_version(self, document_id: str, version: int) -> None:
         self._delete(document_id, {"term": {"version": version}})
@@ -141,3 +169,24 @@ class ElasticsearchChunkStore:
         result = self.client.indices.refresh(index=self.settings.es_index)
         if result["_shards"]["failed"]:
             raise RuntimeError("Elasticsearch 索引刷新失败")
+
+    def count_version(self, document_id: str, version: int) -> int:
+        result = self.client.count(
+            index=self.settings.es_index,
+            query={"bool": {"filter": [
+                {"term": {"document_id": document_id}},
+                {"term": {"version": version}},
+            ]}},
+        )
+        return int(result["count"])
+
+    def contains(self, document_id: str, version: int, ids: list[str]) -> bool:
+        result = self.client.mget(index=self.settings.es_index, ids=ids)
+        found = {
+            row["_id"]
+            for row in result["docs"]
+            if row.get("found")
+            and row["_source"].get("document_id") == document_id
+            and row["_source"].get("version") == version
+        }
+        return found == set(ids)

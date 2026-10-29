@@ -6,6 +6,7 @@ from datetime import datetime
 from model.common.database import as_utc
 from model.common.database import execute
 from model.common.database import execute_count
+from model.common.database import transaction
 from model.document_task.model import DocumentTask
 from model.document_task.model import DocumentTaskStage
 from model.document_task.model import DocumentTaskStatus
@@ -147,6 +148,99 @@ def update_progress(
             "now": as_utc(now),
         },
     )
+
+
+def update_index_progress(
+    task_id: str, completed: int, total: int, last_chunk_id: str, now: datetime
+) -> None:
+    """记录双索引均已确认的批次检查点，同时续租运行中的任务。"""
+    progress = 90 + min(9, 9 * completed // total)
+    execute_count(
+        """
+        UPDATE document_tasks
+        SET progress = %(progress)s,
+            step = %(step)s,
+            result_json = JSON_SET(
+                COALESCE(result_json, JSON_OBJECT()),
+                '$.embedded_count', %(completed)s,
+                '$.es_indexed', %(completed)s,
+                '$.milvus_indexed', %(completed)s,
+                '$.last_chunk_id', %(last_chunk_id)s
+            ),
+            updated_at = %(now)s
+        WHERE id = %(id)s AND status = 'RUNNING' AND stage = 'INDEXING'
+        """,
+        {
+            "id": task_id,
+            "progress": progress,
+            "step": f"已向量化 {completed}/{total}",
+            "completed": completed,
+            "last_chunk_id": last_chunk_id,
+            "now": as_utc(now),
+        },
+    )
+
+
+def touch_indexing(task_id: str, now: datetime) -> None:
+    """长批量写入期间续租，不提前声明 ES 写入成功。"""
+    execute_count(
+        """
+        UPDATE document_tasks SET updated_at = %(now)s
+        WHERE id = %(id)s AND status = 'RUNNING' AND stage = 'INDEXING'
+        """,
+        {"id": task_id, "now": as_utc(now)},
+    )
+
+
+def retry_failed_indexing(task_id: str, now: datetime) -> bool:
+    """仅允许当前文档版本的失败索引重新排队。"""
+    with transaction() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT t.status, t.stage, t.version, d.parse_version,
+                       d.status AS document_status
+                FROM document_tasks AS t
+                JOIN documents AS d ON d.id = t.document_id
+                WHERE t.id = %(id)s FOR UPDATE
+                """,
+                {"id": task_id},
+            )
+            row = cursor.fetchone()
+            if (
+                row is None
+                or row["status"] != "FAILED"
+                or row["stage"] != "INDEXING"
+                or row["document_status"] != "FAILED"
+                or int(row["version"]) != int(row["parse_version"])
+            ):
+                return False
+            cursor.execute(
+                """
+                UPDATE documents AS d
+                JOIN document_tasks AS t ON t.document_id = d.id
+                SET d.status = 'PROCESSING', d.error_message = NULL,
+                    d.updated_at = %(now)s
+                WHERE t.id = %(id)s
+                """,
+                {"id": task_id, "now": as_utc(now)},
+            )
+            cursor.execute(
+                """
+                UPDATE document_tasks
+                SET status = 'PENDING', progress = 90,
+                    step = '等待重新索引', error_message = NULL,
+                    result_json = JSON_REMOVE(
+                        COALESCE(result_json, JSON_OBJECT()),
+                        '$.embedded_count', '$.es_indexed',
+                        '$.milvus_indexed', '$.last_chunk_id'
+                    ),
+                    updated_at = %(now)s
+                WHERE id = %(id)s
+                """,
+                {"id": task_id, "now": as_utc(now)},
+            )
+    return True
 
 
 def begin_merge(task_id: str, now: datetime) -> bool:

@@ -2,6 +2,7 @@
 """在版本锁内重放子块，双索引确认成功后发布 READY。"""
 
 from contextlib import ExitStack
+from collections import deque
 
 from config import load_settings
 from model.document.model import Document
@@ -20,11 +21,12 @@ class DocumentIndexingService:
         self.vectors = vectors
         self.keywords = keywords
 
-    def run(self, document: Document, version: int, heartbeat=None) -> bool:
+    def run(self, document: Document, version: int, heartbeat=None, lease=None) -> bool:
         """过期版本不触碰外部索引；异常保留原始块以供重放。"""
         with chunk_orm.index_current_version(document.id, version) as session:
             if session is None:
                 return False
+            session.validate_children()
             embedder = self.embedder or DashScopeEmbedder(self.settings)
             # 客户端属于本次调用，在成功或失败后均关闭网络连接。
             with ExitStack() as stack:
@@ -39,6 +41,10 @@ class DocumentIndexingService:
                 vectors.delete_version(document.id, version)
                 keywords.delete_version(document.id, version)
                 count = 0
+                confirmed = 0
+                keyword_pending = []
+                first_ids = []
+                last_ids = deque(maxlen=5)
                 for chunks in session.iter_children(self.settings.indexing_batch_size):
                     texts = [
                         "\n".join(filter(None, (chunk.heading_path, chunk.content)))
@@ -80,14 +86,45 @@ class DocumentIndexingService:
                             )
                         )
                     vectors.upsert(vector_rows)
-                    keywords.upsert(keyword_rows)
+                    keyword_pending.extend(keyword_rows)
                     count += len(chunks)
-                    if heartbeat is not None:
-                        heartbeat()
+                    for chunk in chunks:
+                        if len(first_ids) < 5:
+                            first_ids.append(chunk.id)
+                        last_ids.append(chunk.id)
+                    if lease is not None:
+                        lease()
+                    while len(keyword_pending) >= self.settings.es_bulk_size:
+                        batch = keyword_pending[: self.settings.es_bulk_size]
+                        keywords.upsert(batch)
+                        del keyword_pending[: self.settings.es_bulk_size]
+                        confirmed += len(batch)
+                        if heartbeat is not None:
+                            heartbeat(confirmed, session.expected_count, batch[-1]["chunk_id"])
                 if not count:
                     raise RuntimeError("没有可索引的子块")
+                if keyword_pending:
+                    keywords.upsert(keyword_pending)
+                    confirmed += len(keyword_pending)
+                    if heartbeat is not None:
+                        heartbeat(
+                            confirmed, session.expected_count,
+                            keyword_pending[-1]["chunk_id"],
+                        )
                 vectors.flush()
                 keywords.flush()
+                sample_ids = list(dict.fromkeys([*first_ids, *last_ids]))
+                vector_count = vectors.count_version(document.id, version)
+                keyword_count = keywords.count_version(document.id, version)
+                if vector_count != count or keyword_count != count:
+                    raise RuntimeError(
+                        "索引子块数量不一致："
+                        f"MySQL={count}, Milvus={vector_count}, Elasticsearch={keyword_count}"
+                    )
+                if not vectors.contains(document.id, version, sample_ids) or not keywords.contains(
+                    document.id, version, sample_ids
+                ):
+                    raise RuntimeError("Milvus、Elasticsearch 抽样子块与 MySQL 不一致")
                 vectors.prune_older(document.id, version)
                 keywords.prune_older(document.id, version)
                 session.finish(self.settings.embedding_model, count)

@@ -2,8 +2,11 @@
 """Milvus 子块向量集合与按版本清理。"""
 
 import json
+import logging
 
 from config import Settings
+
+logger = logging.getLogger("rag.indexing.milvus")
 
 
 class MilvusChunkStore:
@@ -107,6 +110,7 @@ class MilvusChunkStore:
         )
         if result.get("upsert_count") != len(rows):
             raise RuntimeError("Milvus 未确认全部子块写入")
+        logger.info("milvus upsert count=%d", len(rows))
 
     def delete_version(self, document_id: str, version: int) -> None:
         self._delete(document_id, f"version == {int(version)}")
@@ -127,3 +131,27 @@ class MilvusChunkStore:
             self.settings.milvus_collection,
             timeout=self.settings.indexing_timeout_seconds,
         )
+
+    def count_version(self, document_id: str, version: int) -> int:
+        literal = json.dumps(document_id, ensure_ascii=True)
+        result = self.client.query(
+            self.settings.milvus_collection,
+            filter=f"document_id == {literal} and version == {int(version)}",
+            output_fields=["count(*)"],
+            timeout=self.settings.indexing_timeout_seconds,
+        )
+        return int(result[0]["count(*)"])
+
+    def contains(self, document_id: str, version: int, ids: list[str]) -> bool:
+        result = self.client.get(
+            self.settings.milvus_collection,
+            ids=ids,
+            output_fields=["chunk_id", "document_id", "version"],
+            timeout=self.settings.indexing_timeout_seconds,
+        )
+        found = {
+            row["chunk_id"]
+            for row in result
+            if row["document_id"] == document_id and row["version"] == version
+        }
+        return found == set(ids)

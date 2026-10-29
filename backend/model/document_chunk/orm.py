@@ -291,6 +291,48 @@ class IndexingSession:
         self.params = {"id": document_id, "version": version}
         self.expected_count = expected_count
 
+    def validate_children(self) -> None:
+        """在外部写入前检查孤立子块、父块边界与父块计数。"""
+        self.cursor.execute(
+            """
+            SELECT c.id FROM document_chunks AS c
+            LEFT JOIN document_chunks AS p ON p.id = c.parent_id
+            WHERE c.document_id = %(id)s AND c.version = %(version)s
+              AND c.chunk_level = 'CHILD'
+              AND (
+                p.id IS NULL OR p.chunk_level <> 'PARENT'
+                OR p.document_id <> c.document_id OR p.version <> c.version
+                OR c.parent_index IS NULL OR c.parent_index <> p.parent_index
+                OR c.child_order IS NULL OR c.child_order < 0
+                OR c.child_order >= p.child_count
+                OR c.chunk_index <> p.chunk_index + c.child_order + 1
+                OR (p.page_start IS NOT NULL AND c.page_start IS NOT NULL
+                    AND c.page_start < p.page_start)
+                OR (p.page_end IS NOT NULL AND c.page_end IS NOT NULL
+                    AND c.page_end > p.page_end)
+              ) LIMIT 1
+            """,
+            self.params,
+        )
+        if self.cursor.fetchone() is not None:
+            raise RuntimeError("子块的父块、版本或边界无效")
+        self.cursor.execute(
+            """
+            SELECT p.id FROM document_chunks AS p
+            LEFT JOIN document_chunks AS c
+              ON c.parent_id = p.id AND c.chunk_level = 'CHILD'
+              AND c.document_id = %(id)s AND c.version = %(version)s
+            WHERE p.document_id = %(id)s AND p.version = %(version)s
+              AND p.chunk_level = 'PARENT'
+            GROUP BY p.id, p.child_count
+            HAVING COUNT(c.id) <> p.child_count
+            LIMIT 1
+            """,
+            self.params,
+        )
+        if self.cursor.fetchone() is not None:
+            raise RuntimeError("父块 child_count 与实际子块数量不一致")
+
     def iter_children(self, batch_size: int):
         after = -1
         while True:

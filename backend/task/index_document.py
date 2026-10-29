@@ -38,17 +38,18 @@ def index_document(task_id: str) -> None:
     if document.parse_version != task.version:
         return
 
-    def heartbeat():
-        task_orm.update_progress(
-            task_id,
-            DocumentTaskStage.INDEXING,
-            90,
-            "向量化与索引写入中",
-            datetime.now(timezone.utc),
+    def heartbeat(completed: int, total: int, last_chunk_id: str):
+        task_orm.update_index_progress(
+            task_id, completed, total, last_chunk_id, datetime.now(timezone.utc)
         )
 
+    def lease():
+        task_orm.touch_indexing(task_id, datetime.now(timezone.utc))
+
     try:
-        if DocumentIndexingService().run(document, task.version, heartbeat=heartbeat):
+        if DocumentIndexingService().run(
+            document, task.version, heartbeat=heartbeat, lease=lease
+        ):
             task_orm.complete(task_id, "解析与索引完成", datetime.now(timezone.utc))
     except Exception as exc:
         # 外部存储边界统一记录失败，保留 MySQL 子块供重新索引。

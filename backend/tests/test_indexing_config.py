@@ -28,6 +28,7 @@ def test_indexing_env_is_used(env):
     env.setenv("EMBEDDING_DIM", "512")
     env.setenv("DASHSCOPE_API_KEY", "test-key")
     env.setenv("ES_URL", "https://es:9200")
+    env.setenv("ES_BULK_SIZE", "250")
     env.setenv("ES_ANALYZER", "standard")
     env.setenv("ES_SEARCH_ANALYZER", "standard")
     settings = config.load_settings()
@@ -36,6 +37,7 @@ def test_indexing_env_is_used(env):
     assert settings.embedding_dim == 512
     assert settings.dashscope_api_key == "test-key"
     assert settings.es_url == "https://es:9200"
+    assert settings.es_bulk_size == 250
     assert settings.es_analyzer == settings.es_search_analyzer == "standard"
 
 
@@ -46,6 +48,7 @@ def test_indexing_env_is_used(env):
         ("INDEXING_BATCH_SIZE", "0"),
         ("EMBEDDING_DIM", "invalid"),
         ("INDEXING_TIMEOUT_SECONDS", "0"),
+        ("ES_BULK_SIZE", "0"),
         ("MILVUS_COLLECTION", ""),
     ],
 )

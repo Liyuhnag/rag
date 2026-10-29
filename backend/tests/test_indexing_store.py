@@ -9,9 +9,11 @@ from model.document_chunk import orm
 
 
 class Cursor:
-    def __init__(self, version=2):
+    def __init__(self, version=2, invalid_child=False, invalid_count=False):
         self.version = version
         self.calls = []
+        self.invalid_child = invalid_child
+        self.invalid_count = invalid_count
 
     def __enter__(self):
         return self
@@ -23,6 +25,10 @@ class Cursor:
         self.calls.append((sql, params))
 
     def fetchone(self):
+        if len(self.calls) == 2:
+            return {"id": "bad-child"} if self.invalid_child else None
+        if len(self.calls) == 3:
+            return {"id": "bad-parent"} if self.invalid_count else None
         return {"parse_version": self.version, "chunk_count": 1}
 
 
@@ -74,3 +80,16 @@ def test_count_mismatch_rolls_back_without_marking_ready(monkeypatch):
             session.finish("model", 2)
     assert events == ["rollback"]
     assert len(cursor.calls) == 1
+
+
+@pytest.mark.parametrize("invalid_child,invalid_count", [(True, False), (False, True)])
+def test_invalid_parent_child_relationship_aborts_before_indexing(
+    monkeypatch, invalid_child, invalid_count
+):
+    cursor = Cursor(invalid_child=invalid_child, invalid_count=invalid_count)
+    events = install_transaction(monkeypatch, cursor)
+    with pytest.raises(RuntimeError, match="父块"):
+        with orm.index_current_version("doc", 2) as session:
+            session.validate_children()
+    assert events == ["rollback"]
+    assert all(not sql.lstrip().startswith("UPDATE") for sql, _ in cursor.calls)

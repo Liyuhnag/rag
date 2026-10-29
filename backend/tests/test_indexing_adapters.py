@@ -17,7 +17,7 @@ def test_es_partial_bulk_failure_cannot_be_success():
             "items": [{"index": {"status": 429}}],
         }
     )
-    store = ElasticsearchChunkStore(Settings(), client=client)
+    store = ElasticsearchChunkStore(Settings(), client=client, sleep=lambda _: None)
     with pytest.raises(RuntimeError, match="批量写入失败"):
         store.upsert([{"chunk_id": "child"}])
 
@@ -37,6 +37,29 @@ def test_es_uses_shared_child_id_and_keeps_parent_reference():
     assert calls[0]["operations"] == [
         {"index": {"_id": "child"}},
         {"chunk_id": "child", "parent_id": "parent", "content": "正文"},
+    ]
+    assert calls[0]["refresh"] is False
+
+
+def test_es_retries_only_failed_bulk_items():
+    calls = []
+    waits = []
+
+    def bulk(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return {"errors": True, "items": [
+                {"index": {"status": 201}}, {"index": {"status": 429}}
+            ]}
+        return {"errors": False, "items": [{"index": {"status": 200}}]}
+
+    store = ElasticsearchChunkStore(
+        Settings(), client=SimpleNamespace(bulk=bulk), sleep=waits.append
+    )
+    store.upsert([{"chunk_id": "a"}, {"chunk_id": "b"}])
+    assert waits == [1]
+    assert calls[1]["operations"] == [
+        {"index": {"_id": "b"}}, {"chunk_id": "b"}
     ]
 
 
@@ -153,3 +176,47 @@ def test_es_existing_keyword_content_mapping_is_rejected():
         ElasticsearchChunkStore(
             Settings(), client=SimpleNamespace(indices=indices)
         ).ensure()
+
+
+def test_es_consistency_queries_are_scoped_to_document_version():
+    calls = []
+
+    def count(**kwargs):
+        calls.append(kwargs)
+        return {"count": 2}
+
+    client = SimpleNamespace(
+        count=count,
+        mget=lambda **kwargs: {
+            "docs": [
+                {"_id": "a", "found": True, "_source": {"document_id": "doc", "version": 2}},
+                {"_id": "b", "found": True, "_source": {"document_id": "other", "version": 2}},
+            ]
+        },
+    )
+    store = ElasticsearchChunkStore(Settings(), client=client)
+    assert store.count_version("doc", 2) == 2
+    assert calls[0]["query"]["bool"]["filter"] == [
+        {"term": {"document_id": "doc"}}, {"term": {"version": 2}}
+    ]
+    assert not store.contains("doc", 2, ["a", "b"])
+
+
+def test_milvus_consistency_queries_are_scoped_to_document_version():
+    calls = []
+
+    def query(*args, **kwargs):
+        calls.append(kwargs)
+        return [{"count(*)": 2}]
+
+    client = SimpleNamespace(
+        query=query,
+        get=lambda *args, **kwargs: [
+            {"chunk_id": "a", "document_id": "doc", "version": 2},
+            {"chunk_id": "b", "document_id": "doc", "version": 1},
+        ],
+    )
+    store = MilvusChunkStore(Settings(), client=client)
+    assert store.count_version('doc"quote', 2) == 2
+    assert calls[0]["filter"] == 'document_id == "doc\\"quote" and version == 2'
+    assert not store.contains("doc", 2, ["a", "b"])

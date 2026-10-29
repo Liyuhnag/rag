@@ -8,8 +8,9 @@
 2. 首次使用时创建 Milvus collection、HNSW/COSINE 索引及 ES strict mapping。已有集合校验维度、模型标识和必需字段；ES 校验字段类型与分词器。
 3. 清理该文档当前版本的外部记录，用 `heading_path + "\n" + content` 调用 embedding。正文会发送到所配置的 embedding 服务。
 4. 共用 `chunk_id`：Milvus upsert 子块向量和父块关联字段，ES bulk index 子块正文与来源字段。父块只在 MySQL；Milvus 不存正文，其他来源字段可回查 MySQL。
-5. 检查 embedding 数量、维度、有限数值和非零向量，检查 Milvus 写入数量和 ES 每项状态。刷新成功后，只清理该文档更早版本的索引。
-6. 将子块 `embedding_model`、旧版本块清理和文档 `READY` 在同一 MySQL 事务提交，最后才完成任务。
+5. 写入前检查子块的父块、版本、顺序、页码边界及父块 `child_count`。检查 embedding 数量、维度、有限数值和非零向量，以及 Milvus 写入数量和 ES 每项状态。
+6. 刷新后比对 MySQL 子块数与 Milvus/ES 当前版本数量，并抽查首尾子块 ID 和版本；不一致时失败并保留旧版本。
+7. 清理旧版本后，将子块 `embedding_model`、旧版本块清理和文档 `READY` 在同一 MySQL 事务提交，最后才完成任务。
 
 ## 配置与启动
 
@@ -22,6 +23,7 @@
 | `INDEXING_BATCH_SIZE`、`INDEXING_TIMEOUT_SECONDS` | 默认每批 10 条、单次请求 60 秒；批量限制为 1–10 |
 | `MILVUS_URI`、`MILVUS_TOKEN`、`MILVUS_DATABASE`、`MILVUS_COLLECTION` | Milvus 服务、认证、数据库和集合 |
 | `ES_URL`、`ES_INDEX` | Elasticsearch 8 服务和索引 |
+| `ES_BULK_SIZE` | ES Bulk 每批条数，默认 500；与 embedding 批量独立 |
 | `ES_API_KEY` 或 `ES_USERNAME` / `ES_PASSWORD` | ES 认证，API key 优先 |
 | `ES_CA_CERTS` | 自签名 TLS 的 CA 文件路径；默认保持证书校验 |
 | `ES_ANALYZER`、`ES_SEARCH_ANALYZER` | 默认 `ik_max_word` / `ik_smart`，需安装与 ES 版本匹配的 IK 插件 |
@@ -32,9 +34,9 @@
 
 ## 失败与一致性
 
-Embedding 网络故障、429 和 5xx 最多重试三次，配置错误立即失败。任一存储失败都不发布 READY，任务记录错误并保留 MySQL 子块。失联 INDEXING 任务超过 10 分钟由现有维护任务重置并补投，恢复时直接从 MySQL 重放；每个成功批次更新任务时间。
+Embedding 网络故障、429 和 5xx 最多重试三次，配置错误立即失败。明确的 400 token 长度错误会拆分批次；单条仍超限时拆分文本并合并归一化向量，最多递归 8 层。每次请求记录 token 用量、耗时或 HTTP 失败状态，不记录正文。ES Bulk 使用 `refresh=false`，只重试 429/5xx 的失败条目，全部批次完成后统一刷新。每个双索引确认的批次更新任务进度和 `result_json` 中的写入数量、最后子块 ID。任一存储失败或一致性检查不通过都不发布 READY，任务记录错误并保留 MySQL 子块。失联 INDEXING 任务超过 10 分钟由现有维护任务重置并补投，恢复时直接从 MySQL 重放。
 
-双索引与 MySQL 没有分布式事务，失败可能留下部分外部记录；同版本重放先清理并按确定性 ID 重写。检索接入时必须校验 MySQL 的 READY 和当前版本。已正常记录为 FAILED 的任务不属于失联恢复，需要显式重新安排；本次未增加重新索引 API。
+双索引与 MySQL 没有分布式事务，失败可能留下部分外部记录；同版本重放先清理并按确定性 ID 重写。检索接入时必须校验 MySQL 的 READY 和当前版本。`POST /api/tasks/{id}/retry` 只接受当前版本、`INDEXING/FAILED` 且文档为 `FAILED` 的任务；重排队后从 MySQL 子块完整重放。投递 Redis 失败时任务保持 PENDING，由维护任务补投。
 
 版本锁覆盖网络调用，会延长事务和文档行锁持有时间，同文档重解析、删除或其他索引会等待。当前选择串行化保证版本安全；无阻塞在线重建需进一步引入发布版本和任务租约。删除文档后的外部孤儿索引回收、检索与混合召回不在本次实现中。
 
