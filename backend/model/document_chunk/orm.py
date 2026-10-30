@@ -273,23 +273,38 @@ def index_current_version(document_id: str, version: int):
     with transaction() as connection:
         with connection.cursor() as cursor:
             cursor.execute(
-                "SELECT parse_version, chunk_count FROM documents WHERE id = %(id)s FOR UPDATE",
+                "SELECT parse_version, chunk_count, status FROM documents "
+                "WHERE id = %(id)s FOR UPDATE",
                 {"id": document_id},
             )
             row = cursor.fetchone()
             if row is None or int(row["parse_version"]) != version:
                 yield None
                 return
-            yield IndexingSession(cursor, document_id, version, int(row["chunk_count"]))
+            yield IndexingSession(
+                cursor,
+                document_id,
+                version,
+                int(row["chunk_count"]),
+                str(row["status"]),
+            )
 
 
 class IndexingSession:
     """持有当前版本行锁的有界读取与状态提交。"""
 
-    def __init__(self, cursor, document_id: str, version: int, expected_count: int):
+    def __init__(
+        self,
+        cursor,
+        document_id: str,
+        version: int,
+        expected_count: int,
+        status: str,
+    ):
         self.cursor = cursor
         self.params = {"id": document_id, "version": version}
         self.expected_count = expected_count
+        self.status = status
 
     def validate_children(self) -> None:
         """在外部写入前检查孤立子块、父块边界与父块计数。"""

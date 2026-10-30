@@ -29,7 +29,11 @@ class Cursor:
             return {"id": "bad-child"} if self.invalid_child else None
         if len(self.calls) == 3:
             return {"id": "bad-parent"} if self.invalid_count else None
-        return {"parse_version": self.version, "chunk_count": 1}
+        return {
+            "parse_version": self.version,
+            "chunk_count": 1,
+            "status": "PROCESSING",
+        }
 
 
 def install_transaction(monkeypatch, cursor):

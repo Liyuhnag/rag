@@ -75,9 +75,10 @@ def index_document(task_id: str) -> None:
             if DocumentIndexingService().run(
                 document, task.version, heartbeat=heartbeat, lease=lease
             ):
-                task_orm.complete(
+                if not task_orm.complete(
                     task_id, "解析与索引完成", datetime.now(timezone.utc), token
-                )
+                ):
+                    logger.error("索引已发布，但任务完成标记未写上: %s", task_id)
             else:
                 # 加锁后版本已变，外部索引未写入。只结束这条旧任务。
                 _fail_stale_version(task_id, token)

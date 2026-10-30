@@ -111,8 +111,8 @@ def claim(task_id: str, now: datetime) -> DocumentTask | None:
         UPDATE document_tasks
         SET status = %(status)s,
             stage = CASE WHEN stage IN ('CHUNKING', 'INDEXING') THEN stage ELSE %(stage)s END,
-            progress = 0,
-            step = '解析中',
+            progress = CASE WHEN stage = 'INDEXING' THEN progress ELSE 0 END,
+            step = CASE WHEN stage = 'INDEXING' THEN step ELSE '解析中' END,
             result_json = JSON_SET(
                 COALESCE(result_json, JSON_OBJECT()),
                 '$.lease_token', %(lease_token)s

@@ -37,11 +37,18 @@ class Store:
         self.chunks = [child(0), child(1)] if chunks is None else chunks
         self.stale = stale
         self.ready = False
+        self.status = "PROCESSING"
+        self.statuses = []
         self.expected_count = len(self.chunks)
 
     @contextmanager
     def index_current_version(self, document_id, version):
-        yield None if self.stale else self
+        if self.stale:
+            yield None
+            return
+        if self.statuses:
+            self.status = self.statuses.pop(0)
+        yield self
 
     def iter_children(self, batch_size):
         for start in range(0, len(self.chunks), batch_size):
@@ -113,6 +120,10 @@ def setup_service(monkeypatch, store):
         "services.indexing.service.chunk_orm.index_current_version",
         store.index_current_version,
     )
+    monkeypatch.setattr(
+        "services.indexing.service.document_orm.mark_processing",
+        lambda *args, **kwargs: True,
+    )
     settings = SimpleNamespace(
         embedding_model="test", embedding_dim=2, indexing_batch_size=1,
         es_bulk_size=1,
@@ -152,6 +163,55 @@ def test_partial_failure_never_marks_ready_and_can_replay(monkeypatch):
     assert service.run(SimpleNamespace(id="doc", name="a.txt"), 2)
     assert store.ready
     assert vectors.rows.keys() == keywords.rows.keys() == {"child-0", "child-1"}
+
+
+def test_replay_unpublishes_ready_before_deleting_the_current_index(monkeypatch):
+    store = Store()
+    store.statuses = ["READY", "PROCESSING"]
+    service, _, vectors, keywords = setup_service(monkeypatch, store)
+    events = []
+
+    def mark_processing(document_id, version, now):
+        events.append("unpublish")
+        return True
+
+    def watch(delete):
+        def delete_version(document_id, version):
+            events.append(("delete", store.status))
+            delete(document_id, version)
+
+        return delete_version
+
+    monkeypatch.setattr(
+        "services.indexing.service.document_orm.mark_processing",
+        mark_processing,
+    )
+    vectors.delete_version = watch(vectors.delete_version)
+    keywords.delete_version = watch(keywords.delete_version)
+    assert service.run(SimpleNamespace(id="doc", name="a"), 2)
+    assert events == [
+        "unpublish",
+        "unpublish",
+        ("delete", "PROCESSING"),
+        ("delete", "PROCESSING"),
+    ]
+    assert store.ready
+
+
+def test_changed_version_does_not_clear_external_indexes(monkeypatch):
+    store = Store()
+    service, embedding, vectors, keywords = setup_service(monkeypatch, store)
+
+    def mark_processing(document_id, version, now):
+        return False
+
+    monkeypatch.setattr(
+        "services.indexing.service.document_orm.mark_processing",
+        mark_processing,
+    )
+    assert not service.run(SimpleNamespace(id="doc", name="a"), 2)
+    assert not embedding.texts
+    assert vectors.rows.keys() == keywords.rows.keys() == {"old"}
 
 
 def test_stale_version_does_not_touch_external_indexes(monkeypatch):

@@ -6,6 +6,7 @@ from datetime import datetime
 from model.common.database import as_aware
 from model.common.database import as_utc
 from model.common.database import execute
+from model.common.database import execute_count
 from model.document.model import Document
 from model.document.model import DocumentStatus
 
@@ -172,6 +173,39 @@ def begin_parse(
             "now": as_utc(now),
         },
     )
+
+
+def mark_processing(document_id: str, version: int, now: datetime) -> bool:
+    """重放外部索引前取消 READY。版本不符时不改文档。"""
+    params = {
+        "id": document_id,
+        "version": version,
+        "now": as_utc(now),
+    }
+    changed = execute_count(
+        """
+        UPDATE documents
+        SET status = 'PROCESSING',
+            error_message = NULL,
+            updated_at = %(now)s
+        WHERE id = %(id)s AND parse_version = %(version)s
+        """,
+        params,
+    )
+    if changed == 1:
+        return True
+    # 状态本来就是 PROCESSING 时，MySQL 可能报告 0 行变化。再读一次确认版本仍在。
+    rows = execute(
+        """
+        SELECT status FROM documents
+        WHERE id = %(id)s AND parse_version = %(version)s
+        LIMIT 1
+        """,
+        params,
+    )
+    if not rows:
+        return False
+    return str(rows[0]["status"]) == DocumentStatus.PROCESSING.value
 
 
 def mark_ready(

@@ -131,9 +131,11 @@ def test_indexing_task_completes_only_after_success(monkeypatch, outcome):
         worker.task_orm, "update_index_progress", lambda *args: calls.append("heartbeat")
     )
     monkeypatch.setattr(worker.task_orm, "touch_indexing", lambda *args: None)
-    monkeypatch.setattr(
-        worker.task_orm, "complete", lambda *args: calls.append("complete")
-    )
+    def complete(*args):
+        calls.append("complete")
+        return True
+
+    monkeypatch.setattr(worker.task_orm, "complete", complete)
 
     def fail(*args):
         calls.append("fail")
@@ -196,6 +198,41 @@ def test_finished_parse_dispatches_index_queue(monkeypatch):
     enqueue_indexing("task")
     assert calls[0][1] == DocumentTaskStage.INDEXING
     assert calls[1] == {"args": ["task"], "queue": "index"}
+
+
+def test_missed_completion_keeps_the_published_document(monkeypatch, caplog):
+    task = SimpleNamespace(
+        id="task",
+        document_id="doc",
+        version=2,
+        status=DocumentTaskStatus.RUNNING,
+        stage=DocumentTaskStage.INDEXING,
+        lease_token="lease-1",
+    )
+    calls = []
+    monkeypatch.setattr(worker.task_orm, "get", lambda task_id: task)
+    monkeypatch.setattr(
+        worker.document_orm,
+        "get",
+        lambda doc_id: SimpleNamespace(id="doc", parse_version=2),
+    )
+
+    class Service:
+        def run(self, document, version, heartbeat, lease):
+            return True
+
+    monkeypatch.setattr(worker, "DocumentIndexingService", Service)
+    monkeypatch.setattr(worker.task_orm, "touch_indexing", lambda *args: None)
+    monkeypatch.setattr(worker.task_orm, "complete", lambda *args: False)
+    monkeypatch.setattr(
+        worker.document_orm,
+        "mark_failed",
+        lambda *args, **kwargs: calls.append("document"),
+    )
+    with caplog.at_level("ERROR"):
+        worker.index_document.run("task")
+    assert calls == []
+    assert "任务完成标记未写上" in caplog.text
 
 
 def test_replaced_lease_does_not_fail_document(monkeypatch):
@@ -261,7 +298,7 @@ def test_index_lease_renews_while_the_task_runs(monkeypatch):
 
     monkeypatch.setattr(worker, "DocumentIndexingService", Service)
     monkeypatch.setattr(worker.task_orm, "touch_indexing", touch)
-    monkeypatch.setattr(worker.task_orm, "complete", lambda *args: None)
+    monkeypatch.setattr(worker.task_orm, "complete", lambda *args: True)
     worker.index_document.run("task")
     assert tokens[0] == "lease-1"
     assert len(tokens) >= 2
@@ -282,6 +319,8 @@ def test_claim_and_index_lease_sql_keep_the_current_token(monkeypatch):
     task_orm.claim("task", now)
     task_orm.touch_indexing("task", "lease-1", now)
     assert task_orm.fail("task", "索引失败", now, "lease-1") is True
+    assert "CASE WHEN stage = 'INDEXING' THEN progress ELSE 0 END" in statements[0][0]
+    assert "CASE WHEN stage = 'INDEXING' THEN step ELSE '解析中' END" in statements[0][0]
     assert "$.lease_token" in statements[0][0]
     assert statements[0][1]["lease_token"]
     assert "$.lease_token" in statements[1][0]

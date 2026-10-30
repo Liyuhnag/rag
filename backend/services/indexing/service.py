@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
 """在版本锁内重放子块，双索引确认成功后发布 READY。"""
 
-from contextlib import ExitStack
 from collections import deque
+from contextlib import ExitStack
+from datetime import datetime
+from datetime import timezone
 
 from config import load_settings
+from model.document import orm as document_orm
 from model.document.model import Document
+from model.document.model import DocumentStatus
 from model.document_chunk import orm as chunk_orm
 from services.indexing.embedding import DashScopeEmbedder
 from services.indexing.elasticsearch import ElasticsearchChunkStore
@@ -23,9 +27,25 @@ class DocumentIndexingService:
 
     def run(self, document: Document, version: int, heartbeat=None, lease=None) -> bool:
         """过期版本不触碰外部索引；异常保留原始块以供重放。"""
+        while True:
+            # 先提交 PROCESSING，读者才能在清空当前索引之前看到文档不可检索。
+            if not document_orm.mark_processing(
+                document.id, version, datetime.now(timezone.utc)
+            ):
+                return False
+            published = self._index_locked(document, version, heartbeat, lease)
+            if published is not None:
+                return published
+
+    def _index_locked(
+        self, document: Document, version: int, heartbeat, lease
+    ) -> bool | None:
+        """锁内仍是 READY 时不删外部索引，交回 run 再次取消发布。"""
         with chunk_orm.index_current_version(document.id, version) as session:
             if session is None:
                 return False
+            if session.status != DocumentStatus.PROCESSING.value:
+                return None
             session.validate_children()
             embedder = self.embedder or DashScopeEmbedder(self.settings)
             # 客户端属于本次调用，在成功或失败后均关闭网络连接。
