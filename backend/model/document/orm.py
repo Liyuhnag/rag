@@ -156,23 +156,9 @@ def begin_parse(
     document_id: str,
     parse_version: int,
     now: datetime,
-) -> None:
-    """开始解析版本，仅允许同版本重试或版本递增。"""
-    execute(
-        """
-        UPDATE documents
-        SET status = 'PROCESSING',
-            parse_version = %(parse_version)s,
-            error_message = NULL,
-            updated_at = %(now)s
-        WHERE id = %(id)s AND parse_version <= %(parse_version)s
-        """,
-        {
-            "id": document_id,
-            "parse_version": parse_version,
-            "now": as_utc(now),
-        },
-    )
+) -> bool:
+    """仅启动当前版本；版本分配由创建任务的业务入口负责。"""
+    return mark_processing(document_id, parse_version, now)
 
 
 def mark_processing(document_id: str, version: int, now: datetime) -> bool:

@@ -51,6 +51,7 @@ def _task() -> DocumentTask:
         stage=DocumentTaskStage.PARSING,
         progress=0,
         step="解析中",
+        lease_token="parse-lease",
     )
 
 
@@ -71,6 +72,7 @@ def _parsed() -> ParsedDocument:
 def _prepare(monkeypatch):
     monkeypatch.setattr(worker.task_orm, "claim", lambda task_id, now: _task())
     monkeypatch.setattr(worker.document_orm, "get", lambda document_id: _document())
+    monkeypatch.setattr(worker.document_orm, "begin_parse", lambda *args: True)
     monkeypatch.setattr(worker, "enqueue_indexing", lambda *args: None, raising=False)
 
 
@@ -171,7 +173,7 @@ def test_finished_parse_uploads_and_persists(monkeypatch, error, chunk_result):
     monkeypatch.setattr(
         worker.task_orm,
         "fail",
-        lambda task_id, message, now: calls.append(("fail", message)),
+        lambda task_id, message, now, token=None: calls.append(("fail", message)),
     )
     monkeypatch.setattr(
         worker.document_orm,
@@ -218,7 +220,9 @@ def test_finished_parse_uploads_and_persists(monkeypatch, error, chunk_result):
         with pytest.raises(type(error), match=str(error)):
             worker.parse_document.run("task-1")
 
-    expected_end = [("index", "task-1")] if chunk_result is not False else []
+    expected_end = [("index", "task-1")]
+    if chunk_result is False:
+        expected_end = [("fail", "文档版本不匹配，解析任务已过期")]
     if error is not None:
         expected_end = [("fail", str(error)), ("document_failed", 1)]
     assert (
@@ -263,7 +267,9 @@ def test_structured_files_persist_schema_without_chunking(
     def unexpected(*args, **kwargs):
         raise AssertionError("结构化数据不应进入文本切分或提前标记就绪")
 
-    monkeypatch.setattr(worker.task_orm, "fail", lambda *args: None)
+    monkeypatch.setattr(
+        worker.task_orm, "fail", lambda *args: calls.append(("failed", args[3]))
+    )
     monkeypatch.setattr(
         worker.document_orm, "mark_failed", lambda *args, **kwargs: None
     )
@@ -292,7 +298,10 @@ def test_structured_files_persist_schema_without_chunking(
         ("persist", "parsed.json"),
         (DocumentTaskStage.CHUNKING, 85),
         ("schema", 1, "parsed.md", "parsed.json"),
-    ] + ([("complete", "结构已保存，待数据入库")] if schema_result else [])
+    ] + (
+        [("complete", "结构已保存，待数据入库")]
+        if schema_result else [("failed", "parse-lease")]
+    )
 
 
 @pytest.mark.parametrize(
@@ -405,15 +414,93 @@ def test_stale_indexing_fails_without_reindex(monkeypatch):
     assert calls == ["文档版本已变化，索引任务已过期"]
 
 
-def test_stale_parse_does_not_run_services(monkeypatch):
+def test_first_parse_starts_document_processing(monkeypatch):
     _prepare(monkeypatch)
     document = _document()
-    document.parse_version = 2
-    monkeypatch.setattr(worker.document_orm, "get", lambda document_id: document)
+    calls = []
+    monkeypatch.setattr(worker.document_orm, "get", lambda *args: document)
 
-    def unexpected(*args):
-        pytest.fail("旧版本任务不应继续解析")
+    def begin_parse(document_id, version, now):
+        assert document_id == document.id
+        assert version == document.parse_version == 1
+        document.status = DocumentStatus.PROCESSING
+        calls.append("begin")
+        return True
 
-    monkeypatch.setattr(worker, "DocumentParsingService", unexpected)
-    monkeypatch.setattr(worker, "DocumentChunkingService", unexpected)
+    def parse(self, current, version):
+        calls.append(("parse", current.status, version))
+        return SubmittedParse()
+
+    monkeypatch.setattr(worker.document_orm, "begin_parse", begin_parse)
+    monkeypatch.setattr(worker.DocumentParsingService, "parse", parse)
+    monkeypatch.setattr(worker.task_orm, "update_progress", lambda *args: None)
     worker.parse_document.run("task-1")
+
+    assert calls == ["begin", ("parse", DocumentStatus.PROCESSING, 1)]
+
+
+@pytest.mark.parametrize("version", [0, 2])
+@pytest.mark.parametrize(
+    "stage",
+    [DocumentTaskStage.PARSING, DocumentTaskStage.CHUNKING,
+     DocumentTaskStage.INDEXING],
+)
+def test_version_mismatch_fails_only_claimed_task(monkeypatch, version, stage):
+    _prepare(monkeypatch)
+    document = _document()
+    document.parse_version = version
+    document.status = DocumentStatus.READY
+    document.parsed_md_key = "current.md"
+    task = _task()
+    task.stage = stage
+    failures = []
+    monkeypatch.setattr(worker.task_orm, "claim", lambda *args: task)
+    monkeypatch.setattr(worker.document_orm, "get", lambda *args: document)
+
+    def fail(task_id, message, now, token=None):
+        failures.append((task_id, message, token))
+        task.status = DocumentTaskStatus.FAILED
+        return True
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("版本不匹配不能开始业务处理或修改文档")
+
+    monkeypatch.setattr(worker.task_orm, "fail", fail)
+    monkeypatch.setattr(worker.document_orm, "begin_parse", unexpected)
+    monkeypatch.setattr(worker.document_orm, "mark_failed", unexpected)
+    monkeypatch.setattr(worker, "DocumentParsingService", unexpected)
+    monkeypatch.setattr(worker, "enqueue_indexing", unexpected)
+    worker.parse_document.run(task.id)
+
+    assert task.status == DocumentTaskStatus.FAILED
+    assert failures[0][0] == task.id
+    assert failures[0][2] == "parse-lease"
+    assert document.parse_version == version
+    assert document.status == DocumentStatus.READY
+    assert document.parsed_md_key == "current.md"
+
+
+def test_version_changes_before_begin_parse_fails_task(monkeypatch):
+    _prepare(monkeypatch)
+    task = _task()
+    calls = []
+    monkeypatch.setattr(worker.task_orm, "claim", lambda *args: task)
+    monkeypatch.setattr(worker.document_orm, "begin_parse", lambda *args: False)
+    monkeypatch.setattr(
+        worker.task_orm,
+        "fail",
+        lambda task_id, message, now, token=None: calls.append(token),
+    )
+    monkeypatch.setattr(
+        worker.DocumentParsingService,
+        "parse",
+        lambda *args: calls.append("parse") or SubmittedParse(),
+    )
+    monkeypatch.setattr(
+        worker.document_orm,
+        "mark_failed",
+        lambda *args, **kwargs: calls.append("document"),
+    )
+    worker.parse_document.run(task.id)
+
+    assert calls == ["parse-lease"]

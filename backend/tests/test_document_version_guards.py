@@ -39,7 +39,8 @@ def test_set_parsed_artifacts_requires_expected_version(executed):
     }
 
 
-def test_mark_processing_updates_only_the_current_version(monkeypatch):
+@pytest.mark.parametrize("operation", ["mark_processing", "begin_parse"])
+def test_mark_processing_updates_only_the_current_version(monkeypatch, operation):
     calls = []
 
     def execute_count(sql, params):
@@ -52,7 +53,7 @@ def test_mark_processing_updates_only_the_current_version(monkeypatch):
     monkeypatch.setattr(orm, "execute_count", execute_count)
     monkeypatch.setattr(orm, "execute", execute)
     now = datetime(2026, 10, 30, tzinfo=timezone.utc)
-    assert orm.mark_processing("doc-1", 2, now)
+    assert getattr(orm, operation)("doc-1", 2, now)
     sql, params, _kind = calls[0]
     assert "status = 'PROCESSING'" in sql
     assert "parse_version = %(version)s" in sql
@@ -61,7 +62,10 @@ def test_mark_processing_updates_only_the_current_version(monkeypatch):
     assert params["now"] == datetime(2026, 10, 30)
 
 
-def test_mark_processing_accepts_a_version_that_is_already_processing(monkeypatch):
+@pytest.mark.parametrize("operation", ["mark_processing", "begin_parse"])
+def test_mark_processing_accepts_a_version_that_is_already_processing(
+    monkeypatch, operation
+):
     def execute_count(sql, params):
         return 0
 
@@ -70,15 +74,18 @@ def test_mark_processing_accepts_a_version_that_is_already_processing(monkeypatc
 
     monkeypatch.setattr(orm, "execute_count", execute_count)
     monkeypatch.setattr(orm, "execute", execute)
-    assert orm.mark_processing("doc-1", 2, datetime(2026, 10, 30, tzinfo=timezone.utc))
-
-
-def test_mark_processing_rejects_a_different_version(monkeypatch):
-    monkeypatch.setattr(orm, "execute_count", lambda sql, params: 0)
-    monkeypatch.setattr(orm, "execute", lambda sql, params: [])
-    assert not orm.mark_processing(
+    assert getattr(orm, operation)(
         "doc-1", 2, datetime(2026, 10, 30, tzinfo=timezone.utc)
     )
+
+
+@pytest.mark.parametrize("operation", ["mark_processing", "begin_parse"])
+def test_mark_processing_rejects_a_different_version(monkeypatch, operation):
+    monkeypatch.setattr(orm, "execute_count", lambda sql, params: 0)
+    monkeypatch.setattr(orm, "execute", lambda sql, params: [])
+    assert getattr(orm, operation)(
+        "doc-1", 2, datetime(2026, 10, 30, tzinfo=timezone.utc)
+    ) is False
 
 
 def test_mark_failed_requires_expected_version_and_truncates_message(executed):
@@ -93,20 +100,6 @@ def test_mark_failed_requires_expected_version_and_truncates_message(executed):
         "message": "x" * 1024,
         "now": datetime(2026, 10, 27),
         "expected_version": 0,
-    }
-
-
-def test_begin_parse_cannot_lower_document_version(executed):
-    now = datetime(2026, 10, 27, tzinfo=timezone.utc)
-
-    orm.begin_parse("doc-1", 3, now)
-
-    sql, params = executed[0]
-    assert "WHERE id = %(id)s AND parse_version <= %(parse_version)s" in sql
-    assert params == {
-        "id": "doc-1",
-        "parse_version": 3,
-        "now": datetime(2026, 10, 27),
     }
 
 
