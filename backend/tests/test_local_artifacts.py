@@ -82,3 +82,16 @@ def test_failed_iteration_closes_source_and_does_not_upload():
         store_document(document(blocks()), store, datetime.now(timezone.utc))
     assert closed == [True]
     assert store.objects == {}
+
+
+def test_attempt_outputs_cannot_overwrite_another_claim():
+    store = Store()
+    now = datetime.now(timezone.utc)
+    new = store_document(document([ParsedBlock("text", "new")]), store, now, "new-token")
+    saved = dict(store.objects)
+    old = store_document(document([ParsedBlock("text", "late-old")]), store, now, "old-token")
+    assert old.md_key != new.md_key
+    assert all(store.objects[key] == value for key, value in saved.items())
+    manifest = json.loads(store.objects[new.manifest_key])
+    assert manifest["merged_md_key"] == new.md_key
+    assert manifest["merged_json_key"] == new.json_key

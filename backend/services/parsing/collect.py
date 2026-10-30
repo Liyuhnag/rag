@@ -61,6 +61,7 @@ def collect_parts(
     parts: tuple[PartZip, ...] | list[PartZip],
     now: datetime,
     reader,
+    attempt_id: str | None = None,
 ) -> ArtifactKeys:
     """逐段落盘、验证后上传；总清单在其他产物完成后发布。"""
     if not parts:
@@ -74,13 +75,15 @@ def collect_parts(
             archive_path = root / f"part-{n}.zip"
             reader.download_object(part.result_key, archive_path)
             section, objects, manifest_key = _stage_part(
-                document_id, version, part, archive_path, root, n
+                document_id, version, part, archive_path, root, n, attempt_id
             )
             archive_path.unlink()
             staged.extend(objects)
             sections.append((part.page_start, part.part_index, section))
             part_results.append((part.part_index, manifest_key))
         base = f"documents/{document_id}/parsed/{version}"
+        if attempt_id:
+            base = f"{base}/attempts/{attempt_id}"
         md_key = f"{base}/merged.md"
         json_key = f"{base}/merged.json"
         manifest_key = f"{base}/manifest.json"
@@ -146,7 +149,9 @@ def _check_archive_directory(path: Path) -> None:
     )
 
 
-def _stage_part(document_id, version, part, archive_path, root, ordinal):
+def _stage_part(
+    document_id, version, part, archive_path, root, ordinal, attempt_id=None
+):
     """校验实际解压字节并落盘，绝不信任 ZIP 声明大小。"""
     _check_archive_directory(archive_path)
     try:
@@ -189,8 +194,13 @@ def _stage_part(document_id, version, part, archive_path, root, ordinal):
         if len(preferred) == 1
         else max(markdown, key=lambda x: (files[x][1], x))
     )
-    prefix = f"documents/{document_id}/parse/{version}/parts/{part.part_index}"
-    assets = f"documents/{document_id}/parsed/{version}/assets/part-{part.part_index}"
+    parse_base = f"documents/{document_id}/parse/{version}"
+    parsed_base = f"documents/{document_id}/parsed/{version}"
+    if attempt_id:
+        parse_base = f"{parse_base}/attempts/{attempt_id}"
+        parsed_base = f"{parsed_base}/attempts/{attempt_id}"
+    prefix = f"{parse_base}/parts/{part.part_index}"
+    assets = f"{parsed_base}/assets/part-{part.part_index}"
     objects = [(f"{prefix}/content.md", files[name][0], _CONTENT_TYPES[".md"])]
     # 官方 ZIP 使用 *_content_list.json/layout.json；保留所有 JSON，避免丢失结构化结果。
     json_keys = []

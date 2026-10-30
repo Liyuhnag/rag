@@ -20,6 +20,7 @@ def _from_row(row: dict[str, object]) -> ParseJob:
         document_id=str(row["document_id"]),
         task_id=str(row["task_id"]),
         version=int(row["version"]),
+        lease_token=row.get("lease_token"),
         part_index=int(row["part_index"]),
         page_start=int(row["page_start"]),
         page_end=int(row["page_end"]),
@@ -55,16 +56,18 @@ def _from_row(row: dict[str, object]) -> ParseJob:
 
 
 def insert(job: ParseJob) -> None:
-    """写入一条 PDF 分段解析任务。"""
+    """写入一条 PDF 分段解析任务，保留提交者的执行标记。"""
+    if not job.lease_token:
+        raise ValueError("分段任务缺少领取标记")
     execute(
         """
         INSERT INTO parse_jobs (
-            id, document_id, task_id, version, part_index,
+            id, document_id, task_id, version, lease_token, part_index,
             page_start, page_end, source_key, mineru_file_id,
             mineru_job_id, status, attempts, next_poll_at,
             error_message, result_key, created_at, updated_at
         ) VALUES (
-            %(id)s, %(document_id)s, %(task_id)s, %(version)s,
+            %(id)s, %(document_id)s, %(task_id)s, %(version)s, %(lease_token)s,
             %(part_index)s, %(page_start)s, %(page_end)s,
             %(source_key)s, %(mineru_file_id)s, %(mineru_job_id)s,
             %(status)s, %(attempts)s, %(next_poll_at)s,
@@ -77,6 +80,7 @@ def insert(job: ParseJob) -> None:
             "document_id": job.document_id,
             "task_id": job.task_id,
             "version": job.version,
+            "lease_token": job.lease_token,
             "part_index": job.part_index,
             "page_start": job.page_start,
             "page_end": job.page_end,
@@ -110,15 +114,17 @@ def get(job_id: str) -> ParseJob | None:
 def list_by_document_version(
     document_id: str,
     version: int,
+    lease_token: str,
 ) -> list[ParseJob]:
-    """按文档和解析版本查询全部分段任务，按 part_index 升序返回。"""
+    """按文档、版本和领取批次查询分段，按 part_index 升序返回。"""
     rows = execute(
         """
         SELECT * FROM parse_jobs
         WHERE document_id = %(document_id)s AND version = %(version)s
+          AND lease_token = %(lease_token)s
         ORDER BY part_index ASC
         """,
-        {"document_id": document_id, "version": version},
+        {"document_id": document_id, "version": version, "lease_token": lease_token},
     )
     return [_from_row(row) for row in rows]
 
@@ -163,7 +169,13 @@ def claim_due(now: datetime, limit: int) -> list[ParseJob]:
             cursor.execute(
                 """
                 SELECT * FROM parse_jobs
-                WHERE next_poll_at IS NOT NULL
+                WHERE EXISTS (
+                    SELECT 1 FROM document_tasks AS t
+                    WHERE t.id = parse_jobs.task_id AND t.status = 'RUNNING'
+                      AND t.stage = 'PARSING'
+                      AND JSON_UNQUOTE(JSON_EXTRACT(t.result_json, '$.lease_token'))
+                          = parse_jobs.lease_token
+                ) AND next_poll_at IS NOT NULL
                   AND next_poll_at <= %(now)s
                   AND (
                     status IN ('SUBMITTED', 'RUNNING')

@@ -16,7 +16,10 @@ if TYPE_CHECKING:
 
 
 def store_document(
-    parsed: ParsedDocument, reader: ObjectReader, now: datetime
+    parsed: ParsedDocument,
+    reader: ObjectReader,
+    now: datetime,
+    attempt_id: str | None = None,
 ) -> "ArtifactKeys":
     """先完成解析和序列化，再上传产物，最后写完成清单。"""
     from services.parsing.collect import ArtifactKeys
@@ -24,6 +27,8 @@ def store_document(
 
     request = parsed.request
     base = f"documents/{request.document_id}/parsed/{request.version}"
+    if attempt_id:
+        base = f"{base}/attempts/{attempt_id}"
     keys = ArtifactKeys(
         f"{base}/merged.md", f"{base}/merged.json", f"{base}/manifest.json"
     )

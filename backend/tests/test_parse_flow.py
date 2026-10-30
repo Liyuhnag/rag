@@ -7,6 +7,8 @@ from datetime import timezone
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("parse_lease")
+
 from model.document.model import Document
 from model.document.model import DocumentStatus
 from model.document_task.model import DocumentTask
@@ -82,7 +84,7 @@ def test_submitted_parse_does_not_upload(monkeypatch):
     monkeypatch.setattr(
         worker.task_orm,
         "update_progress",
-        lambda task_id, stage, percent, step, now: progress.append(step),
+        lambda task_id, stage, percent, step, now, token: progress.append(step),
     )
     monkeypatch.setattr(
         worker.DocumentParsingService,
@@ -130,7 +132,7 @@ def test_submitted_parse_records_job(monkeypatch):
     monkeypatch.setattr(
         worker.task_orm,
         "update_progress",
-        lambda task_id, stage, percent, step, now: progress.append(step),
+        lambda task_id, stage, percent, step, now, token: progress.append(step),
     )
     monkeypatch.setattr(
         worker.DocumentParsingService,
@@ -145,6 +147,7 @@ def test_submitted_parse_records_job(monkeypatch):
     assert inserted[0].mineru_job_id == "job-1"
     assert inserted[0].status.value == "SUBMITTED"
     assert inserted[0].task_id == "task-1"
+    assert inserted[0].lease_token == "parse-lease"
     assert inserted[0].source_key == "documents/doc-1/demo.pdf"
     assert inserted[0].next_poll_at is not None
 
@@ -173,7 +176,7 @@ def test_finished_parse_uploads_and_persists(monkeypatch, error, chunk_result):
     monkeypatch.setattr(
         worker.task_orm,
         "fail",
-        lambda task_id, message, now, token=None: calls.append(("fail", message)),
+        lambda task_id, message, now, token=None: calls.append(("fail", message)) or True,
     )
     monkeypatch.setattr(
         worker.document_orm,
@@ -186,7 +189,7 @@ def test_finished_parse_uploads_and_persists(monkeypatch, error, chunk_result):
     monkeypatch.setattr(
         worker.task_orm,
         "update_progress",
-        lambda task_id, stage, percent, step, now: calls.append((stage, percent)),
+        lambda task_id, stage, percent, step, now, token: calls.append((stage, percent)),
     )
     monkeypatch.setattr(
         worker.DocumentParsingService,
@@ -206,13 +209,13 @@ def test_finished_parse_uploads_and_persists(monkeypatch, error, chunk_result):
     monkeypatch.setattr(
         worker.task_orm,
         "complete",
-        lambda task_id, step, now: calls.append(("complete", step)),
+        lambda task_id, step, now, token: calls.append(("complete", step)),
     )
 
     monkeypatch.setattr(
         worker,
         "enqueue_indexing",
-        lambda task_id: calls.append(("index", task_id)),
+        lambda task_id, token, lease=None: calls.append(("index", task_id)),
     )
     if error is None:
         worker.parse_document.run("task-1")
@@ -284,13 +287,13 @@ def test_structured_files_persist_schema_without_chunking(
     monkeypatch.setattr(
         worker.task_orm,
         "update_progress",
-        lambda task_id, stage, percent, step, now: calls.append((stage, percent)),
+        lambda task_id, stage, percent, step, now, token: calls.append((stage, percent)),
     )
     monkeypatch.setattr(worker.document_orm, "mark_ready", unexpected)
     monkeypatch.setattr(
         worker.task_orm,
         "complete",
-        lambda task_id, step, now: calls.append(("complete", step)),
+        lambda task_id, step, now, token: calls.append(("complete", step)),
     )
     worker.parse_document.run("task-1")
     assert calls == [
@@ -327,7 +330,7 @@ def test_schema_failure_fails_task_and_preserves_version_guard(
 
     monkeypatch.setattr(worker, "StructuredSchemaService", _Schema, raising=False)
     monkeypatch.setattr(worker.task_orm, "update_progress", lambda *args: None)
-    monkeypatch.setattr(worker.task_orm, "fail", lambda *args: calls.append("failed"))
+    monkeypatch.setattr(worker.task_orm, "fail", lambda *args: calls.append("failed") or True)
     monkeypatch.setattr(
         worker.document_orm,
         "mark_failed",
@@ -504,3 +507,84 @@ def test_version_changes_before_begin_parse_fails_task(monkeypatch):
     worker.parse_document.run(task.id)
 
     assert calls == ["parse-lease"]
+
+
+@pytest.mark.parametrize("lost_at", ["parse", "upload", "error"])
+def test_lost_parse_lease_never_publishes_or_fails_document(monkeypatch, lost_at):
+    from contextlib import contextmanager
+
+    from model.document_task.lease import LeaseLost
+
+    _prepare(monkeypatch)
+    owner = ["parse-lease"]
+    calls = []
+
+    @contextmanager
+    def guard(task_id, token, stages):
+        if token != owner[0]:
+            raise LeaseLost(task_id)
+        yield
+
+    def parse(*args):
+        if lost_at in {"parse", "error"}:
+            owner[0] = "new-worker"
+        if lost_at == "error":
+            raise RuntimeError("late parse error")
+        return FinishedParse(_parsed())
+
+    def upload(*args):
+        calls.append("upload")
+        owner[0] = "new-worker"
+        return StoredParseResult("old.md", "old.json")
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("旧 worker 不能发布产物、切分、收尾或修改文档")
+
+    monkeypatch.setattr(worker.task_orm, "lease_guard", guard)
+    monkeypatch.setattr(worker.task_orm, "owns_lease", lambda task_id, token, stages: token == owner[0])
+    monkeypatch.setattr(worker.DocumentParsingService, "parse", parse)
+    monkeypatch.setattr(worker.DocumentParsingService, "upload", upload)
+    monkeypatch.setattr(worker.DocumentParsingService, "persist", unexpected)
+    monkeypatch.setattr(worker, "DocumentChunkingService", unexpected)
+    monkeypatch.setattr(worker.task_orm, "fail", unexpected)
+    monkeypatch.setattr(worker.task_orm, "complete", unexpected)
+    monkeypatch.setattr(worker.document_orm, "mark_failed", unexpected)
+    worker.parse_document.run("task-1")
+    assert calls == (["upload"] if lost_at == "upload" else [])
+
+
+@pytest.mark.parametrize("file_type", ["txt", "csv"])
+def test_reclaimed_lease_before_chunking_does_not_run_business_writes(monkeypatch, file_type):
+    from contextlib import contextmanager
+
+    from model.document_task.lease import LeaseLost
+
+    _prepare(monkeypatch)
+    document = _document()
+    document.file_type = file_type
+    document.parsed_md_key = "md"
+    document.parsed_json_key = "json"
+    task = _task()
+    task.stage = DocumentTaskStage.CHUNKING
+    lost = [False]
+
+    @contextmanager
+    def guard(*args):
+        if lost[0]:
+            raise LeaseLost("task-1")
+        yield
+
+    def progress(*args):
+        lost[0] = True
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("失去执行权后不能切分、保存 schema 或错误收尾")
+
+    monkeypatch.setattr(worker.task_orm, "claim", lambda *args: task)
+    monkeypatch.setattr(worker.document_orm, "get", lambda *args: document)
+    monkeypatch.setattr(worker.task_orm, "lease_guard", guard)
+    monkeypatch.setattr(worker.task_orm, "update_progress", progress)
+    monkeypatch.setattr(worker, "DocumentChunkingService", unexpected)
+    monkeypatch.setattr(worker, "StructuredSchemaService", unexpected)
+    monkeypatch.setattr(worker.task_orm, "fail", unexpected)
+    worker.parse_document.run("task-1")

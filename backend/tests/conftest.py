@@ -39,3 +39,15 @@ def client(monkeypatch: pytest.MonkeyPatch):
     application.state.dispatched_tasks = dispatched_tasks
     with TestClient(application) as test_client:
         yield test_client
+
+
+@pytest.fixture
+def parse_lease(monkeypatch):
+    """编排单测只替换 SQL 边界；租约事务和心跳另有专门测试。"""
+    from contextlib import nullcontext
+
+    from model.document_task import orm as task_orm
+
+    monkeypatch.setattr(task_orm, "renew", lambda *args: True)
+    monkeypatch.setattr(task_orm, "owns_lease", lambda *args: True)
+    monkeypatch.setattr(task_orm, "lease_guard", lambda *args: nullcontext())

@@ -226,3 +226,23 @@ def _zip(files: dict[str, bytes]) -> bytes:
         for name, data in files.items():
             archive.writestr(name, data)
     return buffer.getvalue()
+
+
+def test_mineru_attempt_outputs_and_manifest_references_are_isolated():
+    store = _Store()
+    store.objects["part"] = (
+        _zip({"full.md": b"![image](images/a.png)", "images/a.png": b"png", "layout.json": b"{}"}),
+        "application/zip",
+    )
+    parts = [PartZip(1, 1, 1, "part")]
+    new = DocumentParsingService(store, attempt_id="new-token").collect("doc", 1, "pdf", "source", parts)
+    saved = dict(store.objects)
+    old = DocumentParsingService(store, attempt_id="old-token").collect("doc", 1, "pdf", "source", parts)
+    assert old.md_key != new.md_key
+    assert all(store.objects[key] == value for key, value in saved.items())
+    manifest = json.loads(store.objects[new.manifest_key][0])
+    assert manifest["merged_md_key"] == new.md_key
+    part = json.loads(store.objects[manifest["parts"][0]["result_key"]][0])
+    for key in [part["markdown_key"], *part["images"], *part["json_keys"]]:
+        assert "/attempts/new-token/" in key
+        assert key in store.objects

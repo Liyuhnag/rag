@@ -120,6 +120,7 @@ CREATE TABLE IF NOT EXISTS parse_jobs (
     id VARCHAR(32) NOT NULL COMMENT '分段任务 ID',
     document_id VARCHAR(32) NOT NULL COMMENT '文档 ID',
     task_id VARCHAR(32) NOT NULL COMMENT '文档任务 ID',
+    lease_token VARCHAR(32) NULL,
     version INT NOT NULL COMMENT '解析版本',
     part_index INT NOT NULL COMMENT '分段序号，从 1 开始',
     page_start INT NOT NULL COMMENT '起始页，1-based',
@@ -137,7 +138,7 @@ CREATE TABLE IF NOT EXISTS parse_jobs (
     updated_at DATETIME(6) NOT NULL COMMENT '更新时间，UTC',
     PRIMARY KEY (id),
     UNIQUE KEY uk_parse_jobs_document_version_part (
-        document_id, version, part_index
+        document_id, version, lease_token, part_index
     ),
     KEY idx_parse_jobs_status_poll (status, next_poll_at),
     KEY idx_parse_jobs_document (document_id)

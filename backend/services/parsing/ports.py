@@ -77,11 +77,16 @@ class TaskStore(Protocol):
         progress: int,
         step: str,
         now: datetime,
-    ) -> None: ...
+        lease_token: str,
+    ) -> bool: ...
 
-    def complete(self, task_id: str, step: str, now: datetime) -> None: ...
+    def complete(
+        self, task_id: str, step: str, now: datetime, lease_token: str
+    ) -> bool: ...
 
-    def fail(self, task_id: str, message: str, now: datetime) -> None: ...
+    def fail(
+        self, task_id: str, message: str, now: datetime, lease_token: str
+    ) -> bool: ...
 
 
 class DocumentParser(Protocol):

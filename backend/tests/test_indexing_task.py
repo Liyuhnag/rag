@@ -190,12 +190,12 @@ def test_finished_parse_dispatches_index_queue(monkeypatch):
 
     calls = []
     monkeypatch.setattr(
-        worker.task_orm, "update_progress", lambda *args: calls.append(args)
+        worker.task_orm, "update_progress", lambda *args: calls.append(args) or True
     )
     monkeypatch.setattr(
         worker.index_document, "apply_async", lambda **kwargs: calls.append(kwargs)
     )
-    enqueue_indexing("task")
+    enqueue_indexing("task", "lease-1")
     assert calls[0][1] == DocumentTaskStage.INDEXING
     assert calls[1] == {"args": ["task"], "queue": "index"}
 
@@ -327,3 +327,29 @@ def test_claim_and_index_lease_sql_keep_the_current_token(monkeypatch):
     assert statements[1][1]["lease_token"] == "lease-1"
     assert "$.lease_token" in statements[2][0]
     assert statements[2][1]["lease_token"] == "lease-1"
+
+
+def test_lost_parse_lease_does_not_dispatch_index_queue(monkeypatch):
+    from services.indexing.flow import enqueue_indexing
+
+    monkeypatch.setattr(worker.task_orm, "update_progress", lambda *args: False)
+    monkeypatch.setattr(
+        worker.index_document, "apply_async", lambda **kwargs: pytest.fail("旧领取者不能投递索引")
+    )
+    enqueue_indexing("task", "old-lease")
+
+
+def test_failed_heartbeat_prevents_index_handoff_even_with_same_token(monkeypatch):
+    from model.document_task.lease import LeaseLost
+    from services.indexing.flow import enqueue_indexing
+    from services.task_runtime.lease import TaskLease
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("续租失败后不能更新阶段或发送索引任务")
+
+    lease = TaskLease("task", "lease-1")
+    lease._lost.set()
+    monkeypatch.setattr(worker.task_orm, "update_progress", unexpected)
+    monkeypatch.setattr(worker.index_document, "apply_async", unexpected)
+    with pytest.raises(LeaseLost):
+        enqueue_indexing("task", "lease-1", lease)

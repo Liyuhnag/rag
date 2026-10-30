@@ -52,8 +52,11 @@ class SubmittedParse:
 class DocumentParsingService:
     """解析文档，上传产物，并写入数据库。"""
 
-    def __init__(self, reader: ObjectReader | None = None) -> None:
+    def __init__(
+        self, reader: ObjectReader | None = None, attempt_id: str | None = None
+    ) -> None:
         self._reader = reader or StorageObjectReader()
+        self._attempt_id = attempt_id
 
     def parse(
         self,
@@ -86,7 +89,7 @@ class DocumentParsingService:
         """把本地解析结果合并后写入对象存储。"""
         from services.parsing.local_artifacts import store_document
 
-        keys = store_document(parsed, self._reader, _now())
+        keys = store_document(parsed, self._reader, _now(), self._attempt_id)
         return StoredParseResult(
             keys.md_key, keys.json_key, keys.manifest_key, keys.part_results
         )
@@ -108,6 +111,7 @@ class DocumentParsingService:
             parts,
             _now(),
             self._reader,
+            self._attempt_id,
         )
         return StoredParseResult(
             collected.md_key,
