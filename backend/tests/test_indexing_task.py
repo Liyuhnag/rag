@@ -5,6 +5,7 @@ import importlib
 from contextlib import contextmanager
 from datetime import datetime
 from datetime import timezone
+from time import sleep as threading_sleep
 from types import SimpleNamespace
 
 import pytest
@@ -109,6 +110,7 @@ def test_indexing_task_completes_only_after_success(monkeypatch, outcome):
         version=2,
         status=DocumentTaskStatus.RUNNING,
         stage=DocumentTaskStage.INDEXING,
+        lease_token="lease-1",
     )
     monkeypatch.setattr(worker.task_orm, "get", lambda task_id: task)
     monkeypatch.setattr(
@@ -128,10 +130,16 @@ def test_indexing_task_completes_only_after_success(monkeypatch, outcome):
     monkeypatch.setattr(
         worker.task_orm, "update_index_progress", lambda *args: calls.append("heartbeat")
     )
+    monkeypatch.setattr(worker.task_orm, "touch_indexing", lambda *args: None)
     monkeypatch.setattr(
         worker.task_orm, "complete", lambda *args: calls.append("complete")
     )
-    monkeypatch.setattr(worker.task_orm, "fail", lambda *args: calls.append("fail"))
+
+    def fail(*args):
+        calls.append("fail")
+        return True
+
+    monkeypatch.setattr(worker.task_orm, "fail", fail)
     monkeypatch.setattr(
         worker.document_orm, "mark_failed", lambda *args, **kwargs: calls.append(kwargs)
     )
@@ -150,6 +158,7 @@ def test_stale_index_task_fails_without_indexing_or_changing_document(monkeypatc
         version=1,
         status=DocumentTaskStatus.RUNNING,
         stage=DocumentTaskStage.INDEXING,
+        lease_token="lease-1",
     )
     calls = []
     monkeypatch.setattr(worker.task_orm, "get", lambda task_id: task)
@@ -159,7 +168,12 @@ def test_stale_index_task_fails_without_indexing_or_changing_document(monkeypatc
     monkeypatch.setattr(
         worker, "DocumentIndexingService", lambda: pytest.fail("过期任务不能索引")
     )
-    monkeypatch.setattr(worker.task_orm, "fail", lambda *args: calls.append(args[1]))
+
+    def fail(*args):
+        calls.append(args[1])
+        return True
+
+    monkeypatch.setattr(worker.task_orm, "fail", fail)
     monkeypatch.setattr(
         worker.document_orm,
         "mark_failed",
@@ -182,3 +196,95 @@ def test_finished_parse_dispatches_index_queue(monkeypatch):
     enqueue_indexing("task")
     assert calls[0][1] == DocumentTaskStage.INDEXING
     assert calls[1] == {"args": ["task"], "queue": "index"}
+
+
+def test_replaced_lease_does_not_fail_document(monkeypatch):
+    task = SimpleNamespace(
+        id="task",
+        document_id="doc",
+        version=2,
+        status=DocumentTaskStatus.RUNNING,
+        stage=DocumentTaskStage.INDEXING,
+        lease_token="lease-1",
+    )
+    calls = []
+    monkeypatch.setattr(worker.task_orm, "get", lambda task_id: task)
+    monkeypatch.setattr(
+        worker.document_orm,
+        "get",
+        lambda doc_id: SimpleNamespace(id="doc", parse_version=2),
+    )
+
+    class Service:
+        def run(self, document, version, heartbeat, lease):
+            raise RuntimeError("Milvus 不可用")
+
+    monkeypatch.setattr(worker, "DocumentIndexingService", Service)
+    monkeypatch.setattr(worker.task_orm, "touch_indexing", lambda *args: None)
+    monkeypatch.setattr(worker.task_orm, "fail", lambda *args: False)
+    monkeypatch.setattr(
+        worker.document_orm,
+        "mark_failed",
+        lambda *args, **kwargs: calls.append("document"),
+    )
+    worker.index_document.run("task")
+    assert calls == []
+
+
+def test_index_lease_renews_while_the_task_runs(monkeypatch):
+    monkeypatch.setattr(worker, "_LEASE_RENEW_SECONDS", 0.01)
+    task = SimpleNamespace(
+        id="task",
+        document_id="doc",
+        version=2,
+        status=DocumentTaskStatus.RUNNING,
+        stage=DocumentTaskStage.INDEXING,
+        lease_token="lease-1",
+    )
+    tokens = []
+    monkeypatch.setattr(worker.task_orm, "get", lambda task_id: task)
+    monkeypatch.setattr(
+        worker.document_orm,
+        "get",
+        lambda doc_id: SimpleNamespace(id="doc", parse_version=2),
+    )
+
+    def touch(task_id, lease_token, now):
+        tokens.append(lease_token)
+
+    class Service:
+        def run(self, document, version, heartbeat, lease):
+            deadline = datetime.now(timezone.utc).timestamp() + 1
+            while len(tokens) < 2 and datetime.now(timezone.utc).timestamp() < deadline:
+                threading_sleep(0.01)
+            return True
+
+    monkeypatch.setattr(worker, "DocumentIndexingService", Service)
+    monkeypatch.setattr(worker.task_orm, "touch_indexing", touch)
+    monkeypatch.setattr(worker.task_orm, "complete", lambda *args: None)
+    worker.index_document.run("task")
+    assert tokens[0] == "lease-1"
+    assert len(tokens) >= 2
+
+
+def test_claim_and_index_lease_sql_keep_the_current_token(monkeypatch):
+    from model.document_task import orm as task_orm
+
+    statements = []
+
+    def execute_count(sql, params):
+        statements.append((" ".join(sql.split()), params))
+        return 1
+
+    monkeypatch.setattr(task_orm, "execute_count", execute_count)
+    monkeypatch.setattr(task_orm, "get", lambda task_id: None)
+    now = datetime(2026, 10, 29, tzinfo=timezone.utc)
+    task_orm.claim("task", now)
+    task_orm.touch_indexing("task", "lease-1", now)
+    assert task_orm.fail("task", "索引失败", now, "lease-1") is True
+    assert "$.lease_token" in statements[0][0]
+    assert statements[0][1]["lease_token"]
+    assert "$.lease_token" in statements[1][0]
+    assert statements[1][1]["lease_token"] == "lease-1"
+    assert "$.lease_token" in statements[2][0]
+    assert statements[2][1]["lease_token"] == "lease-1"

@@ -175,22 +175,30 @@ def test_external_count_mismatch_prevents_ready(monkeypatch):
     store = Store()
     service, _, vectors, _ = setup_service(monkeypatch, store)
     vectors.missing = True
+    progress = []
     with pytest.raises(RuntimeError, match="不一致"):
-        service.run(SimpleNamespace(id="doc", name="a"), 2)
+        service.run(
+            SimpleNamespace(id="doc", name="a"),
+            2,
+            heartbeat=lambda *args: progress.append(args),
+        )
+    assert progress == []
     assert not store.ready
     assert "old" in vectors.rows
 
 
-def test_index_progress_reports_confirmed_batches(monkeypatch):
+def test_index_progress_reports_after_both_indexes_refresh(monkeypatch):
     store = Store()
-    service, _, _, _ = setup_service(monkeypatch, store)
-    progress = []
+    service, _, vectors, keywords = setup_service(monkeypatch, store)
+    events = []
+    vectors.flush = lambda: events.append("milvus-flush")
+    keywords.flush = lambda: events.append("es-flush")
     service.run(
         SimpleNamespace(id="doc", name="a"),
         2,
-        heartbeat=lambda *args: progress.append(args),
+        heartbeat=lambda *args: events.append(args),
     )
-    assert progress == [(1, 2, "child-0"), (2, 2, "child-1")]
+    assert events == ["milvus-flush", "es-flush", (2, 2, "child-1")]
 
 
 def test_es_bulk_size_is_independent_of_embedding_batches(monkeypatch):

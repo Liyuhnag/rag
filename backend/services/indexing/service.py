@@ -41,7 +41,6 @@ class DocumentIndexingService:
                 vectors.delete_version(document.id, version)
                 keywords.delete_version(document.id, version)
                 count = 0
-                confirmed = 0
                 keyword_pending = []
                 first_ids = []
                 last_ids = deque(maxlen=5)
@@ -98,23 +97,16 @@ class DocumentIndexingService:
                         batch = keyword_pending[: self.settings.es_bulk_size]
                         keywords.upsert(batch)
                         del keyword_pending[: self.settings.es_bulk_size]
-                        confirmed += len(batch)
-                        if heartbeat is not None:
-                            heartbeat(confirmed, session.expected_count, batch[-1]["chunk_id"])
                 if not count:
                     raise RuntimeError("没有可索引的子块")
                 if keyword_pending:
                     keywords.upsert(keyword_pending)
-                    confirmed += len(keyword_pending)
-                    if heartbeat is not None:
-                        heartbeat(
-                            confirmed, session.expected_count,
-                            keyword_pending[-1]["chunk_id"],
-                        )
                 vectors.flush()
                 keywords.flush()
                 sample_ids = list(dict.fromkeys([*first_ids, *last_ids]))
                 self._verify(document.id, version, count, sample_ids, vectors, keywords)
+                if heartbeat is not None:
+                    heartbeat(count, session.expected_count, last_ids[-1])
                 vectors.prune_older(document.id, version)
                 keywords.prune_older(document.id, version)
                 session.finish(self.settings.embedding_model, count)

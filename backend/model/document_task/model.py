@@ -38,3 +38,4 @@ class DocumentTask:
     progress: int
     step: str
     error_message: str | None = None
+    lease_token: str | None = None
