@@ -39,6 +39,48 @@ def test_set_parsed_artifacts_requires_expected_version(executed):
     }
 
 
+def test_mark_processing_updates_only_the_current_version(monkeypatch):
+    calls = []
+
+    def execute_count(sql, params):
+        calls.append((" ".join(sql.split()), params, "count"))
+        return 1
+
+    def execute(sql, params):
+        raise AssertionError("已改到 PROCESSING 时不必再读")
+
+    monkeypatch.setattr(orm, "execute_count", execute_count)
+    monkeypatch.setattr(orm, "execute", execute)
+    now = datetime(2026, 10, 30, tzinfo=timezone.utc)
+    assert orm.mark_processing("doc-1", 2, now)
+    sql, params, _kind = calls[0]
+    assert "status = 'PROCESSING'" in sql
+    assert "parse_version = %(version)s" in sql
+    assert params["id"] == "doc-1"
+    assert params["version"] == 2
+    assert params["now"] == datetime(2026, 10, 30)
+
+
+def test_mark_processing_accepts_a_version_that_is_already_processing(monkeypatch):
+    def execute_count(sql, params):
+        return 0
+
+    def execute(sql, params):
+        return [{"status": "PROCESSING"}]
+
+    monkeypatch.setattr(orm, "execute_count", execute_count)
+    monkeypatch.setattr(orm, "execute", execute)
+    assert orm.mark_processing("doc-1", 2, datetime(2026, 10, 30, tzinfo=timezone.utc))
+
+
+def test_mark_processing_rejects_a_different_version(monkeypatch):
+    monkeypatch.setattr(orm, "execute_count", lambda sql, params: 0)
+    monkeypatch.setattr(orm, "execute", lambda sql, params: [])
+    assert not orm.mark_processing(
+        "doc-1", 2, datetime(2026, 10, 30, tzinfo=timezone.utc)
+    )
+
+
 def test_mark_failed_requires_expected_version_and_truncates_message(executed):
     now = datetime(2026, 10, 27, tzinfo=timezone.utc)
 

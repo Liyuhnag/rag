@@ -2,6 +2,7 @@
 """document_chunks 表的 SQL。"""
 
 from collections.abc import Iterable
+from contextlib import contextmanager
 from datetime import datetime
 from datetime import timezone
 
@@ -264,3 +265,118 @@ def delete_by_document(document_id: str) -> int:
         "DELETE FROM document_chunks WHERE document_id = %(document_id)s",
         {"document_id": document_id},
     )
+
+
+@contextmanager
+def index_current_version(document_id: str, version: int):
+    """版本锁覆盖外部写入，阻止重解析和同文档并发索引交错。"""
+    with transaction() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT parse_version, chunk_count, status FROM documents "
+                "WHERE id = %(id)s FOR UPDATE",
+                {"id": document_id},
+            )
+            row = cursor.fetchone()
+            if row is None or int(row["parse_version"]) != version:
+                yield None
+                return
+            yield IndexingSession(
+                cursor,
+                document_id,
+                version,
+                int(row["chunk_count"]),
+                str(row["status"]),
+            )
+
+
+class IndexingSession:
+    """持有当前版本行锁的有界读取与状态提交。"""
+
+    def __init__(
+        self,
+        cursor,
+        document_id: str,
+        version: int,
+        expected_count: int,
+        status: str,
+    ):
+        self.cursor = cursor
+        self.params = {"id": document_id, "version": version}
+        self.expected_count = expected_count
+        self.status = status
+
+    def validate_children(self) -> None:
+        """在外部写入前检查孤立子块、父块边界与父块计数。"""
+        self.cursor.execute(
+            """
+            SELECT c.id FROM document_chunks AS c
+            LEFT JOIN document_chunks AS p ON p.id = c.parent_id
+            WHERE c.document_id = %(id)s AND c.version = %(version)s
+              AND c.chunk_level = 'CHILD'
+              AND (
+                p.id IS NULL OR p.chunk_level <> 'PARENT'
+                OR p.document_id <> c.document_id OR p.version <> c.version
+                OR c.parent_index IS NULL OR c.parent_index <> p.parent_index
+                OR c.child_order IS NULL OR c.child_order < 0
+                OR c.child_order >= p.child_count
+                OR c.chunk_index <> p.chunk_index + c.child_order + 1
+                OR (p.page_start IS NOT NULL AND c.page_start IS NOT NULL
+                    AND c.page_start < p.page_start)
+                OR (p.page_end IS NOT NULL AND c.page_end IS NOT NULL
+                    AND c.page_end > p.page_end)
+              ) LIMIT 1
+            """,
+            self.params,
+        )
+        if self.cursor.fetchone() is not None:
+            raise RuntimeError("子块的父块、版本或边界无效")
+        self.cursor.execute(
+            """
+            SELECT p.id FROM document_chunks AS p
+            LEFT JOIN document_chunks AS c
+              ON c.parent_id = p.id AND c.chunk_level = 'CHILD'
+              AND c.document_id = %(id)s AND c.version = %(version)s
+            WHERE p.document_id = %(id)s AND p.version = %(version)s
+              AND p.chunk_level = 'PARENT'
+            GROUP BY p.id, p.child_count
+            HAVING COUNT(c.id) <> p.child_count
+            LIMIT 1
+            """,
+            self.params,
+        )
+        if self.cursor.fetchone() is not None:
+            raise RuntimeError("父块 child_count 与实际子块数量不一致")
+
+    def iter_children(self, batch_size: int):
+        after = -1
+        while True:
+            self.cursor.execute(
+                "SELECT * FROM document_chunks WHERE document_id = %(id)s "
+                "AND version = %(version)s AND chunk_level = 'CHILD' "
+                "AND chunk_index > %(after)s ORDER BY chunk_index LIMIT %(limit)s",
+                dict(self.params, after=after, limit=batch_size),
+            )
+            rows = self.cursor.fetchall()
+            if not rows:
+                return
+            yield [_from_row(row) for row in rows]
+            after = int(rows[-1]["chunk_index"])
+
+    def finish(self, embedding_model: str, count: int) -> None:
+        if count != self.expected_count:
+            raise RuntimeError("实际索引子块数量与文档计数不一致")
+        self.cursor.execute(
+            "UPDATE document_chunks SET embedding_model = %(model)s "
+            "WHERE document_id = %(id)s AND version = %(version)s AND chunk_level = 'CHILD'",
+            dict(self.params, model=embedding_model),
+        )
+        self.cursor.execute(
+            "DELETE FROM document_chunks WHERE document_id = %(id)s AND version < %(version)s",
+            self.params,
+        )
+        self.cursor.execute(
+            "UPDATE documents SET status = 'READY', error_message = NULL, updated_at = %(now)s "
+            "WHERE id = %(id)s AND parse_version = %(version)s",
+            dict(self.params, now=as_utc(datetime.now(timezone.utc))),
+        )

@@ -94,6 +94,25 @@ class Settings:
     mysql_database: str = ""
     file_base_url: str = ""
     redis_url: str = "redis://127.0.0.1:6379/0"
+    embedding_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    dashscope_api_key: str = ""
+    embedding_model: str = "text-embedding-v4"
+    embedding_dim: int = 1024
+    indexing_batch_size: int = 10
+    indexing_timeout_seconds: int = 60
+    milvus_uri: str = "http://127.0.0.1:19530"
+    milvus_token: str = ""
+    milvus_database: str = "default"
+    milvus_collection: str = "document_chunks"
+    es_url: str = "http://127.0.0.1:9200"
+    es_username: str = ""
+    es_password: str = ""
+    es_api_key: str = ""
+    es_ca_certs: str = ""
+    es_index: str = "document_chunks"
+    es_bulk_size: int = 500
+    es_analyzer: str = "ik_max_word"
+    es_search_analyzer: str = "ik_smart"
 
 
 def load_settings() -> Settings:
@@ -168,6 +187,33 @@ def load_settings() -> Settings:
     if mysql_port < 1 or mysql_port > 65535:
         raise RuntimeError("MYSQL_PORT 必须在 1 到 65535 之间")
 
+    indexing_batch_size = _int_env("INDEXING_BATCH_SIZE", 10)
+    if indexing_batch_size > 10:
+        raise RuntimeError("INDEXING_BATCH_SIZE 不能超过 10（DashScope 单批上限）")
+
+    indexing_strings = {}
+    defaults = Settings()
+    for field, env in {
+        "embedding_base_url": "EMBEDDING_BASE_URL",
+        "dashscope_api_key": "DASHSCOPE_API_KEY",
+        "embedding_model": "EMBEDDING_MODEL",
+        "milvus_uri": "MILVUS_URI",
+        "milvus_token": "MILVUS_TOKEN",
+        "milvus_database": "MILVUS_DATABASE",
+        "milvus_collection": "MILVUS_COLLECTION",
+        "es_url": "ES_URL",
+        "es_username": "ES_USERNAME",
+        "es_password": "ES_PASSWORD",
+        "es_api_key": "ES_API_KEY",
+        "es_ca_certs": "ES_CA_CERTS",
+        "es_index": "ES_INDEX",
+        "es_analyzer": "ES_ANALYZER",
+        "es_search_analyzer": "ES_SEARCH_ANALYZER",
+    }.items():
+        indexing_strings[field] = os.getenv(env, getattr(defaults, field)).strip()
+        if getattr(defaults, field) and not indexing_strings[field]:
+            raise RuntimeError(f"{env} 不能为空")
+
     return Settings(
         max_document_bytes=max_document_bytes,
         upload_chunk_bytes=upload_chunk_bytes,
@@ -196,4 +242,9 @@ def load_settings() -> Settings:
         mysql_database=_required("MYSQL_DATABASE"),
         file_base_url=file_base_url,
         redis_url=redis_url,
+        embedding_dim=_int_env("EMBEDDING_DIM", 1024),
+        indexing_batch_size=indexing_batch_size,
+        indexing_timeout_seconds=_int_env("INDEXING_TIMEOUT_SECONDS", 60),
+        es_bulk_size=_int_env("ES_BULK_SIZE", 500),
+        **indexing_strings,
     )

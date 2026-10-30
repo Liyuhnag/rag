@@ -40,7 +40,7 @@ def test_recovery_returns_only_conditionally_reset_tasks(monkeypatch):
     assert recovered[0].status == DocumentTaskStatus.PENDING
     for sql, params in queries:
         assert "status = 'RUNNING'" in sql
-        assert "stage = 'CHUNKING'" in sql
+        assert "stage IN ('CHUNKING', 'INDEXING')" in sql
         assert "updated_at < %(older_than)s" in sql
         assert params["older_than"] == cutoff.replace(tzinfo=None)
     assert "status = 'PENDING'" in queries[1][0]

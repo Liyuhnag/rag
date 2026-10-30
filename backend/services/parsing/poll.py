@@ -17,6 +17,7 @@ from model.parse_job import orm as parse_job_orm
 from model.parse_job.model import ParseJob
 from model.parse_job.model import ParseJobStatus
 from services.chunking.service import DocumentChunkingService
+from services.indexing.flow import enqueue_indexing
 from services.parsing.adapters.object_reader import StorageObjectReader
 from services.parsing.collect import PartZip
 from services.parsing.errors import MinerUJobLost
@@ -277,9 +278,9 @@ def merge_ready(job: ParseJob, reader: ObjectReader, now: datetime) -> None:
         )
         if result is False:
             return
-        task_orm.complete(job.task_id, "解析与切分完成", datetime.now(timezone.utc))
+        enqueue_indexing(job.task_id)
     except Exception as exc:
-        # 合并与切分是同一个任务边界，任一步失败都不能完成任务。
+        # 合并、切分和索引是同一个任务边界，任一步失败都不能完成任务。
         message = str(exc) or "合并失败"
         logger.exception("合并分段失败: %s", job.task_id)
         _fail_document(job, message, datetime.now(timezone.utc))

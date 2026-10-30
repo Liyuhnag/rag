@@ -12,7 +12,7 @@ uv sync --all-groups
 ./start.sh
 ```
 
-`start.sh` 会拉起接口、解析 worker、维护 worker、定时任务和 Flower。Ctrl+C 会停掉这次启动的全部进程。接口默认 `0.0.0.0:8000`，可用 `API_PORT` 改端口。
+`start.sh` 会拉起接口、解析 worker、索引 worker、维护 worker、定时任务和 Flower。Ctrl+C 会停掉这次启动的全部进程。接口默认 `0.0.0.0:8000`，可用 `API_PORT` 改端口。
 
 接口进程、Celery worker、beat 和 Flower 要在同一台机器上。上传分片由 API 直接写入对象存储；解析任务走 `celery` 队列，补投和清理任务走独立的 `maintenance` 队列。Redis 只监听 `127.0.0.1:6379`。Flower 监控页是 `http://<主机>:5555`，登录账号在 `FLOWER_BASIC_AUTH`。
 
@@ -27,6 +27,8 @@ uv run pytest
 ## 环境变量
 
 配置放在 `backend/.env`，进程启动时读取。已存在的环境变量不会被 `.env` 覆盖。示例见 `.env.example`。
+
+切分后的子块通过独立的 `index` 队列写入 Milvus 和 Elasticsearch，双索引成功才置为 READY。embedding、Milvus、ES 配置与失败恢复说明见 [索引服务](services/indexing/README.md)。
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -72,6 +74,7 @@ uv run pytest
 | `GET` | `/api/health` | 健康检查 |
 | `GET` | `/api/documents` | 分页返回已上传文档 |
 | `GET` | `/api/tasks/{id}` | 返回解析任务状态 |
+| `POST` | `/api/tasks/{id}/retry` | 重新投递当前版本失败的索引任务，返回 202 |
 | `GET` | `/api/documents/{id}` | 返回一条文档记录 |
 | `DELETE` | `/api/documents/{id}` | 删除文档记录和对象 |
 | `POST` | `/api/chat` | 校验问题后返回 `501`，检索生成尚未接入 |

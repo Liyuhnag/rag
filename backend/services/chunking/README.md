@@ -28,7 +28,7 @@
 
 单条持久化 JSON 记录上限为 4Mi 字符。已有数据库须先执行 `backend/db/migrations/0003_chunk_heading_text.sql`；本次没有连接或修改真实数据库。
 
-非结构化文档的 Celery 和 MinerU 两条路径均先发布解析产物，再切分，成功后完成当前任务。文档 `READY` 留给后续索引完成。Worker 在 CHUNKING 中断后，维护任务补投超过 10 分钟的切分任务并重放已存产物；不覆盖更早的 PARSING/MERGING 恢复。
+非结构化文档的 Celery 和 MinerU 两条路径均先发布解析产物，再切分，随后投递独立的 `index` 队列。子块向量写入 Milvus、正文写入 ES 后才将文档置为 `READY` 并完成任务，见 [索引服务](../indexing/README.md)。Worker 在 CHUNKING/INDEXING 中断后，维护任务补投超过 10 分钟的任务；CHUNKING 重放已存产物，INDEXING 直接重放 MySQL 子块，不覆盖更早的 PARSING/MERGING 恢复。
 
 ## 验证
 
