@@ -2,16 +2,20 @@
 """大文件上传接口的联调测试。"""
 
 import hashlib
+import importlib
+from dataclasses import replace
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 
+from model.document.model import DocumentStatus
 from model.document_task.model import DocumentTask
 from model.document_task.model import DocumentTaskStage
 from model.document_task.model import DocumentTaskStatus
 from services.common.exceptions import StorageError
 from services.common.exceptions import UploadNotFound
 from services.common.object_storage import client as storage_client
+from services.parsing.service import SubmittedParse
 
 
 def _fingerprint(content: bytes) -> str:
@@ -123,6 +127,57 @@ def test_upload_complete_and_query_task(client):
     assert task_body["version"] == 1
     doc = client.app.state.upload_repository.documents[created["documentId"]]
     assert doc.parse_version == 1
+
+
+def test_uploaded_document_first_claim_starts_processing(client, monkeypatch):
+    worker = importlib.import_module("task.parse_document")
+    content = b"demo"
+    created = _init(client, content).json()
+    upload_id = created["uploadId"]
+    assert _put(client, upload_id, 1, content).status_code == 200
+    completed = client.post(f"/api/uploads/{upload_id}/complete").json()
+    repository = client.app.state.upload_repository
+    task = repository.get_task(completed["taskId"])
+    document = repository.documents[created["documentId"]]
+    parsed_versions = []
+    assert document.status == DocumentStatus.UPLOADED
+    assert document.parse_version == task.version == 1
+
+    def claim_update(sql, params):
+        if task.status != DocumentTaskStatus.PENDING:
+            return 0
+        task.status = DocumentTaskStatus.RUNNING
+        task.stage = DocumentTaskStage.PARSING
+        task.lease_token = params["lease_token"]
+        return 1
+
+    def document_update(sql, params):
+        if document.parse_version != params["version"]:
+            return 0
+        document.status = DocumentStatus.PROCESSING
+        return 1
+
+    def parse(self, current, version):
+        assert document.status == DocumentStatus.PROCESSING
+        parsed_versions.append(version)
+        return SubmittedParse()
+
+    monkeypatch.setattr(worker.task_orm, "execute_count", claim_update)
+    monkeypatch.setattr(worker.task_orm, "update_progress", lambda *args: None)
+    monkeypatch.setattr(worker.document_orm, "get", lambda *args: replace(document))
+    monkeypatch.setattr(worker.document_orm, "execute_count", document_update)
+    monkeypatch.setattr(worker.DocumentParsingService, "parse", parse)
+
+    worker.parse_document.run(task.id)
+    worker.parse_document.run(task.id)
+
+    assert parsed_versions == [1]
+    assert document.status == DocumentStatus.PROCESSING
+    assert document.parse_version == 1
+    response = client.get(f"/api/tasks/{task.id}").json()
+    assert response["status"] == "RUNNING"
+    assert response["stage"] == "PARSING"
+    assert response["version"] == 1
 
 
 def test_complete_is_idempotent(client):

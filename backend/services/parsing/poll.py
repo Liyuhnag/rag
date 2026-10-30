@@ -13,10 +13,12 @@ from pathlib import Path
 from model.document import orm as document_orm
 from model.document_task import orm as task_orm
 from model.document_task.model import DocumentTaskStage
+from model.document_task.model import DocumentTaskStatus
 from model.parse_job import orm as parse_job_orm
 from model.parse_job.model import ParseJob
 from model.parse_job.model import ParseJobStatus
 from services.chunking.service import DocumentChunkingService
+from services.document.versioning import fail_version_mismatch
 from services.indexing.flow import enqueue_indexing
 from services.parsing.adapters.object_reader import StorageObjectReader
 from services.parsing.collect import PartZip
@@ -222,6 +224,13 @@ def merge_ready(job: ParseJob, reader: ObjectReader, now: datetime) -> None:
     jobs = parse_job_orm.list_by_document_version(job.document_id, job.version)
     if not _all_downloaded(jobs):
         return
+    task = task_orm.get(job.task_id)
+    if (
+        task is None
+        or task.status != DocumentTaskStatus.RUNNING
+        or task.version != job.version
+    ):
+        return
     if not task_orm.begin_merge(job.task_id, now):
         return
     document = document_orm.get(job.document_id)
@@ -229,6 +238,7 @@ def merge_ready(job: ParseJob, reader: ObjectReader, now: datetime) -> None:
         _fail_document(job, "文档不存在", now)
         return
     if document.parse_version != job.version:
+        fail_version_mismatch(task, now)
         return
     parts: list[PartZip] = []
     for item in jobs:
@@ -277,6 +287,7 @@ def merge_ready(job: ParseJob, reader: ObjectReader, now: datetime) -> None:
             document, job.version, stored.md_key, stored.json_key
         )
         if result is False:
+            fail_version_mismatch(task, datetime.now(timezone.utc))
             return
         enqueue_indexing(job.task_id)
     except Exception as exc:

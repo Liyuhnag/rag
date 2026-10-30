@@ -47,7 +47,7 @@ class DocumentStore(Protocol):
         document_id: str,
         parse_version: int,
         now: datetime,
-    ) -> None: ...
+    ) -> bool: ...
 
     def mark_ready(
         self,

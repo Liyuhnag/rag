@@ -20,6 +20,7 @@ from model.parse_job.model import ParseJob
 from model.parse_job.model import ParseJobStatus
 from services.chunking.service import DocumentChunkingService
 from services.common.exceptions import FeatureNotReady
+from services.document.versioning import fail_version_mismatch
 from services.indexing.flow import enqueue_indexing
 from services.parsing.service import DocumentParsingService
 from services.parsing.service import SubmittedParse
@@ -48,9 +49,7 @@ def parse_document(task_id: str) -> None:
         return
 
     if document.parse_version != task.version:
-        if task.stage == DocumentTaskStage.INDEXING:
-            # 维护任务会反复领取未结束的索引任务，版本过期时必须停在失败。
-            task_orm.fail(task_id, "文档版本已变化，索引任务已过期", _now())
+        fail_version_mismatch(task, _now())
         return
 
     now = _now()
@@ -62,6 +61,9 @@ def parse_document(task_id: str) -> None:
         if chunking and document.parsed_md_key and document.parsed_json_key:
             stored = StoredParseResult(document.parsed_md_key, document.parsed_json_key)
         else:
+            if not document_orm.begin_parse(document.id, task.version, now):
+                fail_version_mismatch(task, _now())
+                return
             service = DocumentParsingService()
             outcome = service.parse(document, task.version)
             if isinstance(outcome, SubmittedParse):
@@ -85,6 +87,7 @@ def parse_document(task_id: str) -> None:
                 document, task.version, stored.md_key, stored.json_key
             )
             if result is False:
+                fail_version_mismatch(task, _now())
                 return
             task_orm.complete(task_id, "结构已保存，待数据入库", _now())
             return
@@ -95,6 +98,7 @@ def parse_document(task_id: str) -> None:
             document, task.version, stored.md_key, stored.json_key
         )
         if result is False:
+            fail_version_mismatch(task, _now())
             return
         enqueue_indexing(task_id)
     except Exception as exc:

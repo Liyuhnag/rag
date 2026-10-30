@@ -8,7 +8,9 @@ from datetime import timezone
 import pytest
 
 from model.document.model import Document
+from model.document_task.model import DocumentTask
 from model.document_task.model import DocumentTaskStage
+from model.document_task.model import DocumentTaskStatus
 from model.document.model import DocumentStatus
 from model.parse_job.model import ParseJob
 from model.parse_job.model import ParseJobStatus
@@ -77,6 +79,19 @@ def _document() -> Document:
         previewable=False,
         preview_url=None,
         parse_version=2,
+    )
+
+
+def _task() -> DocumentTask:
+    return DocumentTask(
+        id="task-1",
+        document_id="doc-1",
+        version=2,
+        status=DocumentTaskStatus.RUNNING,
+        stage=DocumentTaskStage.PARSING,
+        progress=5,
+        step="等待解析结果",
+        lease_token="merge-lease",
     )
 
 
@@ -302,8 +317,11 @@ def test_download_waits_when_a_sibling_is_missing(monkeypatch):
     assert merged == []
 
 
-@pytest.mark.parametrize("error", [None, RuntimeError("切分失败")])
-def test_download_merges_when_every_part_has_a_zip(monkeypatch, error):
+@pytest.mark.parametrize(
+    ("error", "chunk_result"),
+    [(None, True), (None, False), (RuntimeError("切分失败"), None)],
+)
+def test_download_merges_when_every_part_has_a_zip(monkeypatch, error, chunk_result):
     now = _now()
     first = _job(
         status=ParseJobStatus.DOWNLOADING,
@@ -350,6 +368,7 @@ def test_download_merges_when_every_part_has_a_zip(monkeypatch, error):
         lambda document_id, version: [first, second],
     )
     monkeypatch.setattr(poll.task_orm, "begin_merge", lambda task_id, moment: True)
+    monkeypatch.setattr(poll.task_orm, "get", lambda task_id: _task())
     monkeypatch.setattr(poll.document_orm, "get", lambda document_id: _document())
     monkeypatch.setattr(
         poll.document_orm,
@@ -372,11 +391,12 @@ def test_download_merges_when_every_part_has_a_zip(monkeypatch, error):
             recorded.append(("chunk", document.id, version, md_key, json_key))
             if error is not None:
                 raise error
+            return chunk_result
 
     monkeypatch.setattr(
         poll.task_orm,
         "fail",
-        lambda task_id, message, moment: completed.append(("fail", message)),
+        lambda task_id, message, moment, token=None: completed.append(("fail", message)),
     )
     monkeypatch.setattr(
         poll.document_orm,
@@ -417,8 +437,10 @@ def test_download_merges_when_every_part_has_a_zip(monkeypatch, error):
             "documents/doc-1/parsed/2/merged.json",
         ),
     ]
-    if error is None:
+    if error is None and chunk_result:
         assert completed == ["索引完成"]
+    elif error is None:
+        assert completed == [("fail", "文档版本不匹配，解析任务已过期")]
     else:
         assert completed == [("fail", "切分失败"), ("document_failed", 2)]
 
@@ -435,6 +457,7 @@ def test_second_merge_claim_does_not_collect(monkeypatch):
         lambda document_id, version: [job],
     )
     monkeypatch.setattr(poll.task_orm, "begin_merge", lambda task_id, moment: False)
+    monkeypatch.setattr(poll.task_orm, "get", lambda task_id: _task())
     monkeypatch.setattr(
         poll,
         "DocumentParsingService",
@@ -444,13 +467,18 @@ def test_second_merge_claim_does_not_collect(monkeypatch):
     assert called == []
 
 
-def test_stale_download_does_not_merge_or_chunk(monkeypatch):
+@pytest.mark.parametrize("version", [1, 3])
+def test_stale_download_fails_task_without_changing_document(monkeypatch, version):
     job = _job(
         status=ParseJobStatus.DOWNLOADING,
         result_key="parts/result.zip",
     )
     document = _document()
-    document.parse_version = 3
+    document.parse_version = version
+    document.status = DocumentStatus.READY
+    document.parsed_md_key = "current.md"
+    task = _task()
+    failures = []
     monkeypatch.setattr(poll.parse_job_orm, "get", lambda job_id: job)
     monkeypatch.setattr(
         poll.parse_job_orm,
@@ -458,14 +486,28 @@ def test_stale_download_does_not_merge_or_chunk(monkeypatch):
         lambda document_id, version: [job],
     )
     monkeypatch.setattr(poll.task_orm, "begin_merge", lambda *args: True)
+    monkeypatch.setattr(poll.task_orm, "get", lambda *args: task)
     monkeypatch.setattr(poll.document_orm, "get", lambda document_id: document)
 
     def unexpected(*args):
         pytest.fail("旧版本结果不应继续合并或切分")
 
+    def fail(task_id, message, now, token=None):
+        failures.append((task_id, token))
+        task.status = DocumentTaskStatus.FAILED
+        return True
+
+    monkeypatch.setattr(poll.task_orm, "fail", fail)
+    monkeypatch.setattr(poll.document_orm, "mark_failed", unexpected)
     monkeypatch.setattr(poll, "DocumentParsingService", unexpected)
     monkeypatch.setattr(poll, "DocumentChunkingService", unexpected)
     download_job(job.id, _Mineru(), _Reader(), _now())
+
+    assert task.status == DocumentTaskStatus.FAILED
+    assert failures == [("task-1", "merge-lease")]
+    assert document.parse_version == version
+    assert document.status == DocumentStatus.READY
+    assert document.parsed_md_key == "current.md"
 
 
 def test_apply_failure_marks_job_and_document(monkeypatch):
