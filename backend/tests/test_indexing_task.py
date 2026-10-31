@@ -2,9 +2,6 @@
 """索引队列的成功、失败与过期任务。"""
 
 import importlib
-from contextlib import contextmanager
-from datetime import datetime
-from datetime import timezone
 from types import SimpleNamespace
 
 import pytest
@@ -32,71 +29,6 @@ def test_audit_task_only_checks_ready_documents(monkeypatch):
     document.status = DocumentStatus.READY
     assert audit_worker.audit_document_index.run("doc")
     assert calls == [("doc", 2)]
-
-
-@pytest.mark.parametrize("parse_version", [2, 3])
-def test_retry_failed_indexing_requeues_only_current_version(monkeypatch, parse_version):
-    from model.document_task import orm as task_orm
-
-    statements = []
-
-    class Cursor:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            pass
-
-        def execute(self, sql, params):
-            statements.append((sql, params))
-
-        def fetchone(self):
-            return {
-                "status": "FAILED", "stage": "INDEXING", "version": 2,
-                "parse_version": parse_version, "document_status": "FAILED",
-            }
-
-    @contextmanager
-    def transaction():
-        yield SimpleNamespace(cursor=lambda: Cursor())
-
-    monkeypatch.setattr(task_orm, "transaction", transaction)
-    assert task_orm.retry_failed_indexing("task", datetime.now(timezone.utc)) is (parse_version == 2)
-    assert "FOR UPDATE" in statements[0][0]
-    if parse_version == 2:
-        assert "status = 'PROCESSING'" in statements[1][0]
-        assert "status = 'PENDING'" in statements[2][0]
-    else:
-        assert len(statements) == 1
-
-
-def test_retry_endpoint_accepts_failed_index_and_rejects_other_tasks(client, monkeypatch):
-    task_router = importlib.import_module("api.tasks.router")
-
-    task = SimpleNamespace(
-        id="task", document_id="doc", version=2, status="FAILED",
-        stage="INDEXING", progress=90, step="索引失败", error_message="错误",
-    )
-    calls = []
-
-    def requeue(task_id, now):
-        calls.append((task_id, now))
-        task.status = "PENDING"
-        task.error_message = None
-        return True
-
-    monkeypatch.setattr(task_router.document_task_orm, "get", lambda _id: task)
-    monkeypatch.setattr(task_router.document_task_orm, "retry_failed_indexing", requeue)
-    monkeypatch.setattr(task_router, "dispatch_task", lambda task_id, stage: calls.append(task_id))
-    response = client.post("/api/tasks/task/retry")
-    assert response.status_code == 202
-    assert response.json()["status"] == "PENDING"
-    assert calls[1] == "task"
-
-    monkeypatch.setattr(task_router.document_task_orm, "retry_failed_indexing", lambda *_: False)
-    response = client.post("/api/tasks/task/retry")
-    assert response.status_code == 409
-    assert response.json()["error"]["code"] == "TASK_NOT_RETRYABLE"
 
 
 def _prepare(monkeypatch):

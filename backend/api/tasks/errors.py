@@ -9,4 +9,4 @@ def not_found() -> AppError:
 
 
 def cannot_retry() -> AppError:
-    return AppError(409, "TASK_NOT_RETRYABLE", "只有当前版本的失败索引任务可以重试")
+    return AppError(409, "TASK_NOT_RETRYABLE", "只有当前版本的失败任务且文档为失败状态时可以重试")

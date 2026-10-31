@@ -11,7 +11,7 @@ from api.tasks.errors import cannot_retry
 from api.tasks.schemas import TaskResponse
 from api.tasks.schemas import to_task_response
 from model.document_task import orm as document_task_orm
-from services.task_runtime.dispatch import dispatch as dispatch_task
+from services.task_runtime.lifecycle import retry as retry_failed_task
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -26,14 +26,11 @@ def get_task(task_id: str) -> TaskResponse:
 
 
 @router.post("/{task_id}/retry", response_model=TaskResponse, status_code=202)
-def retry_indexing(task_id: str) -> TaskResponse:
-    """重新投递当前版本失败的索引任务。投递故障由维护任务补投。"""
+def retry_task(task_id: str) -> TaskResponse:
+    """按原阶段重试当前版本的失败任务，投递故障由维护任务补投。"""
     if document_task_orm.get(task_id) is None:
         raise not_found()
-    if not document_task_orm.retry_failed_indexing(task_id, datetime.now(timezone.utc)):
-        raise cannot_retry()
-    task = document_task_orm.get(task_id)
+    task = retry_failed_task(task_id, datetime.now(timezone.utc))
     if task is None:
-        raise not_found()
-    dispatch_task(task.id, task.stage)
+        raise cannot_retry()
     return to_task_response(task)

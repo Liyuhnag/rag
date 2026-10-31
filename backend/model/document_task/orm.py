@@ -2,6 +2,7 @@
 """document_tasks 表的 SQL。"""
 
 import json
+from collections.abc import Callable
 from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import Sequence
@@ -265,55 +266,63 @@ def update_index_progress(
     )
 
 
-def retry_failed_indexing(task_id: str, now: datetime) -> bool:
-    """仅允许当前文档版本的失败索引重新排队。"""
+def retry_failed(
+    task_id: str,
+    now: datetime,
+    stages: Sequence[DocumentTaskStage],
+    prepare: Callable[[DocumentTask], None] | None = None,
+) -> DocumentTask | None:
+    """锁定任务行 → 文档行，准入通过后在同一事务中准备并重新排队。
+
+    prepare 中的 ORM 写入复用本事务；拒绝时返回 None，成功时返回排队快照。
+    """
     with transaction() as connection:
         with connection.cursor() as cursor:
             cursor.execute(
-                """
-                SELECT t.status, t.stage, t.version, d.parse_version,
-                       d.status AS document_status
-                FROM document_tasks AS t
-                JOIN documents AS d ON d.id = t.document_id
-                WHERE t.id = %(id)s FOR UPDATE
-                """,
+                "SELECT * FROM document_tasks WHERE id = %(id)s FOR UPDATE",
                 {"id": task_id},
             )
             row = cursor.fetchone()
+            if row is None or row["status"] != "FAILED" or row["stage"] not in stages:
+                return None
+            task = _from_row(row)
+            cursor.execute(
+                "SELECT status, parse_version FROM documents WHERE id = %(id)s FOR UPDATE",
+                {"id": task.document_id},
+            )
+            document = cursor.fetchone()
             if (
-                row is None
-                or row["status"] != "FAILED"
-                or row["stage"] != "INDEXING"
-                or row["document_status"] != "FAILED"
-                or int(row["version"]) != int(row["parse_version"])
+                document is None
+                or document["status"] != "FAILED"
+                or task.version != int(document["parse_version"])
             ):
-                return False
+                return None
+            with bind_connection(connection):
+                if prepare is not None:
+                    prepare(task)
             cursor.execute(
                 """
-                UPDATE documents AS d
-                JOIN document_tasks AS t ON t.document_id = d.id
-                SET d.status = 'PROCESSING', d.error_message = NULL,
-                    d.updated_at = %(now)s
-                WHERE t.id = %(id)s
+                UPDATE documents
+                SET status = 'PROCESSING', error_message = NULL, updated_at = %(now)s
+                WHERE id = %(id)s
                 """,
-                {"id": task_id, "now": as_utc(now)},
+                {"id": task.document_id, "now": as_utc(now)},
             )
             cursor.execute(
                 """
                 UPDATE document_tasks
-                SET status = 'PENDING', progress = 90,
-                    step = '等待重新索引', error_message = NULL,
-                    result_json = JSON_REMOVE(
-                        COALESCE(result_json, JSON_OBJECT()),
-                        '$.embedded_count', '$.es_indexed',
-                        '$.milvus_indexed', '$.last_chunk_id'
-                    ),
+                SET status = 'PENDING', step = '等待重试', error_message = NULL,
+                    result_json = JSON_REMOVE(COALESCE(result_json, JSON_OBJECT()), '$.lease_token'),
                     updated_at = %(now)s
                 WHERE id = %(id)s
                 """,
                 {"id": task_id, "now": as_utc(now)},
             )
-    return True
+    task.status = DocumentTaskStatus.PENDING
+    task.lease_token = None
+    task.error_message = None
+    task.step = "等待重试"
+    return task
 
 
 def complete(

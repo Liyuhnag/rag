@@ -318,18 +318,46 @@ def adopt_task_jobs(task_id: str, document_id: str, version: int, token: str) ->
 
     调用方必须先持有任务行门禁；不能将升级前 token 为空的分段认领为当前结果。
     """
+    old_token = _latest_task_token(task_id, document_id, version)
+    if old_token is None:
+        return []
+    execute_count(
+        "UPDATE parse_jobs SET lease_token=%(token)s WHERE task_id=%(task_id)s "
+        "AND document_id=%(document_id)s AND version=%(version)s AND lease_token=%(old)s",
+        {"task_id": task_id, "document_id": document_id, "version": version,
+         "token": token, "old": old_token},
+    )
+    return list_by_document_version(document_id, version, token)
+
+
+def retry_failed_parts(task_id: str, document_id: str, version: int, now: datetime) -> None:
+    """在 retry 事务内准备最近一组分段；仅失败且无 ZIP 的分段需要重新提交。"""
+    token = _latest_task_token(task_id, document_id, version)
+    if token is None:
+        return
+    execute_count(
+        """
+        UPDATE parse_jobs
+        SET status = CASE WHEN result_key IS NULL THEN 'SUBMITTED' ELSE 'COMPLETED' END,
+            mineru_file_id = CASE WHEN result_key IS NULL THEN NULL ELSE mineru_file_id END,
+            mineru_job_id = CASE WHEN result_key IS NULL THEN NULL ELSE mineru_job_id END,
+            attempts = CASE WHEN result_key IS NULL THEN 0 ELSE attempts END,
+            next_poll_at = CASE WHEN result_key IS NULL THEN %(now)s ELSE NULL END,
+            error_message = NULL, updated_at = %(now)s
+        WHERE task_id = %(task_id)s AND document_id = %(document_id)s AND version = %(version)s
+          AND lease_token = %(token)s AND status = 'FAILED'
+        """,
+        {"task_id": task_id, "document_id": document_id, "version": version,
+         "token": token, "now": as_utc(now)},
+    )
+
+
+def _latest_task_token(task_id: str, document_id: str, version: int) -> str | None:
+    """恢复和手动重试使用同一分段组，跳过升级前没有 token 的历史记录。"""
     rows = execute(
         "SELECT lease_token FROM parse_jobs WHERE task_id=%(task_id)s "
         "AND document_id=%(document_id)s AND version=%(version)s "
         "AND lease_token IS NOT NULL ORDER BY created_at DESC, id DESC LIMIT 1",
         {"task_id": task_id, "document_id": document_id, "version": version},
     )
-    if not rows:
-        return []
-    execute_count(
-        "UPDATE parse_jobs SET lease_token=%(token)s WHERE task_id=%(task_id)s "
-        "AND document_id=%(document_id)s AND version=%(version)s AND lease_token=%(old)s",
-        {"task_id": task_id, "document_id": document_id, "version": version,
-         "token": token, "old": rows[0]["lease_token"]},
-    )
-    return list_by_document_version(document_id, version, token)
+    return None if not rows else str(rows[0]["lease_token"])
