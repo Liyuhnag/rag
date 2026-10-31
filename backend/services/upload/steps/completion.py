@@ -10,6 +10,8 @@ from uuid import uuid4
 from model.document.model import Document
 from model.document.model import DocumentStatus
 from model.document_task.model import DocumentTask
+from model.document_task.model import DocumentTaskStage
+from model.document_task.model import DocumentTaskStatus
 from model.upload import orm as upload_orm
 from model.upload.model import UploadSession
 from services.common.exceptions import StateConflict
@@ -31,7 +33,7 @@ from services.upload.shared import part_size
 from services.upload.shared import parts_or_none
 from services.upload.shared import require_session
 from services.upload.shared import task_for
-from services.upload.jobs.dispatch import dispatch_task
+from services.task_runtime.dispatch import dispatch as dispatch_task
 
 
 @dataclass
@@ -174,7 +176,7 @@ def _store_completed(session: UploadSession, now: datetime) -> CompleteResult:
         raise upload_completing("上传会话状态已变化") from exc
     session.status = "COMPLETED"
     session.completed_at = now
-    dispatch_task(task.id)
+    dispatch_task(task.id, task.stage)
     return CompleteResult(session, task, "completed")
 
 
@@ -292,6 +294,7 @@ def _completed_document(session: UploadSession, now: datetime) -> Document:
         file_url=file_url(session.object_key),
         previewable=False,
         preview_url=None,
+        parse_version=1,
     )
 
 
@@ -300,8 +303,8 @@ def _new_task(session: UploadSession) -> DocumentTask:
         id=uuid4().hex,
         document_id=session.document_id,
         version=1,
-        status="PENDING",
-        stage="PENDING",
+        status=DocumentTaskStatus.PENDING,
+        stage=DocumentTaskStage.PENDING,
         progress=0,
         step="等待处理",
     )

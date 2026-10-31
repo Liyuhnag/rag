@@ -9,10 +9,10 @@ from enum import Enum
 class DocumentStatus(str, Enum):
     """文件处理状态。"""
 
-    UPLOADED = "UPLOADED"
-    PROCESSING = "PROCESSING"
-    READY = "READY"
-    FAILED = "FAILED"
+    UPLOADED = "UPLOADED"      # 文件已上传，等待解析
+    PROCESSING = "PROCESSING"  # 正在解析或建立索引
+    READY = "READY"            # 解析和索引完成，可检索
+    FAILED = "FAILED"          # 解析或索引失败
 
 
 @dataclass
@@ -31,3 +31,10 @@ class Document:
     file_url: str
     previewable: bool
     preview_url: str | None
+    page_count: int = 0
+    parent_chunk_count: int = 0
+    parse_version: int = 1
+    parsed_md_key: str | None = None
+    parsed_json_key: str | None = None
+    source_sha256: str | None = None
+    error_message: str | None = None

@@ -37,7 +37,6 @@ export const TASK_STAGE = {
 const STORAGE_KEY = 'rag.upload.v2'
 const STAGE_TEXT = {
   PENDING: '排队中',
-  SPLITTING: '正在拆分文件',
   PARSING: '正在解析文档',
   MERGING: '正在合并解析结果',
   CHUNKING: '正在切分文本',
@@ -423,9 +422,11 @@ function startTaskPolling(task) {
         processQueue()
         return
       }
-      if (data.status === 'FAILED') {
+      if (['FAILED', 'SUPERSEDED'].includes(data.status)) {
         task.status = UPLOAD_STATUS.ERROR
-        task.error = data.errorMessage || '处理失败'
+        task.error = data.status === 'SUPERSEDED'
+          ? '已被新版本取代'
+          : data.errorMessage || '处理失败'
         stopPolling(task)
         clearStored(task)
         processQueue()

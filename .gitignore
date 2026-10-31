@@ -36,8 +36,18 @@ venv/
 ENV/
 *.egg-info/
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
 backend/data/
 
 # Temporary files
 *.tmp
 *.temp
+.cache/
+backend/.run/
+draft_*_folder/
+
+# Skills
+skills/
+.agents/skills/
+.claude/skills/

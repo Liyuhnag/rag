@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """测试用的进程内文档、上传和任务存储。"""
 
-from dataclasses import replace
 from datetime import datetime
 from datetime import timezone
 from hashlib import md5
@@ -14,13 +13,12 @@ from model.document import Document
 from model.document import orm as document_orm
 from services.common.exceptions import DuplicateRecord
 from services.common.exceptions import StateConflict
+from services.common.exceptions import StorageError
 from services.common.exceptions import UploadNotFound
 from services.common.object_storage import MultipartUploadInfo
 from services.common.object_storage import ObjectStorage
 from services.common.object_storage import UploadedPart
 from services.common.object_storage import configure
-from model.task import ProcessingTask
-from model.task import orm as task_orm
 from main import celery_app
 from model.document_task import orm as document_task_orm
 from model.document_task.model import DocumentTask
@@ -38,6 +36,16 @@ class MemoryObjectStorage(ObjectStorage):
     def put(self, key: str, content: bytes, content_type: str) -> None:
         del content_type
         self.objects[key] = content
+
+    def get_object(self, key: str) -> bytes:
+        content = self.objects.get(key)
+        if content is None:
+            raise StorageError("对象不存在")
+        return content
+
+    def download(self, key: str, path: str) -> None:
+        with open(path, "wb") as handle:
+            handle.write(self.get_object(key))
 
     def delete(self, key: str) -> None:
         self.objects.pop(key, None)
@@ -189,6 +197,7 @@ class MemoryUploadRepository:
     def __init__(self) -> None:
         self.sessions: dict[str, UploadSession] = {}
         self.tasks: dict[tuple[str, int], DocumentTask] = {}
+        self.documents: dict[str, Document] = {}
 
     def find_active(
         self,
@@ -277,6 +286,7 @@ class MemoryUploadRepository:
         session.status = "COMPLETED"
         session.completed_at = now
         session.updated_at = now
+        self.documents[document.id] = document
         self.tasks[(task.document_id, task.version)] = task
 
     def get_task(self, task_id: str):
@@ -495,66 +505,10 @@ def use_memory_upload_repository(
     monkeypatch.setattr(document_task_orm, "get", repository.get_task)
 
 
-class MemoryTaskRepository:
-    """进程内异步任务。"""
-
-    def __init__(self) -> None:
-        self.tasks: dict[str, ProcessingTask] = {}
-
-    def insert(self, task: ProcessingTask) -> None:
-        self.tasks[task.id] = task
-
-    def get(self, task_id: str) -> ProcessingTask | None:
-        return self.tasks.get(task_id)
-
-    def set_status(self, task_id: str, status: str) -> None:
-        task = self.tasks[task_id]
-        self.tasks[task_id] = replace(
-            task,
-            status=status,
-            updated_at=datetime.now(timezone.utc),
-        )
-
-    def finish(self, task_id: str, document_id: str) -> None:
-        task = self.tasks[task_id]
-        self.tasks[task_id] = replace(
-            task,
-            status="STORED",
-            document_id=document_id,
-            updated_at=datetime.now(timezone.utc),
-        )
-
-    def fail(self, task_id: str, message: str) -> None:
-        task = self.tasks[task_id]
-        self.tasks[task_id] = replace(
-            task,
-            status="FAILED",
-            error_message=message[:1024],
-            updated_at=datetime.now(timezone.utc),
-        )
-
-
-def use_open_queue(monkeypatch: pytest.MonkeyPatch) -> None:
-    """测试里把等待队列看成空的，不连接 Redis。"""
-    import task.upload as upload
-
-    monkeypatch.setattr(upload, "_waiting_count", lambda: 0)
-
-
 def use_inline_tasks() -> None:
     """在请求里把任务跑完，不连接 Redis。"""
     celery_app.conf.task_always_eager = True
     celery_app.conf.task_eager_propagates = True
-
-
-def use_memory_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
-    """让异步任务记录留在进程内。"""
-    tasks = MemoryTaskRepository()
-    monkeypatch.setattr(task_orm, "insert", tasks.insert)
-    monkeypatch.setattr(task_orm, "get", tasks.get)
-    monkeypatch.setattr(task_orm, "set_status", tasks.set_status)
-    monkeypatch.setattr(task_orm, "finish", tasks.finish)
-    monkeypatch.setattr(task_orm, "fail", tasks.fail)
 
 
 def open_memory_storage(settings: Settings) -> None:

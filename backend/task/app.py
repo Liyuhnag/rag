@@ -4,11 +4,15 @@
 import os
 
 from celery import Celery
+from celery import current_app
+from celery.app import trace
 from celery.signals import worker_process_init
 from dotenv import load_dotenv
 
 from config import ENV_FILE
 from config import load_settings
+from services.task_runtime.policy import MINERU_POLL_SECONDS
+from services.task_runtime.policy import REDISPATCH_SECONDS
 
 load_dotenv(ENV_FILE, override=False)
 
@@ -29,6 +33,7 @@ celery_app = Celery(
     "rag",
     broker=_redis_url,
     backend=_result_backend(_redis_url),
+    include=["task"],
 )
 celery_app.conf.update(
     task_serializer="json",
@@ -71,7 +76,11 @@ celery_app.conf.beat_schedule = {
     },
     "redispatch-pending-tasks": {
         "task": "rag.redispatch_pending_tasks",
-        "schedule": 300.0,
+        "schedule": float(REDISPATCH_SECONDS),
+    },
+    "poll-parse-jobs": {
+        "task": "rag.poll_parse_jobs",
+        "schedule": float(MINERU_POLL_SECONDS),
     },
 }
 
@@ -79,6 +88,9 @@ celery_app.conf.beat_schedule = {
 @worker_process_init.connect
 def _open_storage(**_kwargs: object) -> None:
     """每个 worker 进程自己连接数据库和对象存储。"""
+    if not trace._localized:
+        trace.setup_worker_optimizations(current_app._get_current_object())
+
     from services.common.connect import connect_storage
 
     connect_storage(load_settings())

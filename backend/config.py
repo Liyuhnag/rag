@@ -8,7 +8,6 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 
-DEFAULT_MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 DEFAULT_MAX_DOCUMENT_BYTES = 1000 * 1024 * 1024
 DEFAULT_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
 DEFAULT_UPLOAD_SESSION_TTL_HOURS = 24
@@ -17,7 +16,6 @@ DEFAULT_ORPHAN_MPU_GRACE_HOURS = 24
 DEFAULT_ORPHAN_OBJECT_RETENTION_DAYS = 7
 DEFAULT_SESSION_RETENTION_DAYS = 30
 DEFAULT_CLEANUP_BATCH_SIZE = 50
-DEFAULT_TASK_QUEUE_LIMIT = 200
 ALLOWED_FILE_TYPES = frozenset(
     {
         "pdf",
@@ -26,7 +24,6 @@ ALLOWED_FILE_TYPES = frozenset(
         "doc",
         "docx",
         "txt",
-        "xls",
         "xlsx",
         "csv",
     }
@@ -73,7 +70,6 @@ def _first_present(*names: str) -> str:
 class Settings:
     """API 进程使用的配置。"""
 
-    max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES
     max_document_bytes: int = DEFAULT_MAX_DOCUMENT_BYTES
     upload_chunk_bytes: int = DEFAULT_UPLOAD_CHUNK_BYTES
     upload_session_ttl_hours: int = DEFAULT_UPLOAD_SESSION_TTL_HOURS
@@ -98,23 +94,30 @@ class Settings:
     mysql_database: str = ""
     file_base_url: str = ""
     redis_url: str = "redis://127.0.0.1:6379/0"
-    task_queue_limit: int = DEFAULT_TASK_QUEUE_LIMIT
+    embedding_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    dashscope_api_key: str = ""
+    embedding_model: str = "text-embedding-v4"
+    embedding_dim: int = 1024
+    indexing_batch_size: int = 10
+    indexing_timeout_seconds: int = 60
+    milvus_uri: str = "http://127.0.0.1:19530"
+    milvus_token: str = ""
+    milvus_database: str = "default"
+    milvus_collection: str = "document_chunks"
+    es_url: str = "http://127.0.0.1:9200"
+    es_username: str = ""
+    es_password: str = ""
+    es_api_key: str = ""
+    es_ca_certs: str = ""
+    es_index: str = "document_chunks"
+    es_bulk_size: int = 500
+    es_analyzer: str = "ik_max_word"
+    es_search_analyzer: str = "ik_smart"
 
 
 def load_settings() -> Settings:
     """从环境变量构造配置。非法数值在启动时直接失败。"""
     load_dotenv(ENV_FILE, override=False)
-    raw_max = os.getenv(
-        "MAX_UPLOAD_BYTES",
-        str(DEFAULT_MAX_UPLOAD_BYTES),
-    )
-    try:
-        max_upload_bytes = int(raw_max)
-    except ValueError as exc:
-        raise RuntimeError("MAX_UPLOAD_BYTES 必须是整数") from exc
-    if max_upload_bytes < 1:
-        raise RuntimeError("MAX_UPLOAD_BYTES 必须大于 0")
-
     raw_max_document = os.getenv(
         "MAX_DOCUMENT_BYTES",
         str(DEFAULT_MAX_DOCUMENT_BYTES),
@@ -175,16 +178,6 @@ def load_settings() -> Settings:
     redis_url = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0").strip()
     if not redis_url:
         raise RuntimeError("REDIS_URL 不能为空")
-    raw_queue_limit = os.getenv(
-        "TASK_QUEUE_LIMIT",
-        str(DEFAULT_TASK_QUEUE_LIMIT),
-    )
-    try:
-        task_queue_limit = int(raw_queue_limit)
-    except ValueError as exc:
-        raise RuntimeError("TASK_QUEUE_LIMIT 必须是整数") from exc
-    if task_queue_limit < 1:
-        raise RuntimeError("TASK_QUEUE_LIMIT 必须大于 0")
 
     raw_port = os.getenv("MYSQL_PORT", "3306").strip()
     try:
@@ -194,8 +187,34 @@ def load_settings() -> Settings:
     if mysql_port < 1 or mysql_port > 65535:
         raise RuntimeError("MYSQL_PORT 必须在 1 到 65535 之间")
 
+    indexing_batch_size = _int_env("INDEXING_BATCH_SIZE", 10)
+    if indexing_batch_size > 10:
+        raise RuntimeError("INDEXING_BATCH_SIZE 不能超过 10（DashScope 单批上限）")
+
+    indexing_strings = {}
+    defaults = Settings()
+    for field, env in {
+        "embedding_base_url": "EMBEDDING_BASE_URL",
+        "dashscope_api_key": "DASHSCOPE_API_KEY",
+        "embedding_model": "EMBEDDING_MODEL",
+        "milvus_uri": "MILVUS_URI",
+        "milvus_token": "MILVUS_TOKEN",
+        "milvus_database": "MILVUS_DATABASE",
+        "milvus_collection": "MILVUS_COLLECTION",
+        "es_url": "ES_URL",
+        "es_username": "ES_USERNAME",
+        "es_password": "ES_PASSWORD",
+        "es_api_key": "ES_API_KEY",
+        "es_ca_certs": "ES_CA_CERTS",
+        "es_index": "ES_INDEX",
+        "es_analyzer": "ES_ANALYZER",
+        "es_search_analyzer": "ES_SEARCH_ANALYZER",
+    }.items():
+        indexing_strings[field] = os.getenv(env, getattr(defaults, field)).strip()
+        if getattr(defaults, field) and not indexing_strings[field]:
+            raise RuntimeError(f"{env} 不能为空")
+
     return Settings(
-        max_upload_bytes=max_upload_bytes,
         max_document_bytes=max_document_bytes,
         upload_chunk_bytes=upload_chunk_bytes,
         upload_session_ttl_hours=upload_session_ttl_hours,
@@ -223,5 +242,9 @@ def load_settings() -> Settings:
         mysql_database=_required("MYSQL_DATABASE"),
         file_base_url=file_base_url,
         redis_url=redis_url,
-        task_queue_limit=task_queue_limit,
+        embedding_dim=_int_env("EMBEDDING_DIM", 1024),
+        indexing_batch_size=indexing_batch_size,
+        indexing_timeout_seconds=_int_env("INDEXING_TIMEOUT_SECONDS", 60),
+        es_bulk_size=_int_env("ES_BULK_SIZE", 500),
+        **indexing_strings,
     )
