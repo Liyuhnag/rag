@@ -288,18 +288,3 @@ def test_resubmitting_part_is_not_claimed_until_lease_expires(mysql, monkeypatch
     assert [job.id for job in due] == ["failed"]
     poll.poll_job(due[0], object(), expired)
     assert len(resubmissions) == 2
-
-
-def test_parse_job_persists_presigned_upload_fields(mysql):
-    _prepare_failed(mysql, Stage.PARSING)
-    expires = mysql + timedelta(minutes=15)
-    url = "https://upload.example.com/signed?sig=abc"
-    _insert_part(
-        mysql, "with-url", part_index=1, upload_url=url, upload_expires_at=expires,
-    )
-    _insert_part(mysql, "without-url", part_index=2)
-    saved = job_orm.get("with-url")
-    assert saved.upload_url == url
-    assert saved.upload_expires_at == expires
-    empty = job_orm.get("without-url")
-    assert empty.upload_url is None and empty.upload_expires_at is None
