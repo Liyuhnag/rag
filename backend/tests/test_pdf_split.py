@@ -117,6 +117,73 @@ def test_pdf_over_page_limit_is_split_and_uploaded():
     opened.close()
 
 
+def test_each_submitted_part_is_stored_before_the_next_submit(monkeypatch):
+    from model.parse_job import orm as parse_job_orm
+
+    content = _pdf(5)
+    reader = _Reader(content)
+    mineru = _MinerU()
+    stored = []
+
+    def insert(job):
+        stored.append((job.part_index, job.mineru_job_id, len(mineru.calls)))
+
+    monkeypatch.setattr(parse_job_orm, "find_part", lambda *args: None)
+    monkeypatch.setattr(parse_job_orm, "insert", insert)
+    source = ParseInput(
+        request=_source(len(content)).request,
+        task_id="task-1",
+        lease_token="lease-1",
+    )
+    PdfParser(mineru=mineru, reader=reader, max_pages=2).parse(source)
+    assert stored == [(1, "job-1", 1), (2, "job-2", 2), (3, "job-3", 3)]
+
+
+def test_recorded_part_is_not_uploaded_or_submitted_again(monkeypatch):
+    from types import SimpleNamespace
+
+    from model.parse_job import orm as parse_job_orm
+
+    content = _pdf(5)
+    reader = _Reader(content)
+    mineru = _MinerU()
+    inserted = []
+
+    def find_part(document_id, version, part_index):
+        if part_index != 1:
+            return None
+        return SimpleNamespace(
+            mineru_file_id="file-old",
+            mineru_job_id="job-old",
+            page_start=1,
+            page_end=2,
+            source_key="documents/doc-1/parse/3/parts/1/source.pdf",
+        )
+
+    monkeypatch.setattr(parse_job_orm, "find_part", find_part)
+    monkeypatch.setattr(parse_job_orm, "insert", inserted.append)
+    source = ParseInput(
+        request=_source(len(content)).request,
+        task_id="task-1",
+        lease_token="lease-1",
+    )
+    submitted = PdfParser(mineru=mineru, reader=reader, max_pages=2).parse(source)
+    assert [part.part_index for part in submitted.parts] == [1, 2, 3]
+    assert submitted.parts[0].job_id == "job-old"
+    assert [(part.part_index, part.mineru_job_id) for part in inserted] == [
+        (2, "job-1"),
+        (3, "job-2"),
+    ]
+    assert [name for _, name, _ in mineru.calls] == [
+        "demo-part-2.pdf",
+        "demo-part-3.pdf",
+    ]
+    assert [key for key, _ in reader.writes] == [
+        "documents/doc-1/parse/3/parts/2/source.pdf",
+        "documents/doc-1/parse/3/parts/3/source.pdf",
+    ]
+
+
 def test_single_page_over_limit_is_rejected():
     content = _pdf(1)
     parser = PdfParser(mineru=_MinerU(), reader=_Reader(content), max_bytes=len(content) - 1)

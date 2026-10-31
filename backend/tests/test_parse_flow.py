@@ -151,6 +151,7 @@ def test_reclaimed_mineru_parts_are_reused_without_resubmission(monkeypatch, dow
     task, document, calls = _prepare(monkeypatch)
     document.file_type = "pdf"
     document.status = DocumentStatus.PROCESSING
+    task.step = "分段已提交"
     part = SimpleNamespace(
         id="existing-part",
         status=ParseJobStatus.DOWNLOADING if downloaded else ParseJobStatus.SUBMITTED,
@@ -181,6 +182,32 @@ def test_reclaimed_mineru_parts_are_reused_without_resubmission(monkeypatch, dow
         assert calls == []
 
 
+def test_unfinished_pdf_submission_continues_parse(monkeypatch):
+    from types import SimpleNamespace
+
+    from model.parse_job.model import ParseJobStatus
+
+    task, document, calls = _prepare(monkeypatch)
+    document.file_type = "pdf"
+    document.status = DocumentStatus.PROCESSING
+    existing = SimpleNamespace(
+        status=ParseJobStatus.SUBMITTED,
+        result_key=None,
+        mineru_job_id="remote-1",
+    )
+    monkeypatch.setattr(worker.parse_job_orm, "adopt_task_jobs", lambda *args: [existing])
+    called = []
+    monkeypatch.setattr(
+        worker.DocumentParsingService,
+        "parse",
+        lambda self, document, version: called.append(self.task_id) or SubmittedParse(parts=()),
+    )
+    worker.parse_document.run(task.id)
+    assert called == ["task-1"]
+    assert task.status == "RUNNING"
+    assert calls == []
+
+
 def test_local_parse_publishes_then_dispatches_independent_chunking(monkeypatch):
     task, document, calls = _prepare(monkeypatch)
     monkeypatch.setattr(worker.DocumentParsingService, "parse", lambda *args: FinishedParse(_parsed()))
@@ -189,6 +216,7 @@ def test_local_parse_publishes_then_dispatches_independent_chunking(monkeypatch)
     def persist(*args):
         document.parsed_md_key = "md"
         document.parsed_json_key = "json"
+        document.parsed_version = document.parse_version
         calls.append("persist")
 
     monkeypatch.setattr(worker.DocumentParsingService, "persist", persist)
@@ -206,7 +234,7 @@ def test_chunking_reuses_artifacts_and_hands_off_or_completes(monkeypatch, file_
     task, document, calls = _prepare(monkeypatch, DocumentTaskStage.CHUNKING)
     document.file_type = file_type
     document.status = DocumentStatus.PROCESSING
-    document.parsed_md_key, document.parsed_json_key = "md", "json"
+    document.parsed_md_key, document.parsed_json_key, document.parsed_version = "md", "json", document.parse_version
     monkeypatch.setattr(worker, "DocumentParsingService", lambda *args: pytest.fail("不得重新解析"))
 
     class Service:
@@ -257,7 +285,7 @@ def test_stale_version_supersedes_task_without_modifying_document(monkeypatch, s
 def test_business_error_fails_task_and_current_document(monkeypatch, stage):
     task, document, calls = _prepare(monkeypatch, stage)
     document.status = DocumentStatus.PROCESSING
-    document.parsed_md_key, document.parsed_json_key = "md", "json"
+    document.parsed_md_key, document.parsed_json_key, document.parsed_version = "md", "json", document.parse_version
 
     def unavailable(*args, **kwargs):
         raise RuntimeError("service unavailable")
@@ -319,3 +347,15 @@ def test_lost_lease_during_external_work_cannot_publish_or_fail(monkeypatch, los
     assert task.status == "RUNNING"
     assert document.status == "PROCESSING"
     assert calls == []
+
+
+@pytest.mark.parametrize("offset", [None, -1])
+def test_chunking_requires_parsed_version_to_match_task(monkeypatch, offset):
+    task, document, calls = _prepare(monkeypatch, DocumentTaskStage.CHUNKING)
+    document.status = DocumentStatus.PROCESSING
+    document.parsed_md_key, document.parsed_json_key = "md", "json"
+    document.parsed_version = None if offset is None else task.version + offset
+    monkeypatch.setattr(worker, "DocumentChunkingService", lambda: pytest.fail("版本不符不应执行切分"))
+    worker.parse_document.run(task.id)
+    assert (task.status, task.stage) == ("PENDING", "PARSING")
+    assert calls == [("handoff", "PARSING"), ("dispatch", "PARSING")]

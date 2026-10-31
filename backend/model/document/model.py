@@ -36,5 +36,6 @@ class Document:
     parse_version: int = 1
     parsed_md_key: str | None = None
     parsed_json_key: str | None = None
+    parsed_version: int | None = None
     source_sha256: str | None = None
     error_message: str | None = None

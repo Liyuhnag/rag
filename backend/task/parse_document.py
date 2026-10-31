@@ -73,7 +73,12 @@ def _run(task: DocumentTask, lease: TaskLease) -> None:
         if task.stage == DocumentTaskStage.MERGING:
             run_merge(task, document, lease)
         elif task.stage == DocumentTaskStage.CHUNKING:
-            if not document.parsed_md_key or not document.parsed_json_key:
+            completed = (
+                document.parsed_md_key
+                and document.parsed_json_key
+                and document.parsed_version == task.version
+            )
+            if not completed:
                 advance(lease, DocumentTaskStage.PARSING, 0, "解析产物缺失，重新解析")
                 return
             stored = StoredParseResult(document.parsed_md_key, document.parsed_json_key)
@@ -95,11 +100,15 @@ def _parse(task: DocumentTask, document: Document, lease: TaskLease) -> None:
             fail_version_mismatch(task, _now())
             return
     service = DocumentParsingService(attempt_id=lease.token)
+    service.task_id = task.id
+    service.lease_token = lease.token
     lease.ensure()
     outcome = service.parse(document, task.version)
     if isinstance(outcome, SubmittedParse):
         with lease.writes():
-            _record_parts(task, outcome, _now())
+            # PDF 在每一段提交成功时已经写入 parse_jobs。
+            if document.file_type != "pdf":
+                _record_parts(task, outcome, _now())
             task_orm.update_progress(
                 task.id, DocumentTaskStage.PARSING, 5, "分段已提交", _now(), lease.token
             )

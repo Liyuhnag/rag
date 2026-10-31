@@ -57,6 +57,8 @@ class DocumentParsingService:
     ) -> None:
         self._reader = reader or StorageObjectReader()
         self._attempt_id = attempt_id
+        self.task_id: str | None = None
+        self.lease_token: str | None = None
 
     def parse(
         self,
@@ -80,7 +82,13 @@ class DocumentParsingService:
                 blocks=parser.iter_blocks(ParseInput(request)),
             )
             return FinishedParse(parsed)
-        outcome = parser.parse(ParseInput(request=request))
+        outcome = parser.parse(
+            ParseInput(
+                request=request,
+                task_id=self.task_id,
+                lease_token=self.lease_token,
+            )
+        )
         if isinstance(outcome, ParseSubmission):
             return SubmittedParse(parts=outcome.parts)
         return FinishedParse(outcome)

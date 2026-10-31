@@ -34,6 +34,7 @@ def test_set_parsed_artifacts_requires_expected_version(executed):
         "id": "doc-1",
         "parsed_md_key": "parsed/3.md",
         "parsed_json_key": "parsed/3.json",
+        "parsed_version": 3,
         "now": datetime(2026, 10, 27),
         "expected_version": 3,
     }
@@ -136,3 +137,20 @@ def test_expected_version_is_keyword_only(executed, operation):
             orm.mark_failed("doc-1", "failed", now, 3)
 
     assert executed == []
+
+
+def test_set_parsed_artifacts_writes_version_in_the_same_update(executed):
+    now = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    orm.set_parsed_artifacts("doc-1", "p.md", "p.json", now, expected_version=4)
+    assert len(executed) == 1
+    sql, params = executed[0]
+    assert "parsed_md_key = %(parsed_md_key)s" in sql
+    assert "parsed_json_key = %(parsed_json_key)s" in sql
+    assert "parsed_version = %(parsed_version)s" in sql
+    assert params["parsed_version"] == 4
+
+
+def test_legacy_set_parsed_artifacts_writes_null_version(executed):
+    now = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    orm.set_parsed_artifacts("doc-1", "p.md", "p.json", now)
+    assert executed[0][1]["parsed_version"] is None

@@ -2,8 +2,15 @@
 """PDF 解析器。"""
 
 import tempfile
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from pathlib import Path
+from uuid import uuid4
 
+from model.parse_job import orm as parse_job_orm
+from model.parse_job.model import ParseJob
+from model.parse_job.model import ParseJobStatus
 from services.parsing.adapters.object_reader import StorageObjectReader
 from services.parsing.mineru import MinerUClient
 from services.parsing.models import ParseInput
@@ -13,6 +20,7 @@ from services.parsing.parsers.base import BaseParser
 from services.parsing.parsers.pdf_split import PdfSegment
 from services.parsing.parsers.pdf_split import split_pdf
 from services.parsing.ports import ObjectReader
+from services.task_runtime.policy import MINERU_POLL_SECONDS
 
 _MAX_PAGES = 180
 _MAX_BYTES = 180 * 1024 * 1024
@@ -62,7 +70,10 @@ class PdfParser(BaseParser):
         index: int,
         segment: PdfSegment,
     ) -> SubmittedPart:
-        """提交一段。拆出来的文件先写入对象存储，便于以后重试。"""
+        """提交一段。成功后立即写入 parse_jobs，已有远端任务的段不再提交。"""
+        saved = _saved_part(source, index)
+        if saved is not None:
+            return saved
         if segment.path == source_path:
             key = source.request.object_key
             part_name = filename
@@ -78,7 +89,7 @@ class PdfParser(BaseParser):
                 "application/pdf",
             )
         job = self._mineru.submit(segment.path, part_name, segment.sha256)
-        return SubmittedPart(
+        part = SubmittedPart(
             file_id=job.file_id,
             job_id=job.job_id,
             part_index=index,
@@ -86,6 +97,54 @@ class PdfParser(BaseParser):
             page_end=segment.page_end,
             source_key=key,
         )
+        _store_part(source, part)
+        return part
+
+
+def _saved_part(source: ParseInput, index: int) -> SubmittedPart | None:
+    """这一段已经交给 MinerU 时，直接用库里的任务号。"""
+    if not source.task_id or not source.lease_token:
+        return None
+    existing = parse_job_orm.find_part(source.request.document_id, source.request.version, index)
+    if existing is None or not existing.mineru_job_id:
+        return None
+    return SubmittedPart(
+        file_id=existing.mineru_file_id or "",
+        job_id=existing.mineru_job_id,
+        part_index=index,
+        page_start=existing.page_start,
+        page_end=existing.page_end,
+        source_key=existing.source_key,
+    )
+
+
+def _store_part(source: ParseInput, part: SubmittedPart) -> None:
+    """一段提交成功就落库。没有任务上下文时只返回提交结果。"""
+    if not source.task_id or not source.lease_token:
+        return
+    now = datetime.now(timezone.utc)
+    parse_job_orm.insert(
+        ParseJob(
+            id=uuid4().hex,
+            document_id=source.request.document_id,
+            task_id=source.task_id,
+            version=source.request.version,
+            lease_token=source.lease_token,
+            part_index=part.part_index,
+            page_start=part.page_start,
+            page_end=part.page_end,
+            source_key=part.source_key,
+            mineru_file_id=part.file_id,
+            mineru_job_id=part.job_id,
+            status=ParseJobStatus.SUBMITTED,
+            attempts=1,
+            next_poll_at=now + timedelta(seconds=MINERU_POLL_SECONDS),
+            error_message=None,
+            result_key=None,
+            created_at=now,
+            updated_at=now,
+        )
+    )
 
 
 def _pdf_name(filename: str) -> str:

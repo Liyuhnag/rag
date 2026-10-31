@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS documents (
     parse_version INT NOT NULL DEFAULT 0 COMMENT '当前解析版本',
     parsed_md_key VARCHAR(768) NULL COMMENT '解析后的 Markdown key',
     parsed_json_key VARCHAR(768) NULL COMMENT '解析后的 JSON key',
+    parsed_version INT NULL COMMENT '解析产物所属版本，与 parsed_md_key / parsed_json_key 同一条更新写入',
     source_sha256 CHAR(64) NULL COMMENT '源文件 SHA-256',
     error_message VARCHAR(1024) NULL COMMENT '解析或索引失败原因',
     uploaded_at DATETIME(6) NOT NULL COMMENT '上传时间，UTC',

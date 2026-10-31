@@ -102,6 +102,25 @@ def insert(job: ParseJob) -> None:
     )
 
 
+def find_part(document_id: str, version: int, part_index: int) -> ParseJob | None:
+    """按文档、版本和段号取最近一条分段，供重跑时跳过已提交的 MinerU 任务。"""
+    rows = execute(
+        """
+        SELECT * FROM parse_jobs
+        WHERE document_id = %(document_id)s AND version = %(version)s
+          AND part_index = %(part_index)s
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        """,
+        {
+            "document_id": document_id,
+            "version": version,
+            "part_index": part_index,
+        },
+    )
+    return None if not rows else _from_row(rows[0])
+
+
 def get(job_id: str) -> ParseJob | None:
     """按 ID 查询分段任务；不存在返回 None。"""
     rows = execute(

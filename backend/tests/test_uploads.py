@@ -166,6 +166,7 @@ def test_uploaded_document_first_claim_starts_processing(client, monkeypatch, pa
     monkeypatch.setattr(worker.task_orm, "update_progress", lambda *args: None)
     monkeypatch.setattr(worker.document_orm, "get", lambda *args: replace(document))
     monkeypatch.setattr(worker.document_orm, "execute_count", document_update)
+    monkeypatch.setattr(worker.parse_job_orm, "list_by_document_version", lambda *args: [])
     monkeypatch.setattr(worker.DocumentParsingService, "parse", parse)
 
     worker.parse_document.run(task.id)

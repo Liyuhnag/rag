@@ -26,6 +26,8 @@ class ParseInput:
     """交给解析器的请求。文件由解析器从对象存储读取。"""
 
     request: ParseRequest
+    task_id: str | None = None
+    lease_token: str | None = None
 
 
 @dataclass

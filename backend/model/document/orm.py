@@ -135,6 +135,11 @@ def _from_row(row: dict[str, object]) -> Document:
             if row.get("source_sha256") is None
             else str(row["source_sha256"])
         ),
+        parsed_version=(
+            None
+            if row.get("parsed_version") is None
+            else int(row["parsed_version"])
+        ),
         error_message=(
             None
             if row.get("error_message") is None
@@ -254,11 +259,13 @@ def set_parsed_artifacts(
     *,
     expected_version: int | None = None,
 ) -> None:
-    """记录解析产物；指定版本时仅更新仍处于该版本的文档。"""
+    """记录解析产物；指定版本时仅更新仍处于该版本的文档。
+    parsed_version 与两个 key 在同一条更新写入，取 expected_version 的值。"""
     sql = """
         UPDATE documents
         SET parsed_md_key = %(parsed_md_key)s,
             parsed_json_key = %(parsed_json_key)s,
+            parsed_version = %(parsed_version)s,
             updated_at = %(now)s
         WHERE id = %(id)s
     """
@@ -266,6 +273,7 @@ def set_parsed_artifacts(
         "id": document_id,
         "parsed_md_key": parsed_md_key,
         "parsed_json_key": parsed_json_key,
+        "parsed_version": expected_version,
         "now": as_utc(now),
     }
     if expected_version is not None:

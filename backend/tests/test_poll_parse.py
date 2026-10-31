@@ -226,6 +226,7 @@ def test_poll_lost_job_enqueues_resubmit(monkeypatch):
 
 
 def test_poll_rejected_fails_document(monkeypatch):
+    """请求被拒绝：分段标记失败，任务和文档一并失败，不再重跑。"""
     now = _now()
     failed = []
     monkeypatch.setattr(poll.parse_job_orm, "set_status", lambda *args: None)
@@ -422,6 +423,7 @@ def test_queued_part_message_carries_original_token(monkeypatch, action):
 
 
 def test_apply_failure_marks_job_and_document(monkeypatch):
+    """重试次数用尽：分段、任务、文档依次标记失败。"""
     now = _now()
     marked = []
     monkeypatch.setattr(
