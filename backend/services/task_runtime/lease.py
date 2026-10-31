@@ -13,15 +13,10 @@ from threading import Thread
 from model.document_task import orm as task_orm
 from model.document_task.lease import LeaseLost
 from model.document_task.model import DocumentTaskStage
+from services.task_runtime.policy import PARSE_STAGES
+from services.task_runtime.policy import policy_for
 
 logger = logging.getLogger(__name__)
-PARSE_STAGES = (
-    DocumentTaskStage.PARSING,
-    DocumentTaskStage.MERGING,
-    DocumentTaskStage.CHUNKING,
-)
-
-
 class TaskLease:
     """只使用领取时的 token；续租失败后不再允许任何业务写入。"""
 
@@ -30,9 +25,11 @@ class TaskLease:
         task_id: str,
         token: str,
         stages: tuple[DocumentTaskStage, ...] = PARSE_STAGES,
-        interval: float = 120,
+        interval: float | None = None,
     ) -> None:
-        if not token or not stages or interval <= 0:
+        if interval is None and stages:
+            interval = min(policy_for(stage).renew_seconds for stage in stages)
+        if not token or not stages or interval is None or interval <= 0:
             raise ValueError("租约需要 token、允许阶段和正数续租间隔")
         self.task_id = task_id
         self.token = token
