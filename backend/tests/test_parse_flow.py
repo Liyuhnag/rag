@@ -121,6 +121,8 @@ def _prepare(monkeypatch, stage=DocumentTaskStage.PARSING):
     monkeypatch.setattr(worker.task_orm, "supersede", superseded)
     monkeypatch.setattr(worker.task_orm, "complete", complete)
     monkeypatch.setattr(worker.task_orm, "update_progress", lambda *args: True)
+    monkeypatch.setattr(worker.task_orm, "mark_chunking_in_progress", lambda *args: True)
+    monkeypatch.setattr(worker.task_orm, "update_chunking_progress_lightweight", lambda *args: True)
     monkeypatch.setattr(worker.document_orm, "mark_failed", document_failed)
     monkeypatch.setattr(lifecycle, "dispatch", lambda task_id, target: calls.append(("dispatch", target)))
     return task, document, calls
@@ -212,6 +214,13 @@ def test_chunking_reuses_artifacts_and_hands_off_or_completes(monkeypatch, file_
             calls.append(("save", current.id, version, md_key, json_key))
             return True
 
+        def compute_chunks(self, document, version, md_key, json_key, heartbeat=None):
+            calls.append(("save", document.id, version, md_key, json_key))
+            return ["chunk-1", "chunk-2"]
+
+        def persist_chunks(self, document_id, version, chunks):
+            return True
+
     monkeypatch.setattr(worker, "DocumentChunkingService", Service)
     monkeypatch.setattr(worker, "StructuredSchemaService", Service)
     worker.parse_document.run(task.id)
@@ -258,6 +267,8 @@ def test_business_error_fails_task_and_current_document(monkeypatch, stage):
 
     class Service:
         run = unavailable
+        compute_chunks = unavailable
+        persist_chunks = unavailable
 
     monkeypatch.setattr(worker, "DocumentChunkingService", Service)
     with pytest.raises(RuntimeError, match="service unavailable"):

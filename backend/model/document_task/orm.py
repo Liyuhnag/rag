@@ -288,6 +288,51 @@ def mark_indexing_in_progress(
     return affected == 1
 
 
+def mark_chunking_in_progress(
+    task_id: str,
+    token: str,
+    now: datetime,
+) -> bool:
+    """标记任务正在切分中，更新心跳时间，不改变 status。"""
+    _require_token(token)
+    affected = execute_count(
+        """
+        UPDATE document_tasks
+        SET updated_at = %(now)s,
+            step = '正在切分中'
+        WHERE id = %(task_id)s
+          AND JSON_UNQUOTE(JSON_EXTRACT(result_json, '$.lease_token')) = %(token)s
+          AND status = 'RUNNING'
+          AND stage = 'CHUNKING'
+        """,
+        {"task_id": task_id, "token": token, "now": as_utc(now)},
+    )
+    return affected == 1
+
+
+def update_chunking_progress_lightweight(
+    task_id: str,
+    written: int,
+    token: str,
+    now: datetime,
+) -> bool:
+    """切分阶段轻量心跳：只刷新步骤与 updated_at，不持有长事务、不改 result_json。"""
+    _require_token(token)
+    affected = execute_count(
+        """
+        UPDATE document_tasks
+        SET step = %(step)s,
+            updated_at = %(now)s
+        WHERE id = %(task_id)s
+          AND JSON_UNQUOTE(JSON_EXTRACT(result_json, '$.lease_token')) = %(token)s
+          AND status = 'RUNNING'
+          AND stage = 'CHUNKING'
+        """,
+        {"task_id": task_id, "step": f"已切分 {written} 块", "token": token, "now": as_utc(now)},
+    )
+    return affected == 1
+
+
 def update_index_progress_lightweight(
     task_id: str,
     completed: int,

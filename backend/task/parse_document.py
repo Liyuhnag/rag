@@ -116,21 +116,66 @@ def _parse(task: DocumentTask, document: Document, lease: TaskLease) -> None:
 def _chunk(
     task: DocumentTask, document: Document, stored: StoredParseResult, lease: TaskLease
 ) -> None:
+    """三段式切分：前置检查（持锁）→ 切分计算（无锁）→ 写库完成（持锁）。"""
     structured = document.file_type in {"csv", "xlsx"}
 
-    def save() -> bool:
-        service = StructuredSchemaService() if structured else DocumentChunkingService()
-        if service.run(document, task.version, stored.md_key, stored.json_key) is False:
-            fail_version_mismatch(task, _now())
-            return False
-        return True
-
     if structured:
+        # 结构化文档（CSV/Excel）仍用原路径，保持简单
+        def save() -> bool:
+            service = StructuredSchemaService()
+            if service.run(document, task.version, stored.md_key, stored.json_key) is False:
+                fail_version_mismatch(task, _now())
+                return False
+            return True
+
         with lease.writes():
             if save():
                 task_orm.complete(task.id, "结构已保存，待数据入库", _now(), lease.token)
         return
-    advance(lease, DocumentTaskStage.INDEXING, 90, "等待向量化与索引写入", prepare=save)
+
+    # ============ 阶段 1：前置检查（持锁）============
+    with lease.writes():
+        if document.parse_version != task.version:
+            fail_version_mismatch(task, _now())
+            return
+        # 标记切分中，Recover 看到心跳知道任务正在执行
+        task_orm.mark_chunking_in_progress(task.id, lease.token, _now())
+    # ← 事务提交，行锁释放
+
+    # ============ 阶段 2：切分计算（无锁）============
+    # 在事务外执行 S3 读取和切分，不持有行锁
+    def heartbeat(written: int) -> None:
+        lease.ensure()  # 只检查租约，不持有行锁
+        # 使用轻量级更新，不阻塞其他操作
+        task_orm.update_chunking_progress_lightweight(
+            task.id, written, lease.token, _now()
+        )
+
+    service = DocumentChunkingService()
+    try:
+        chunks = service.compute_chunks(
+            document, task.version, stored.md_key, stored.json_key, heartbeat=heartbeat
+        )
+    except Exception:
+        # 切分失败在外层 _run 的 except 里统一处理
+        raise
+
+    if chunks is None:
+        # 版本已过期
+        with lease.writes():
+            fail_version_mismatch(task, _now())
+        return
+
+    # ============ 阶段 3：写库完成（持锁）============
+    def persist() -> bool:
+        # 短事务：只做复核版本 + 替换旧块，不再包含 S3 读取与切分计算
+        lease.ensure()
+        if not service.persist_chunks(document.id, task.version, chunks):
+            fail_version_mismatch(task, _now())
+            return False
+        return True
+
+    advance(lease, DocumentTaskStage.INDEXING, 90, "等待向量化与索引写入", prepare=persist)
 
 
 def _claim_task(task_id: str) -> DocumentTask | None:
