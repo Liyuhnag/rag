@@ -44,13 +44,19 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture(scope="module")
 def mysql_config():
     values = dotenv_values(Path(__file__).resolve().parents[1] / ".env")
+    def setting(name: str, default: str = "") -> str:
+        return os.getenv(name, values.get(name) or default)
+
+    # 只读 MYSQL_TEST_*，与正式环境的 MYSQL_* 隔离。
     config = {
-        "host": os.getenv("MYSQL_HOST", values.get("MYSQL_HOST") or "127.0.0.1"),
-        "port": int(os.getenv("MYSQL_PORT", values.get("MYSQL_PORT") or "3306")),
-        "user": os.getenv("MYSQL_USER", values.get("MYSQL_USER") or ""),
-        "password": os.getenv("MYSQL_PASSWORD", values.get("MYSQL_PASSWORD") or ""),
+        "host": setting("MYSQL_TEST_HOST", "127.0.0.1"),
+        "port": int(setting("MYSQL_TEST_PORT", "3306")),
+        "user": setting("MYSQL_TEST_USER"),
+        "password": setting("MYSQL_TEST_PASSWORD"),
+        "database": setting("MYSQL_TEST_DATABASE"),
     }
-    config["database"] = os.getenv("MYSQL_DATABASE", values.get("MYSQL_DATABASE") or "")
+    if not config["database"]:
+        pytest.skip("未配置 MYSQL_TEST_DATABASE，跳过 MySQL 集成测试")
     prefix = f"lease_test_{uuid4().hex}_"
     tables = ("documents", "document_tasks", "parse_jobs", "document_chunks")
     pattern = re.compile(r"\b(" + "|".join(tables) + r")\b")

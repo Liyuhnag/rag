@@ -265,3 +265,26 @@ def test_retry_reuses_zip_and_active_parts_and_resubmits_only_failed_part(mysql,
     monkeypatch.setattr(poll, "_enqueue_resubmit", lambda *args: resubmissions.append(args))
     poll.poll_job(due[0], object(), mysql)
     assert resubmissions == [("failed", task.lease_token)]
+
+
+def test_resubmitting_part_is_not_claimed_until_lease_expires(mysql, monkeypatch):
+    _prepare_failed(mysql, Stage.PARSING)
+    _insert_part(mysql, "failed", part_index=1, status=PartStatus.FAILED)
+    monkeypatch.setattr(lifecycle, "dispatch", lambda *args: None)
+    assert lifecycle.retry("task", mysql) is not None
+    task = orm.claim("task", mysql, (Stage.PARSING,))
+    assert poll.resume_parts(task, TaskLease("task", task.lease_token, (Stage.PARSING,)))
+    resubmissions = []
+    monkeypatch.setattr(poll, "_enqueue_resubmit", lambda *args: resubmissions.append(args))
+    due = job_orm.claim_due(mysql, 10)
+    poll.poll_job(due[0], object(), mysql)
+    assert job_orm.get("failed").status == PartStatus.RESUBMITTING
+    assert resubmissions == [("failed", task.lease_token)]
+    # 重提租约未到期：轮询不会再领取，也就不会重复投递。
+    assert job_orm.claim_due(mysql + timedelta(seconds=11), 10) == []
+    # 租约到期后视为消息丢失，补投一次。
+    expired = mysql + poll.RESUBMIT_LEASE + timedelta(seconds=1)
+    due = job_orm.claim_due(expired, 10)
+    assert [job.id for job in due] == ["failed"]
+    poll.poll_job(due[0], object(), expired)
+    assert len(resubmissions) == 2
