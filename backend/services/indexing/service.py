@@ -58,6 +58,8 @@ class DocumentIndexingService:
                 )
                 vectors.ensure()
                 keywords.ensure()
+                if lease is not None:
+                    lease()
                 vectors.delete_version(document.id, version)
                 keywords.delete_version(document.id, version)
                 count = 0
@@ -69,6 +71,8 @@ class DocumentIndexingService:
                         "\n".join(filter(None, (chunk.heading_path, chunk.content)))
                         for chunk in chunks
                     ]
+                    if lease is not None:
+                        lease()
                     embeddings = embedder.embed(texts)
                     if len(embeddings) != len(chunks):
                         raise RuntimeError("Embedding 返回数量与子块数量不一致")
@@ -104,6 +108,8 @@ class DocumentIndexingService:
                                 created_at=chunk.created_at,
                             )
                         )
+                    if lease is not None:
+                        lease()
                     vectors.upsert(vector_rows)
                     keyword_pending.extend(keyword_rows)
                     count += len(chunks)
@@ -115,11 +121,15 @@ class DocumentIndexingService:
                         lease()
                     while len(keyword_pending) >= self.settings.es_bulk_size:
                         batch = keyword_pending[: self.settings.es_bulk_size]
+                        if lease is not None:
+                            lease()
                         keywords.upsert(batch)
                         del keyword_pending[: self.settings.es_bulk_size]
                 if not count:
                     raise RuntimeError("没有可索引的子块")
                 if keyword_pending:
+                    if lease is not None:
+                        lease()
                     keywords.upsert(keyword_pending)
                 vectors.flush()
                 keywords.flush()

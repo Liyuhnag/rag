@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """公共任务交接与文档状态桥接。"""
 
+from collections.abc import Callable
 from datetime import datetime
 from datetime import timezone
 
@@ -18,10 +19,13 @@ def advance(
     next_stage: DocumentTaskStage,
     progress: int,
     step: str,
+    prepare: Callable[[], bool | None] | None = None,
 ) -> bool:
     """交接先持久化并撤销 token，退出事务后再投递。"""
     policy_for(next_stage)
     with lease.writes():
+        if prepare is not None and prepare() is False:
+            return False
         changed = task_orm.advance(
             lease.task_id, lease.token, next_stage, progress, step,
             datetime.now(timezone.utc), lease.stages,

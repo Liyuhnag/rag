@@ -227,13 +227,13 @@ def mark_failed(
     *,
     expected_version: int | None = None,
 ) -> None:
-    """记录失败；指定版本时避免旧任务覆盖新版本状态。"""
+    """只允许 PROCESSING 失败，防止收尾异常撤销已经发布的 READY。"""
     sql = """
         UPDATE documents
         SET status = 'FAILED',
             error_message = %(message)s,
             updated_at = %(now)s
-        WHERE id = %(id)s
+        WHERE id = %(id)s AND status = 'PROCESSING'
     """
     params: dict[str, object] = {
         "id": document_id,

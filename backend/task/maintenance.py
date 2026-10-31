@@ -8,7 +8,7 @@ from datetime import timezone
 from config import load_settings
 from model.document_task import orm as task_orm
 from services.upload.jobs import cleanup
-from services.parsing.dispatch import dispatch_task
+from services.task_runtime.dispatch import dispatch as dispatch_task
 from task.app import celery_app
 
 _REDISPATCH_MIN_AGE_SECONDS = 300
@@ -114,7 +114,7 @@ def redispatch_pending_tasks() -> None:
         now - timedelta(seconds=_CHUNKING_LEASE_SECONDS), now, _REDISPATCH_BATCH
     )
     for task in recovered:
-        dispatch_task(task.id)
+        dispatch_task(task.id, task.stage)
     older_than = now - timedelta(seconds=_REDISPATCH_MIN_AGE_SECONDS)
     for task in task_orm.find_pending(older_than, _REDISPATCH_BATCH):
-        dispatch_task(task.id)
+        dispatch_task(task.id, task.stage)

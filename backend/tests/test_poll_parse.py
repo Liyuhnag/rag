@@ -197,10 +197,13 @@ def test_poll_completed_enqueues_download(monkeypatch):
             }
         ),
     )
-    monkeypatch.setattr(poll, "_enqueue_download", downloads.append)
+    monkeypatch.setattr(
+        poll, "_enqueue_download",
+        lambda job_id, token: downloads.append((job_id, token)),
+    )
     poll_job(_job(), _Mineru(state="completed"), now)
     assert seen["status"] == ParseJobStatus.DOWNLOADING
-    assert downloads == ["job-1"]
+    assert downloads == [("job-1", "merge-lease")]
 
 
 def test_poll_lost_job_enqueues_resubmit(monkeypatch):
@@ -213,11 +216,11 @@ def test_poll_lost_job_enqueues_resubmit(monkeypatch):
         lambda job_id, next_poll_at, error, moment: retries.append(error),
     )
     monkeypatch.setattr(
-        poll, "_enqueue_resubmit", lambda job_id: downloads.append(job_id)
+        poll, "_enqueue_resubmit", lambda job_id, token: downloads.append((job_id, token))
     )
     poll_job(_job(attempts=1), _Mineru(exc=MinerUJobLost("丢失")), now)
     assert retries == ["MinerU 任务不存在"]
-    assert downloads == ["job-1"]
+    assert downloads == [("job-1", "merge-lease")]
 
 
 def test_poll_rejected_fails_document(monkeypatch):
@@ -236,7 +239,7 @@ def test_poll_rejected_fails_document(monkeypatch):
 
 def test_downloading_job_is_enqueued_again(monkeypatch):
     downloads = []
-    monkeypatch.setattr(poll, "_enqueue_download", downloads.append)
+    monkeypatch.setattr(poll, "_enqueue_download", lambda job_id, token: downloads.append(job_id))
     poll_job(
         _job(status=ParseJobStatus.DOWNLOADING),
         _Mineru(exc=AssertionError("不应查询")),
@@ -310,9 +313,9 @@ def test_download_waits_when_a_sibling_is_missing(monkeypatch):
         lambda document_id, version, token: [job, sibling],
     )
     monkeypatch.setattr(
-        poll.task_orm,
-        "begin_merge",
-        lambda task_id, moment, token: merged.append(task_id) or True,
+        poll,
+        "advance",
+        lambda lease, stage, *args: merged.append(stage) or True,
     )
     download_job(job.id, _Mineru(body=b"PK"), reader, now)
     assert len(saved) == 1
@@ -322,197 +325,98 @@ def test_download_waits_when_a_sibling_is_missing(monkeypatch):
     assert merged == []
 
 
-@pytest.mark.parametrize(
-    ("error", "chunk_result"),
-    [(None, True), (None, False), (RuntimeError("切分失败"), None)],
-)
-def test_download_merges_when_every_part_has_a_zip(monkeypatch, error, chunk_result):
-    now = _now()
-    first = _job(
-        status=ParseJobStatus.DOWNLOADING,
-        result_key="documents/doc-1/parse/2/parts/1/result.zip",
-    )
-    second = _job(
-        id="job-2",
-        part_index=2,
-        page_start=11,
-        page_end=20,
-        status=ParseJobStatus.DOWNLOADING,
-        result_key="documents/doc-1/parse/2/parts/2/result.zip",
-    )
-    reader = _Reader(
-        {
-            first.result_key: b"one",
-            second.result_key: b"two",
-        }
-    )
-    recorded = []
-    completed = []
-    collected = []
+def test_download_hands_off_without_collecting_or_chunking(monkeypatch):
+    job = _job(status=ParseJobStatus.DOWNLOADING, result_key="part.zip")
+    calls = []
+    monkeypatch.setattr(poll.parse_job_orm, "get", lambda *args: job)
+    monkeypatch.setattr(poll.parse_job_orm, "list_by_document_version", lambda *args: [job])
+    monkeypatch.setattr(poll, "advance", lambda lease, stage, *args: calls.append(stage))
+    monkeypatch.setattr(poll, "DocumentParsingService", lambda *args: pytest.fail("下载消息不能合并"))
+    download_job(job.id, _Mineru(), _Reader(), _now())
+    assert calls == [DocumentTaskStage.MERGING]
+    assert job.result_key == "part.zip"
 
-    class _Service:
-        def __init__(self, reader, attempt_id=None):
-            self.reader = reader
+
+def test_merge_publishes_and_hands_off_with_zip_pointer_preserved(monkeypatch):
+    from services.task_runtime.lease import TaskLease
+
+    job = _job(status=ParseJobStatus.DOWNLOADING, result_key="part.zip")
+    task = _task()
+    task.stage = DocumentTaskStage.MERGING
+    calls = []
+    monkeypatch.setattr(poll.parse_job_orm, "adopt_task_jobs", lambda *args: [job])
+
+    class Service:
+        def __init__(self, *args, **kwargs):
+            pass
 
         def collect(self, document_id, version, file_type, source_key, parts):
-            collected.append((source_key, [part.part_index for part in parts]))
-            return StoredParseResult(
-                md_key="documents/doc-1/parsed/2/merged.md",
-                json_key="documents/doc-1/parsed/2/merged.json",
-                manifest_key="documents/doc-1/parsed/2/manifest.json",
-                part_results=(
-                    (1, "documents/doc-1/parse/2/parts/1/manifest.json"),
-                    (2, "documents/doc-1/parse/2/parts/2/manifest.json"),
-                ),
-            )
+            assert parts[0].result_key == "part.zip"
+            return StoredParseResult("merged.md", "merged.json")
 
-    monkeypatch.setattr(poll.parse_job_orm, "get", lambda job_id: first)
-    monkeypatch.setattr(
-        poll.parse_job_orm,
-        "list_by_document_version",
-        lambda document_id, version, token: [first, second],
-    )
-    monkeypatch.setattr(poll.task_orm, "begin_merge", lambda task_id, moment, token: True)
-    monkeypatch.setattr(poll.task_orm, "get", lambda task_id: _task())
-    monkeypatch.setattr(poll.document_orm, "get", lambda document_id: _document())
-    monkeypatch.setattr(
-        poll.document_orm,
-        "set_parsed_artifacts",
-        lambda document_id, md_key, json_key, moment, **kwargs: recorded.append(md_key),
-    )
-    monkeypatch.setattr(
-        poll.parse_job_orm,
-        "record_result",
-        lambda job_id, key, moment: recorded.append((job_id, key)),
-    )
-    monkeypatch.setattr(
-        poll.task_orm,
-        "complete",
-        lambda task_id, step, moment, token: completed.append(step),
-    )
+    def advance(lease, stage, progress, step, prepare=None):
+        prepare()
+        calls.append(("handoff", stage))
 
-    class _Chunking:
-        def run(self, document, version, md_key, json_key):
-            recorded.append(("chunk", document.id, version, md_key, json_key))
-            if error is not None:
-                raise error
-            return chunk_result
-
-    monkeypatch.setattr(
-        poll.task_orm,
-        "fail",
-        lambda task_id, message, moment, token=None: completed.append(("fail", message)) or True,
-    )
-    monkeypatch.setattr(
-        poll.document_orm,
-        "mark_failed",
-        lambda document_id, message, moment, **kwargs: completed.append(
-            ("document_failed", kwargs["expected_version"])
-        ),
-    )
-    monkeypatch.setattr(poll, "DocumentChunkingService", _Chunking, raising=False)
-    monkeypatch.setattr(
-        poll,
-        "enqueue_indexing",
-        lambda *args: completed.append("索引完成"),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        poll.task_orm,
-        "update_progress",
-        lambda task_id, stage, percent, step, moment, token: recorded.append((stage, percent)),
-    )
-    monkeypatch.setattr(poll, "DocumentParsingService", _Service)
-    if error is None:
-        download_job(first.id, _Mineru(), reader, now)
-    else:
-        with pytest.raises(RuntimeError, match="切分失败"):
-            download_job(first.id, _Mineru(), reader, now)
-    assert collected == [("documents/doc-1/demo.pdf", [1, 2])]
-    assert recorded == [
-        "documents/doc-1/parsed/2/merged.md",
-        ("job-1", "documents/doc-1/parse/2/parts/1/manifest.json"),
-        ("job-2", "documents/doc-1/parse/2/parts/2/manifest.json"),
-        (DocumentTaskStage.CHUNKING, 85),
-        (
-            "chunk",
-            "doc-1",
-            2,
-            "documents/doc-1/parsed/2/merged.md",
-            "documents/doc-1/parsed/2/merged.json",
-        ),
-    ]
-    if error is None and chunk_result:
-        assert completed == ["索引完成"]
-    elif error is None:
-        assert completed == [("fail", "文档版本不匹配，解析任务已过期")]
-    else:
-        assert completed == [("fail", "切分失败"), ("document_failed", 2)]
+    monkeypatch.setattr(poll, "DocumentParsingService", Service)
+    monkeypatch.setattr(poll, "advance", advance)
+    monkeypatch.setattr(poll.document_orm, "set_parsed_artifacts", lambda *args, **kw: calls.append("publish"))
+    poll.run_merge(task, _document(), TaskLease(task.id, task.lease_token), _Reader())
+    assert calls == ["publish", ("handoff", DocumentTaskStage.CHUNKING)]
+    assert job.result_key == "part.zip"
 
 
-def test_second_merge_claim_does_not_collect(monkeypatch):
-    job = _job(
-        status=ParseJobStatus.DOWNLOADING,
-        result_key="documents/doc-1/parse/2/parts/1/result.zip",
-    )
-    called = []
-    monkeypatch.setattr(
-        poll.parse_job_orm,
-        "list_by_document_version",
-        lambda document_id, version, token: [job],
-    )
-    monkeypatch.setattr(poll.task_orm, "begin_merge", lambda task_id, moment, token: False)
-    monkeypatch.setattr(poll.task_orm, "get", lambda task_id: _task())
-    monkeypatch.setattr(
-        poll,
-        "DocumentParsingService",
-        lambda reader: called.append(reader),
-    )
-    merge_ready(job, _Reader({job.result_key: b"zip"}), _now())
-    assert called == []
+def test_merge_missing_parts_rolls_back_to_parsing(monkeypatch):
+    from services.task_runtime.lease import TaskLease
 
-
-@pytest.mark.parametrize("version", [1, 3])
-def test_stale_download_fails_task_without_changing_document(monkeypatch, version):
-    job = _job(
-        status=ParseJobStatus.DOWNLOADING,
-        result_key="parts/result.zip",
-    )
-    document = _document()
-    document.parse_version = version
-    document.status = DocumentStatus.READY
-    document.parsed_md_key = "current.md"
     task = _task()
-    failures = []
-    monkeypatch.setattr(poll.parse_job_orm, "get", lambda job_id: job)
+    task.stage = DocumentTaskStage.MERGING
+    calls = []
+    monkeypatch.setattr(poll.parse_job_orm, "adopt_task_jobs", lambda *args: [])
+    monkeypatch.setattr(poll, "advance", lambda lease, stage, *args: calls.append(stage))
+    poll.run_merge(task, _document(), TaskLease(task.id, task.lease_token))
+    assert calls == [DocumentTaskStage.PARSING]
+
+
+@pytest.mark.parametrize("action", ["download", "resubmit"])
+def test_old_queued_message_cannot_borrow_adopted_jobs_token(monkeypatch, action):
+    job = _job(lease_token="new-owner", status=ParseJobStatus.DOWNLOADING)
+    monkeypatch.setattr(poll.parse_job_orm, "get", lambda *args: job)
+    monkeypatch.setattr(poll.task_orm, "renew", lambda *args: pytest.fail("旧消息不能借用新 token"))
+    if action == "download":
+        download_job(job.id, _Mineru(), _Reader(), _now(), lease_token="old-owner")
+    else:
+        job.status = ParseJobStatus.SUBMITTED
+        resubmit_job(job.id, _Mineru(), _Reader(), _now(), lease_token="old-owner")
+
+
+@pytest.mark.parametrize("action", ["download", "resubmit"])
+def test_celery_part_message_without_token_is_ignored(monkeypatch, action):
+    import importlib
+
+    worker = importlib.import_module("task.poll_parse")
     monkeypatch.setattr(
-        poll.parse_job_orm,
-        "list_by_document_version",
-        lambda document_id, version, token: [job],
+        worker, "MinerUClient", lambda: pytest.fail("无 token 的旧消息不能访问外部服务"),
     )
-    monkeypatch.setattr(poll.task_orm, "begin_merge", lambda *args: True)
-    monkeypatch.setattr(poll.task_orm, "get", lambda *args: task)
-    monkeypatch.setattr(poll.document_orm, "get", lambda document_id: document)
+    if action == "download":
+        worker.download_parse_result.run("job-1")
+    else:
+        worker.resubmit_parse_part.run("job-1")
 
-    def unexpected(*args):
-        pytest.fail("旧版本结果不应继续合并或切分")
 
-    def fail(task_id, message, now, token=None):
-        failures.append((task_id, token))
-        task.status = DocumentTaskStatus.FAILED
-        return True
+@pytest.mark.parametrize("action", ["download", "resubmit"])
+def test_queued_part_message_carries_original_token(monkeypatch, action):
+    import importlib
 
-    monkeypatch.setattr(poll.task_orm, "fail", fail)
-    monkeypatch.setattr(poll.document_orm, "mark_failed", unexpected)
-    monkeypatch.setattr(poll, "DocumentParsingService", unexpected)
-    monkeypatch.setattr(poll, "DocumentChunkingService", unexpected)
-    download_job(job.id, _Mineru(), _Reader(), _now())
-
-    assert task.status == DocumentTaskStatus.FAILED
-    assert failures == [("task-1", "merge-lease")]
-    assert document.parse_version == version
-    assert document.status == DocumentStatus.READY
-    assert document.parsed_md_key == "current.md"
+    worker = importlib.import_module("task.poll_parse")
+    calls = []
+    if action == "download":
+        monkeypatch.setattr(worker.download_parse_result, "delay", lambda *args: calls.append(args))
+        poll._enqueue_download("job-1", "original-token")
+    else:
+        monkeypatch.setattr(worker.resubmit_parse_part, "delay", lambda *args: calls.append(args))
+        poll._enqueue_resubmit("job-1", "original-token")
+    assert calls == [("job-1", "original-token")]
 
 
 def test_apply_failure_marks_job_and_document(monkeypatch):
@@ -551,7 +455,6 @@ def test_old_mineru_claim_is_ignored_even_when_task_has_a_new_token(monkeypatch,
 
     monkeypatch.setattr(poll.task_orm, "renew", renew)
     monkeypatch.setattr(poll.task_orm, "fail", unexpected)
-    monkeypatch.setattr(poll.task_orm, "begin_merge", unexpected)
     monkeypatch.setattr(poll.parse_job_orm, "set_status", unexpected)
     monkeypatch.setattr(poll.document_orm, "mark_failed", unexpected)
     mineru = _Mineru()

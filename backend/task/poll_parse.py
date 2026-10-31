@@ -25,30 +25,38 @@ def poll_parse_jobs() -> None:
 @celery_app.task(
     name="rag.download_parse_result",
     ignore_result=True,
+    queue="parse",
     soft_time_limit=300,
     time_limit=330,
 )
-def download_parse_result(job_id: str) -> None:
+def download_parse_result(job_id: str, lease_token: str | None = None) -> None:
     """下载分段结果。全部分段到齐后合并。"""
+    if not lease_token:
+        return
     download_job(
         job_id,
         MinerUClient(),
         default_reader(),
         datetime.now(timezone.utc),
+        lease_token,
     )
 
 
 @celery_app.task(
     name="rag.resubmit_parse_part",
     ignore_result=True,
+    queue="parse",
     soft_time_limit=300,
     time_limit=330,
 )
-def resubmit_parse_part(job_id: str) -> None:
+def resubmit_parse_part(job_id: str, lease_token: str | None = None) -> None:
     """MinerU 任务丢失或失败时，用原分段再提交一次。"""
+    if not lease_token:
+        return
     resubmit_job(
         job_id,
         MinerUClient(),
         default_reader(),
         datetime.now(timezone.utc),
+        lease_token,
     )

@@ -178,25 +178,6 @@ def advance(
     ) == 1
 
 
-def install_index_lease(task_id: str, now: datetime) -> str | None:
-    """给尚未标记的索引任务写上领取标记。写不上说明这次领取不属于当前执行。"""
-    token = uuid4().hex
-    count = execute_count(
-        """
-        UPDATE document_tasks
-        SET result_json = JSON_SET(
-                COALESCE(result_json, JSON_OBJECT()),
-                '$.lease_token', %(token)s
-            ),
-            updated_at = %(now)s
-        WHERE id = %(id)s AND status = 'RUNNING' AND stage = 'INDEXING'
-          AND JSON_EXTRACT(result_json, '$.lease_token') IS NULL
-        """,
-        {"id": task_id, "token": token, "now": as_utc(now)},
-    )
-    return token if count == 1 else None
-
-
 def update_progress(
     task_id: str,
     stage: DocumentTaskStage,
@@ -267,18 +248,6 @@ def update_index_progress(
     )
 
 
-def touch_indexing(task_id: str, lease_token: str, now: datetime) -> None:
-    """这次领取还在索引时续租，不提前声明 ES 写入成功。"""
-    execute_count(
-        """
-        UPDATE document_tasks SET updated_at = %(now)s
-        WHERE id = %(id)s AND status = 'RUNNING' AND stage = 'INDEXING'
-          AND JSON_UNQUOTE(JSON_EXTRACT(result_json, '$.lease_token')) = %(lease_token)s
-        """,
-        {"id": task_id, "lease_token": lease_token, "now": as_utc(now)},
-    )
-
-
 def retry_failed_indexing(task_id: str, now: datetime) -> bool:
     """仅允许当前文档版本的失败索引重新排队。"""
     with transaction() as connection:
@@ -328,31 +297,6 @@ def retry_failed_indexing(task_id: str, now: datetime) -> bool:
                 {"id": task_id, "now": as_utc(now)},
             )
     return True
-
-
-def begin_merge(task_id: str, now: datetime, lease_token: str) -> bool:
-    """只有一个调度能把解析阶段推进到合并。"""
-    _require_token(lease_token)
-    count = execute_count(
-        """
-        UPDATE document_tasks
-        SET stage = %(stage)s,
-            progress = 80,
-            step = '正在合并',
-            updated_at = %(now)s
-        WHERE id = %(id)s
-          AND status = 'RUNNING'
-          AND stage = 'PARSING'
-          AND JSON_UNQUOTE(JSON_EXTRACT(result_json, '$.lease_token')) = %(lease_token)s
-        """,
-        {
-            "id": task_id,
-            "stage": DocumentTaskStage.MERGING.value,
-            "now": as_utc(now),
-            "lease_token": lease_token,
-        },
-    )
-    return count == 1
 
 
 def complete(

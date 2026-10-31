@@ -5,6 +5,7 @@
 连接配置从后端 .env 读取，当前用户需有创建/删除测试表的权限。
 """
 
+import importlib
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -27,6 +28,8 @@ from model.document_task import orm
 from model.document_task.lease import LeaseLost
 from model.document_task.model import DocumentTaskStage
 from model.parse_job import orm as job_orm
+from model.parse_job.model import ParseJobStatus
+from services.task_runtime import lifecycle
 from services.task_runtime.lease import PARSE_STAGES
 from services.task_runtime.lease import TaskLease
 
@@ -131,7 +134,9 @@ def test_replaced_lease_cannot_change_task_or_document(mysql):
     assert not orm.update_progress(
         "task", DocumentTaskStage.CHUNKING, 85, "old progress", mysql, old.lease_token
     )
-    assert not orm.begin_merge("task", mysql, old.lease_token)
+    assert not orm.advance(
+        "task", old.lease_token, DocumentTaskStage.MERGING, 80, "old merge", mysql, PARSE_STAGES
+    )
     assert not orm.renew("task", old.lease_token, mysql, PARSE_STAGES)
     with pytest.raises(LeaseLost):
         with TaskLease("task", old.lease_token).writes():
@@ -247,6 +252,155 @@ def test_handoff_revokes_old_token_and_preserves_checkpoint(mysql):
     assert new.lease_token != task.lease_token
     rows = database.execute("SELECT result_json->'$.checkpoint.batch' AS batch FROM document_tasks")
     assert int(rows[0]["batch"]) == 3
+
+
+def test_adoption_reuses_remote_job_and_downloaded_zip(mysql):
+    from tests.test_poll_parse import _job
+
+    old = orm.claim("task", mysql)
+    job_orm.insert(_job(
+        id="part", task_id="task", document_id="doc", version=1,
+        lease_token=old.lease_token,
+        status=ParseJobStatus.DOWNLOADING, result_key="old.zip",
+    ))
+    database.execute("UPDATE document_tasks SET status='PENDING' WHERE id='task'")
+    new = orm.claim("task", mysql)
+    with TaskLease("task", new.lease_token).writes():
+        jobs = job_orm.adopt_task_jobs("task", "doc", 1, new.lease_token)
+    assert [(job.id, job.mineru_job_id, job.result_key) for job in jobs] == [("part", "mineru-1", "old.zip")]
+    assert jobs[0].lease_token == new.lease_token
+    assert not orm.owns_lease("task", old.lease_token)
+    assert document_orm.get("doc").status == "PROCESSING"
+
+
+def test_ready_document_cannot_be_failed_by_late_error(mysql):
+    task = orm.claim("task", mysql)
+    database.execute("UPDATE documents SET status='READY' WHERE id='doc'")
+    with TaskLease("task", task.lease_token).writes():
+        assert orm.fail("task", "late error", mysql, task.lease_token)
+        document_orm.mark_failed("doc", "late error", mysql, expected_version=1)
+    assert document_orm.get("doc").status == "READY"
+    assert orm.get("task").status == "FAILED"
+
+
+def test_artifact_publication_and_handoff_commit_before_dispatch(mysql, monkeypatch):
+    task = orm.claim("task", mysql)
+    snapshots = []
+
+    def publish():
+        document_orm.set_parsed_artifacts("doc", "md", "json", mysql, expected_version=1)
+
+    def read_committed():
+        current = orm.get("task")
+        document = document_orm.get("doc")
+        return (
+            current.status, current.stage, current.lease_token,
+            document.parsed_md_key, document.parsed_json_key,
+        )
+
+    def broker_unavailable(task_id, stage):
+        assert (task_id, stage) == ("task", DocumentTaskStage.CHUNKING)
+        # 旁路线程使用独立连接，只有提交后的产物和交接状态才可见。
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            snapshots.append(pool.submit(read_committed).result(timeout=3))
+        return False
+
+    monkeypatch.setattr(lifecycle, "dispatch", broker_unavailable)
+    assert lifecycle.advance(
+        TaskLease("task", task.lease_token), DocumentTaskStage.CHUNKING,
+        85, "等待切分", prepare=publish,
+    )
+    assert snapshots == [("PENDING", "CHUNKING", None, "md", "json")]
+    assert orm.get("task").status == "PENDING"
+    assert document_orm.get("doc").status == "PROCESSING"
+
+
+def test_prepare_failure_rolls_back_artifacts_and_stage(mysql, monkeypatch):
+    task = orm.claim("task", mysql)
+    messages = []
+
+    def publish_then_fail():
+        document_orm.set_parsed_artifacts("doc", "md", "json", mysql, expected_version=1)
+        assert orm.update_progress(
+            "task", DocumentTaskStage.CHUNKING, 85, "尚未提交", mysql, task.lease_token,
+        )
+        raise RuntimeError("artifact publication failed")
+
+    monkeypatch.setattr(lifecycle, "dispatch", lambda *args: messages.append(args))
+    with pytest.raises(RuntimeError, match="artifact publication failed"):
+        lifecycle.advance(
+            TaskLease("task", task.lease_token), DocumentTaskStage.CHUNKING,
+            85, "等待切分", prepare=publish_then_fail,
+        )
+    current = orm.get("task")
+    document = document_orm.get("doc")
+    assert (current.status, current.stage, current.lease_token) == (
+        "RUNNING", "PARSING", task.lease_token,
+    )
+    assert (document.parsed_md_key, document.parsed_json_key) == (None, None)
+    assert document.status == "PROCESSING"
+    assert messages == []
+
+
+def test_failure_bridge_rolls_back_task_when_document_write_fails(mysql, monkeypatch):
+    task = orm.claim("task", mysql)
+    mark_failed = document_orm.mark_failed
+
+    def fail_document_write(*args, **kwargs):
+        mark_failed(*args, **kwargs)
+        raise RuntimeError("document write failed")
+
+    monkeypatch.setattr(document_orm, "mark_failed", fail_document_write)
+    with pytest.raises(RuntimeError, match="document write failed"):
+        lifecycle.fail(task, TaskLease("task", task.lease_token), "business error")
+    current = orm.get("task")
+    document = document_orm.get("doc")
+    assert (current.status, current.stage, current.lease_token) == (
+        "RUNNING", "PARSING", task.lease_token,
+    )
+    assert current.error_message is None
+    assert document.status == "PROCESSING"
+    assert document.error_message is None
+
+
+@pytest.mark.parametrize("completion_error", [False, True])
+def test_index_ready_and_completion_share_transaction(mysql, monkeypatch, completion_error):
+    worker = importlib.import_module("task.index_document")
+    database.execute("UPDATE document_tasks SET stage='INDEXING' WHERE id='task'")
+    calls = []
+
+    class Service:
+        def run(self, document, version, heartbeat, lease):
+            lease()
+            calls.append((document.id, version))
+            heartbeat(1, 1, "child")
+            database.execute("UPDATE documents SET status='READY', chunk_count=1 WHERE id='doc'")
+            return True
+
+    monkeypatch.setattr(worker, "DocumentIndexingService", Service)
+    if completion_error:
+        def cannot_complete(*args):
+            raise RuntimeError("completion write failed")
+
+        monkeypatch.setattr(orm, "complete", cannot_complete)
+        with pytest.raises(RuntimeError, match="completion write failed"):
+            worker.index_document.run("task")
+    else:
+        worker.index_document.run("task")
+
+    current = orm.get("task")
+    document = document_orm.get("doc")
+    assert calls == [("doc", 1)]
+    assert current.lease_token is None
+    if completion_error:
+        assert (current.status, current.stage) == ("FAILED", "INDEXING")
+        assert document.status == "FAILED"
+        assert document.chunk_count == 0
+        assert current.error_message == "completion write failed"
+    else:
+        assert (current.status, current.stage) == ("COMPLETED", "DONE")
+        assert document.status == "READY"
+        assert document.chunk_count == 1
 
 
 def test_mineru_jobs_are_grouped_and_polled_by_original_claim(mysql):

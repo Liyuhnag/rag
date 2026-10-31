@@ -123,7 +123,7 @@ start() {
 start "接口" uv run uvicorn main:app --reload --host 0.0.0.0 --port "$api_port"
 start "解析" uv run celery -A main.celery_app worker \
   --loglevel=info \
-  -Q celery \
+  -Q parse,celery \
   -n "parse@%h"
 start "索引" uv run celery -A main.celery_app worker \
   --loglevel=info \

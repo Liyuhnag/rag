@@ -11,7 +11,7 @@ from api.tasks.errors import cannot_retry
 from api.tasks.schemas import TaskResponse
 from api.tasks.schemas import to_task_response
 from model.document_task import orm as document_task_orm
-from services.parsing.dispatch import dispatch_task
+from services.task_runtime.dispatch import dispatch as dispatch_task
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -32,8 +32,8 @@ def retry_indexing(task_id: str) -> TaskResponse:
         raise not_found()
     if not document_task_orm.retry_failed_indexing(task_id, datetime.now(timezone.utc)):
         raise cannot_retry()
-    dispatch_task(task_id)
     task = document_task_orm.get(task_id)
     if task is None:
         raise not_found()
+    dispatch_task(task.id, task.stage)
     return to_task_response(task)

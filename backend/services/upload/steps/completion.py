@@ -33,7 +33,7 @@ from services.upload.shared import part_size
 from services.upload.shared import parts_or_none
 from services.upload.shared import require_session
 from services.upload.shared import task_for
-from services.parsing.dispatch import dispatch_task
+from services.task_runtime.dispatch import dispatch as dispatch_task
 
 
 @dataclass
@@ -176,7 +176,7 @@ def _store_completed(session: UploadSession, now: datetime) -> CompleteResult:
         raise upload_completing("上传会话状态已变化") from exc
     session.status = "COMPLETED"
     session.completed_at = now
-    dispatch_task(task.id)
+    dispatch_task(task.id, task.stage)
     return CompleteResult(session, task, "completed")
 
 

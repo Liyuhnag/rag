@@ -311,3 +311,25 @@ def record_result(job_id: str, result_key: str, now: datetime) -> None:
             "now": as_utc(now),
         },
     )
+
+
+def adopt_task_jobs(task_id: str, document_id: str, version: int, token: str) -> list[ParseJob]:
+    """在任务租约事务内接管最近一组可靠分段，保留远端编号与 ZIP。
+
+    调用方必须先持有任务行门禁；不能将升级前 token 为空的分段认领为当前结果。
+    """
+    rows = execute(
+        "SELECT lease_token FROM parse_jobs WHERE task_id=%(task_id)s "
+        "AND document_id=%(document_id)s AND version=%(version)s "
+        "AND lease_token IS NOT NULL ORDER BY created_at DESC, id DESC LIMIT 1",
+        {"task_id": task_id, "document_id": document_id, "version": version},
+    )
+    if not rows:
+        return []
+    execute_count(
+        "UPDATE parse_jobs SET lease_token=%(token)s WHERE task_id=%(task_id)s "
+        "AND document_id=%(document_id)s AND version=%(version)s AND lease_token=%(old)s",
+        {"task_id": task_id, "document_id": document_id, "version": version,
+         "token": token, "old": rows[0]["lease_token"]},
+    )
+    return list_by_document_version(document_id, version, token)

@@ -5,13 +5,11 @@ import importlib
 from contextlib import contextmanager
 from datetime import datetime
 from datetime import timezone
-from time import sleep as threading_sleep
 from types import SimpleNamespace
 
 import pytest
 
 from model.document_task.model import DocumentTaskStage
-from model.document_task.model import DocumentTaskStatus
 
 worker = importlib.import_module("task.index_document")
 audit_worker = importlib.import_module("task.audit_index")
@@ -89,7 +87,7 @@ def test_retry_endpoint_accepts_failed_index_and_rejects_other_tasks(client, mon
 
     monkeypatch.setattr(task_router.document_task_orm, "get", lambda _id: task)
     monkeypatch.setattr(task_router.document_task_orm, "retry_failed_indexing", requeue)
-    monkeypatch.setattr(task_router, "dispatch_task", calls.append)
+    monkeypatch.setattr(task_router, "dispatch_task", lambda task_id, stage: calls.append(task_id))
     response = client.post("/api/tasks/task/retry")
     assert response.status_code == 202
     assert response.json()["status"] == "PENDING"
@@ -101,255 +99,110 @@ def test_retry_endpoint_accepts_failed_index_and_rejects_other_tasks(client, mon
     assert response.json()["error"]["code"] == "TASK_NOT_RETRYABLE"
 
 
-@pytest.mark.parametrize("outcome", [True, False, RuntimeError("Milvus 不可用")])
-def test_indexing_task_completes_only_after_success(monkeypatch, outcome):
-    calls = []
+def _prepare(monkeypatch):
+    from model.document.model import DocumentStatus
+    from services.task_runtime import lifecycle
+
     task = SimpleNamespace(
-        id="task",
-        document_id="doc",
-        version=2,
-        status=DocumentTaskStatus.RUNNING,
-        stage=DocumentTaskStage.INDEXING,
-        lease_token="lease-1",
+        id="task", document_id="doc", version=2, status="RUNNING",
+        stage=DocumentTaskStage.INDEXING, lease_token="lease-1",
     )
-    monkeypatch.setattr(worker.task_orm, "get", lambda task_id: task)
-    monkeypatch.setattr(
-        worker.document_orm,
-        "get",
-        lambda doc_id: SimpleNamespace(id="doc", parse_version=2),
-    )
+    document = SimpleNamespace(id="doc", parse_version=2, status=DocumentStatus.PROCESSING)
+    calls = []
+
+    def claim(task_id, now, stages):
+        assert stages == (DocumentTaskStage.INDEXING,)
+        return task
+
+    def complete(*args):
+        task.status = "COMPLETED"
+        task.stage = DocumentTaskStage.DONE
+        calls.append("complete")
+        return True
+
+    def fail(*args):
+        task.status = "FAILED"
+        calls.append("fail")
+        return True
+
+    def supersede(*args):
+        task.status = "SUPERSEDED"
+        calls.append("supersede")
+        return True
+
+    def mark_failed(*args, **kwargs):
+        document.status = "FAILED"
+
+    monkeypatch.setattr(worker.task_orm, "claim", claim)
+    monkeypatch.setattr(worker.document_orm, "get", lambda *args: document)
+    monkeypatch.setattr(worker.task_orm, "complete", complete)
+    monkeypatch.setattr(worker.task_orm, "fail", fail)
+    monkeypatch.setattr(worker.task_orm, "supersede", supersede)
+    monkeypatch.setattr(worker.task_orm, "update_index_progress", lambda *args: calls.append("progress"))
+    monkeypatch.setattr(lifecycle.document_orm, "mark_failed", mark_failed)
+    return task, document, calls
+
+
+@pytest.mark.usefixtures("parse_lease")
+@pytest.mark.parametrize("outcome", [True, False, RuntimeError("Milvus unavailable")])
+def test_indexing_completes_only_after_success(monkeypatch, outcome):
+    task, document, calls = _prepare(monkeypatch)
 
     class Service:
         def run(self, document, version, heartbeat, lease):
-            heartbeat(1, 2, "child")
+            lease()
+            heartbeat(1, 1, "child")
             if isinstance(outcome, Exception):
                 raise outcome
             return outcome
 
     monkeypatch.setattr(worker, "DocumentIndexingService", Service)
-    monkeypatch.setattr(
-        worker.task_orm, "update_index_progress", lambda *args: calls.append("heartbeat")
-    )
-    monkeypatch.setattr(worker.task_orm, "touch_indexing", lambda *args: None)
-    def complete(*args):
-        calls.append("complete")
-        return True
-
-    monkeypatch.setattr(worker.task_orm, "complete", complete)
-
-    def fail(*args):
-        calls.append("fail")
-        return True
-
-    monkeypatch.setattr(worker.task_orm, "fail", fail)
-    monkeypatch.setattr(
-        worker.document_orm, "mark_failed", lambda *args, **kwargs: calls.append(kwargs)
-    )
     if isinstance(outcome, Exception):
-        with pytest.raises(RuntimeError, match="Milvus"):
+        with pytest.raises(RuntimeError, match="Milvus unavailable"):
             worker.index_document.run("task")
-        assert calls == ["heartbeat", "fail", {"expected_version": 2}]
+        assert task.status == document.status == "FAILED"
     else:
         worker.index_document.run("task")
-        assert calls == ["heartbeat"] + (["complete"] if outcome else ["fail"])
+        assert task.status == ("COMPLETED" if outcome else "SUPERSEDED")
+        assert document.status == "PROCESSING"
+    assert calls[0] == "progress"
 
 
-def test_stale_index_task_fails_without_indexing_or_changing_document(monkeypatch):
-    task = SimpleNamespace(
-        document_id="doc",
-        version=1,
-        status=DocumentTaskStatus.RUNNING,
-        stage=DocumentTaskStage.INDEXING,
-        lease_token="lease-1",
-    )
-    calls = []
-    monkeypatch.setattr(worker.task_orm, "get", lambda task_id: task)
-    monkeypatch.setattr(
-        worker.document_orm, "get", lambda doc_id: SimpleNamespace(parse_version=2)
-    )
-    monkeypatch.setattr(
-        worker, "DocumentIndexingService", lambda: pytest.fail("过期任务不能索引")
-    )
+@pytest.mark.usefixtures("parse_lease")
+def test_stale_indexing_does_not_touch_new_document(monkeypatch):
+    task, document, calls = _prepare(monkeypatch)
+    document.parse_version = 3
+    document.status = "READY"
+    monkeypatch.setattr(worker, "DocumentIndexingService", lambda: pytest.fail("旧版本不能索引"))
+    worker.index_document.run(task.id)
+    assert task.status == "SUPERSEDED"
+    assert document.status == "READY"
+    assert calls == ["supersede"]
 
-    def fail(*args):
-        calls.append(args[1])
-        return True
 
-    monkeypatch.setattr(worker.task_orm, "fail", fail)
-    monkeypatch.setattr(
-        worker.document_orm,
-        "mark_failed",
-        lambda *args, **kwargs: calls.append("document"),
-    )
+@pytest.mark.usefixtures("parse_lease")
+def test_published_legacy_task_only_repairs_completion(monkeypatch):
+    task, document, calls = _prepare(monkeypatch)
+    document.status = "READY"
+    monkeypatch.setattr(worker, "DocumentIndexingService", lambda: pytest.fail("已发布不应重建"))
+    worker.index_document.run(task.id)
+    assert task.status == "COMPLETED"
+    assert document.status == "READY"
+    assert calls == ["complete"]
+
+
+def test_unclaimed_index_message_does_no_work(monkeypatch):
+    monkeypatch.setattr(worker.task_orm, "claim", lambda *args: None)
+    monkeypatch.setattr(worker.document_orm, "get", lambda *args: pytest.fail("不能执行未领取消息"))
     worker.index_document.run("task")
-    assert calls == ["文档版本已变化，索引任务已过期"]
 
 
-def test_finished_parse_dispatches_index_queue(monkeypatch):
-    from services.indexing.flow import enqueue_indexing
-
-    calls = []
-    monkeypatch.setattr(
-        worker.task_orm, "update_progress", lambda *args: calls.append(args) or True
-    )
-    monkeypatch.setattr(
-        worker.index_document, "apply_async", lambda **kwargs: calls.append(kwargs)
-    )
-    enqueue_indexing("task", "lease-1")
-    assert calls[0][1] == DocumentTaskStage.INDEXING
-    assert calls[1] == {"args": ["task"], "queue": "index"}
-
-
-def test_missed_completion_keeps_the_published_document(monkeypatch, caplog):
-    task = SimpleNamespace(
-        id="task",
-        document_id="doc",
-        version=2,
-        status=DocumentTaskStatus.RUNNING,
-        stage=DocumentTaskStage.INDEXING,
-        lease_token="lease-1",
-    )
-    calls = []
-    monkeypatch.setattr(worker.task_orm, "get", lambda task_id: task)
-    monkeypatch.setattr(
-        worker.document_orm,
-        "get",
-        lambda doc_id: SimpleNamespace(id="doc", parse_version=2),
-    )
-
-    class Service:
-        def run(self, document, version, heartbeat, lease):
-            return True
-
-    monkeypatch.setattr(worker, "DocumentIndexingService", Service)
-    monkeypatch.setattr(worker.task_orm, "touch_indexing", lambda *args: None)
-    monkeypatch.setattr(worker.task_orm, "complete", lambda *args: False)
-    monkeypatch.setattr(
-        worker.document_orm,
-        "mark_failed",
-        lambda *args, **kwargs: calls.append("document"),
-    )
-    with caplog.at_level("ERROR"):
-        worker.index_document.run("task")
+@pytest.mark.usefixtures("parse_lease")
+def test_failed_initial_renewal_prevents_external_work(monkeypatch):
+    task, document, calls = _prepare(monkeypatch)
+    monkeypatch.setattr(worker.task_orm, "renew", lambda *args: False)
+    monkeypatch.setattr(worker, "DocumentIndexingService", lambda: pytest.fail("失效后不能索引"))
+    worker.index_document.run(task.id)
+    assert task.status == "RUNNING"
+    assert document.status == "PROCESSING"
     assert calls == []
-    assert "任务完成标记未写上" in caplog.text
-
-
-def test_replaced_lease_does_not_fail_document(monkeypatch):
-    task = SimpleNamespace(
-        id="task",
-        document_id="doc",
-        version=2,
-        status=DocumentTaskStatus.RUNNING,
-        stage=DocumentTaskStage.INDEXING,
-        lease_token="lease-1",
-    )
-    calls = []
-    monkeypatch.setattr(worker.task_orm, "get", lambda task_id: task)
-    monkeypatch.setattr(
-        worker.document_orm,
-        "get",
-        lambda doc_id: SimpleNamespace(id="doc", parse_version=2),
-    )
-
-    class Service:
-        def run(self, document, version, heartbeat, lease):
-            raise RuntimeError("Milvus 不可用")
-
-    monkeypatch.setattr(worker, "DocumentIndexingService", Service)
-    monkeypatch.setattr(worker.task_orm, "touch_indexing", lambda *args: None)
-    monkeypatch.setattr(worker.task_orm, "fail", lambda *args: False)
-    monkeypatch.setattr(
-        worker.document_orm,
-        "mark_failed",
-        lambda *args, **kwargs: calls.append("document"),
-    )
-    worker.index_document.run("task")
-    assert calls == []
-
-
-def test_index_lease_renews_while_the_task_runs(monkeypatch):
-    monkeypatch.setattr(worker, "_LEASE_RENEW_SECONDS", 0.01)
-    task = SimpleNamespace(
-        id="task",
-        document_id="doc",
-        version=2,
-        status=DocumentTaskStatus.RUNNING,
-        stage=DocumentTaskStage.INDEXING,
-        lease_token="lease-1",
-    )
-    tokens = []
-    monkeypatch.setattr(worker.task_orm, "get", lambda task_id: task)
-    monkeypatch.setattr(
-        worker.document_orm,
-        "get",
-        lambda doc_id: SimpleNamespace(id="doc", parse_version=2),
-    )
-
-    def touch(task_id, lease_token, now):
-        tokens.append(lease_token)
-
-    class Service:
-        def run(self, document, version, heartbeat, lease):
-            deadline = datetime.now(timezone.utc).timestamp() + 1
-            while len(tokens) < 2 and datetime.now(timezone.utc).timestamp() < deadline:
-                threading_sleep(0.01)
-            return True
-
-    monkeypatch.setattr(worker, "DocumentIndexingService", Service)
-    monkeypatch.setattr(worker.task_orm, "touch_indexing", touch)
-    monkeypatch.setattr(worker.task_orm, "complete", lambda *args: True)
-    worker.index_document.run("task")
-    assert tokens[0] == "lease-1"
-    assert len(tokens) >= 2
-
-
-def test_claim_and_index_lease_sql_keep_the_current_token(monkeypatch):
-    from model.document_task import orm as task_orm
-
-    statements = []
-
-    def execute_count(sql, params):
-        statements.append((" ".join(sql.split()), params))
-        return 1
-
-    monkeypatch.setattr(task_orm, "execute_count", execute_count)
-    monkeypatch.setattr(task_orm, "get", lambda task_id: None)
-    now = datetime(2026, 10, 29, tzinfo=timezone.utc)
-    task_orm.claim("task", now)
-    task_orm.touch_indexing("task", "lease-1", now)
-    assert task_orm.fail("task", "索引失败", now, "lease-1") is True
-    assert "CASE WHEN stage = 'PENDING' THEN 'PARSING' ELSE stage END" in statements[0][0]
-    assert "progress =" not in statements[0][0]
-    assert "$.lease_token" in statements[0][0]
-    assert statements[0][1]["lease_token"]
-    assert "$.lease_token" in statements[1][0]
-    assert statements[1][1]["lease_token"] == "lease-1"
-    assert "$.lease_token" in statements[2][0]
-    assert statements[2][1]["lease_token"] == "lease-1"
-
-
-def test_lost_parse_lease_does_not_dispatch_index_queue(monkeypatch):
-    from services.indexing.flow import enqueue_indexing
-
-    monkeypatch.setattr(worker.task_orm, "update_progress", lambda *args: False)
-    monkeypatch.setattr(
-        worker.index_document, "apply_async", lambda **kwargs: pytest.fail("旧领取者不能投递索引")
-    )
-    enqueue_indexing("task", "old-lease")
-
-
-def test_failed_heartbeat_prevents_index_handoff_even_with_same_token(monkeypatch):
-    from model.document_task.lease import LeaseLost
-    from services.indexing.flow import enqueue_indexing
-    from services.task_runtime.lease import TaskLease
-
-    def unexpected(*args, **kwargs):
-        pytest.fail("续租失败后不能更新阶段或发送索引任务")
-
-    lease = TaskLease("task", "lease-1")
-    lease._lost.set()
-    monkeypatch.setattr(worker.task_orm, "update_progress", unexpected)
-    monkeypatch.setattr(worker.index_document, "apply_async", unexpected)
-    with pytest.raises(LeaseLost):
-        enqueue_indexing("task", "lease-1", lease)

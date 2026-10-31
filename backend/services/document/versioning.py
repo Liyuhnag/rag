@@ -15,4 +15,4 @@ def fail_version_mismatch(task: DocumentTask, now: datetime) -> bool:
     message = "文档版本不匹配，解析任务已过期"
     if task.stage == DocumentTaskStage.INDEXING:
         message = "文档版本已变化，索引任务已过期"
-    return task_orm.fail(task.id, message, now, task.lease_token)
+    return task_orm.supersede(task.id, message, now, task.lease_token)

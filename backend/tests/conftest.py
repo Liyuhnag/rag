@@ -31,7 +31,7 @@ def client(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         upload_completion,
         "dispatch_task",
-        lambda task_id: dispatched_tasks.append(task_id) or True,
+        lambda task_id, stage: dispatched_tasks.append(task_id) or True,
     )
     application = create_app(settings, open_memory_storage)
     application.state.upload_repository = upload_repository

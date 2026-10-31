@@ -20,25 +20,30 @@ from model.parse_job import orm as parse_job_orm
 from model.parse_job.model import ParseJob
 from model.parse_job.model import ParseJobStatus
 from services.chunking.service import DocumentChunkingService
-from services.common.exceptions import FeatureNotReady
 from services.document.versioning import fail_version_mismatch
-from services.indexing.flow import enqueue_indexing
+from services.parsing.poll import resume_parts
+from services.parsing.poll import run_merge
 from services.parsing.service import DocumentParsingService
 from services.parsing.service import SubmittedParse
 from services.parsing.service import StoredParseResult
 from services.structured.service import StructuredSchemaService
 from services.task_runtime.lease import TaskLease
+from services.task_runtime.lifecycle import advance
+from services.task_runtime.lifecycle import fail
+from services.task_runtime.policy import PARSE_STAGES
+from services.task_runtime.policy import MINERU_POLL_SECONDS
+from services.task_runtime.policy import policy_for
 from task.app import celery_app
 
 logger = logging.getLogger("rag.task")
-_POLL_SECONDS = 10
 
 
 @celery_app.task(
     name="rag.parse_document",
     ignore_result=True,
-    soft_time_limit=300,
-    time_limit=330,
+    queue="parse",
+    soft_time_limit=policy_for(DocumentTaskStage.PARSING).soft_time_limit,
+    time_limit=policy_for(DocumentTaskStage.PARSING).time_limit,
 )
 def parse_document(task_id: str) -> None:
     """领取任务、准备文档并执行解析。"""
@@ -48,15 +53,6 @@ def parse_document(task_id: str) -> None:
 
     if not task.lease_token:
         logger.error("任务缺少领取标记: %s", task_id)
-        return
-    if task.stage == DocumentTaskStage.INDEXING:
-        document = document_orm.get(task.document_id)
-        if document is None:
-            task_orm.fail(task.id, "文档不存在", _now(), task.lease_token)
-        elif document.parse_version != task.version:
-            fail_version_mismatch(task, _now())
-        else:
-            enqueue_indexing(task_id, task.lease_token)
         return
     try:
         with TaskLease(task.id, task.lease_token) as lease:
@@ -69,44 +65,35 @@ def _run(task: DocumentTask, lease: TaskLease) -> None:
     document = _load_document(task, lease)
     if document is None:
         return
-    with lease.writes():
-        if document.parse_version != task.version:
-            fail_version_mismatch(task, _now())
-            return
-    chunking = task.stage == DocumentTaskStage.CHUNKING
     try:
-        stored = _parse(task, document, lease, chunking)
-        if stored is None:
-            return
-        chunking = True
-        _chunk(task, document, stored, lease)
+        with lease.writes():
+            if document.parse_version != task.version:
+                fail_version_mismatch(task, _now())
+                return
+        if task.stage == DocumentTaskStage.MERGING:
+            run_merge(task, document, lease)
+        elif task.stage == DocumentTaskStage.CHUNKING:
+            if not document.parsed_md_key or not document.parsed_json_key:
+                advance(lease, DocumentTaskStage.PARSING, 0, "解析产物缺失，重新解析")
+                return
+            stored = StoredParseResult(document.parsed_md_key, document.parsed_json_key)
+            _chunk(task, document, stored, lease)
+        elif document.file_type not in {"pdf", "doc", "docx"} or not resume_parts(task, lease):
+            _parse(task, document, lease)
     except LeaseLost:
         raise
     except Exception as exc:
-        # 任务边界统一处理业务异常；失去执行权时不再修改任务或文档。
-        with lease.writes():
-            if isinstance(exc, FeatureNotReady) and not chunking:
-                task_orm.complete(task.id, str(exc), _now(), lease.token)
-                return
-            message = str(exc) or "解析失败"
-            logger.exception("解析任务失败: %s", task.id)
-            now = _now()
-            if task_orm.fail(task.id, message, now, lease.token):
-                document_orm.mark_failed(
-                    document.id, message, now, expected_version=task.version
-                )
+        # worker 是业务异常边界；失败与文档状态在同一事务内提交。
+        logger.exception("解析任务失败: %s", task.id)
+        fail(task, lease, str(exc) or "解析失败")
         raise
 
 
-def _parse(
-    task: DocumentTask, document: Document, lease: TaskLease, chunking: bool
-) -> StoredParseResult | None:
-    if chunking and document.parsed_md_key and document.parsed_json_key:
-        return StoredParseResult(document.parsed_md_key, document.parsed_json_key)
+def _parse(task: DocumentTask, document: Document, lease: TaskLease) -> None:
     with lease.writes():
         if not document_orm.begin_parse(document.id, task.version, _now()):
             fail_version_mismatch(task, _now())
-            return None
+            return
     service = DocumentParsingService(attempt_id=lease.token)
     lease.ensure()
     outcome = service.parse(document, task.version)
@@ -116,43 +103,39 @@ def _parse(
             task_orm.update_progress(
                 task.id, DocumentTaskStage.PARSING, 5, "分段已提交", _now(), lease.token
             )
-        return None
+        return
     lease.ensure()
     stored = service.upload(outcome.parsed)
-    with lease.writes():
+
+    def publish() -> None:
         service.persist(outcome.parsed, stored)
-    return stored
+
+    advance(lease, DocumentTaskStage.CHUNKING, 85, "等待切分", prepare=publish)
 
 
 def _chunk(
     task: DocumentTask, document: Document, stored: StoredParseResult, lease: TaskLease
 ) -> None:
     structured = document.file_type in {"csv", "xlsx"}
-    with lease.writes():
-        task_orm.update_progress(
-            task.id,
-            DocumentTaskStage.CHUNKING,
-            85,
-            "表结构保存中" if structured else "文档切分中",
-            _now(),
-            lease.token,
-        )
-    with lease.writes():
+
+    def save() -> bool:
         service = StructuredSchemaService() if structured else DocumentChunkingService()
-        result = service.run(document, task.version, stored.md_key, stored.json_key)
-        if result is False:
+        if service.run(document, task.version, stored.md_key, stored.json_key) is False:
             fail_version_mismatch(task, _now())
-            return
-        if structured:
-            task_orm.complete(task.id, "结构已保存，待数据入库", _now(), lease.token)
-            return
-    lease.ensure()
-    enqueue_indexing(task.id, lease.token, lease)
+            return False
+        return True
+
+    if structured:
+        with lease.writes():
+            if save():
+                task_orm.complete(task.id, "结构已保存，待数据入库", _now(), lease.token)
+        return
+    advance(lease, DocumentTaskStage.INDEXING, 90, "等待向量化与索引写入", prepare=save)
 
 
 def _claim_task(task_id: str) -> DocumentTask | None:
     """条件抢占 PENDING 任务。"""
-    return task_orm.claim(task_id, _now())
+    return task_orm.claim(task_id, _now(), PARSE_STAGES)
 
 
 def _load_document(task: DocumentTask, lease: TaskLease) -> Document | None:
@@ -186,7 +169,7 @@ def _record_parts(
                 mineru_job_id=part.job_id,
                 status=ParseJobStatus.SUBMITTED,
                 attempts=1,
-                next_poll_at=now + timedelta(seconds=_POLL_SECONDS),
+                next_poll_at=now + timedelta(seconds=MINERU_POLL_SECONDS),
                 error_message=None,
                 result_key=None,
                 created_at=now,
