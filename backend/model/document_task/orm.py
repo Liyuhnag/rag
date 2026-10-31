@@ -266,6 +266,69 @@ def update_index_progress(
     )
 
 
+def mark_indexing_in_progress(
+    task_id: str,
+    token: str,
+    now: datetime,
+) -> bool:
+    """标记任务正在索引中，更新心跳时间，不改变 status。"""
+    _require_token(token)
+    affected = execute_count(
+        """
+        UPDATE document_tasks
+        SET updated_at = %(now)s,
+            step = '正在索引中'
+        WHERE id = %(task_id)s
+          AND JSON_UNQUOTE(JSON_EXTRACT(result_json, '$.lease_token')) = %(token)s
+          AND status = 'RUNNING'
+          AND stage = 'INDEXING'
+        """,
+        {"task_id": task_id, "token": token, "now": as_utc(now)},
+    )
+    return affected == 1
+
+
+def update_index_progress_lightweight(
+    task_id: str,
+    completed: int,
+    total: int,
+    last_chunk_id: str,
+    token: str,
+    now: datetime,
+) -> bool:
+    """轻量级进度更新，不持有长事务。"""
+    _require_token(token)
+    result_json = json.dumps({
+        "lease_token": token,
+        "last_chunk_id": last_chunk_id,
+        "embedded_count": completed,
+        "es_indexed": completed,
+        "milvus_indexed": completed,
+    })
+
+    affected = execute_count(
+        """
+        UPDATE document_tasks
+        SET progress = %(progress)s,
+            step = %(step)s,
+            result_json = %(result_json)s,
+            updated_at = %(now)s
+        WHERE id = %(task_id)s
+          AND JSON_UNQUOTE(JSON_EXTRACT(result_json, '$.lease_token')) = %(token)s
+          AND status = 'RUNNING'
+        """,
+        {
+            "task_id": task_id,
+            "progress": 90 + min(9, 9 * completed // total) if total > 0 else 90,
+            "step": f"已索引 {completed}/{total} 块",
+            "result_json": result_json,
+            "now": as_utc(now),
+            "token": token,
+        },
+    )
+    return affected == 1
+
+
 def retry_failed(
     task_id: str,
     now: datetime,

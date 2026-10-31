@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """维护任务按持久化阶段补投。"""
 
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -22,7 +23,7 @@ def test_redispatch_recovers_before_finding_pending_tasks(monkeypatch, has_pendi
 
     def find_pending(older_than, limit):
         assert len(recovered_at) == 1
-        assert older_than < recovered_at[0]
+        assert recovered_at[0] - older_than == timedelta(seconds=120)
         assert limit == maintenance._REDISPATCH_BATCH
         calls.append("find-pending")
         return [SimpleNamespace(id="task", stage=Stage.INDEXING)] if has_pending else []
@@ -38,3 +39,13 @@ def test_redispatch_recovers_before_finding_pending_tasks(monkeypatch, has_pendi
     if has_pending:
         expected.append(("task", Stage.INDEXING))
     assert calls == expected
+
+
+def test_beat_recovers_every_minute_and_polls_mineru_independently():
+    schedule = maintenance.celery_app.conf.beat_schedule
+    assert schedule["redispatch-pending-tasks"] == {
+        "task": "rag.redispatch_pending_tasks", "schedule": 60.0,
+    }
+    assert schedule["poll-parse-jobs"] == {
+        "task": "rag.poll_parse_jobs", "schedule": 10.0,
+    }

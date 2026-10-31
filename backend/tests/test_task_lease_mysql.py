@@ -33,6 +33,7 @@ from model.parse_job.model import ParseJobStatus
 from services.task_runtime import lifecycle
 from services.task_runtime.lease import PARSE_STAGES
 from services.task_runtime.lease import TaskLease
+from services.task_runtime.policy import PENDING_MIN_AGE_SECONDS
 from task import maintenance
 
 pytestmark = pytest.mark.skipif(
@@ -393,7 +394,7 @@ def test_recovery_batch_limit_and_equal_timestamp_order(mysql, monkeypatch):
 
 def test_maintenance_does_not_redispatch_just_recovered_task_in_same_scan(mysql, monkeypatch):
     _prepare_stale_task(mysql)
-    cutoff = mysql - timedelta(seconds=maintenance._REDISPATCH_MIN_AGE_SECONDS)
+    cutoff = mysql - timedelta(seconds=PENDING_MIN_AGE_SECONDS)
     for version, offset_us in enumerate([-1, 0, 1], start=2):
         database.execute(
             "INSERT INTO document_tasks (id,document_id,version,status,stage,created_at,updated_at) "

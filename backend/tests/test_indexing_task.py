@@ -70,7 +70,12 @@ def _prepare(monkeypatch):
     monkeypatch.setattr(worker.task_orm, "complete", complete)
     monkeypatch.setattr(worker.task_orm, "fail", fail)
     monkeypatch.setattr(worker.task_orm, "supersede", supersede)
-    monkeypatch.setattr(worker.task_orm, "update_index_progress", lambda *args: calls.append("progress"))
+    monkeypatch.setattr(worker.task_orm, "mark_indexing_in_progress", lambda *args: True)
+    monkeypatch.setattr(
+        worker.task_orm,
+        "update_index_progress_lightweight",
+        lambda *args: calls.append("progress"),
+    )
     monkeypatch.setattr(lifecycle.document_orm, "mark_failed", mark_failed)
     return task, document, calls
 
