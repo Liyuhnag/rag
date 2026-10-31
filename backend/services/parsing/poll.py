@@ -9,11 +9,12 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
+from uuid import uuid4
 
 from model.document import orm as document_orm
 from model.document_task import orm as task_orm
+from model.document_task.lease import LeaseLost
 from model.document_task.model import DocumentTaskStage
-from model.document_task.model import DocumentTaskStatus
 from model.parse_job import orm as parse_job_orm
 from model.parse_job.model import ParseJob
 from model.parse_job.model import ParseJobStatus
@@ -28,6 +29,7 @@ from services.parsing.errors import ParserUnavailable
 from services.parsing.mineru.client import MinerUClient
 from services.parsing.ports import ObjectReader
 from services.parsing.service import DocumentParsingService
+from services.task_runtime.lease import TaskLease
 
 logger = logging.getLogger(__name__)
 
@@ -64,11 +66,21 @@ def poll_due(now: datetime, mineru: MinerUClient | None = None) -> int:
 
 def poll_job(job: ParseJob, mineru: MinerUClient, now: datetime) -> None:
     """按 MinerU 状态决定继续等、下载、重试或失败。"""
+    try:
+        with _lease(job, parsing_only=True) as lease:
+            _poll_job(job, mineru, now, lease)
+    except LeaseLost:
+        return
+
+
+def _poll_job(
+    job: ParseJob, mineru: MinerUClient, now: datetime, lease: TaskLease
+) -> None:
     if job.status == ParseJobStatus.DOWNLOADING:
         _enqueue_download(job.id)
         return
     if not job.mineru_job_id:
-        apply_plan(job, plan_lost(job, now), now)
+        apply_plan(job, plan_lost(job, now), now, lease)
         return
     try:
         remote = mineru.status(job.mineru_job_id)
@@ -80,7 +92,7 @@ def poll_job(job: ParseJob, mineru: MinerUClient, now: datetime) -> None:
         plan = plan_rejected(job, exc.message, now)
     else:
         plan = plan_status(job, remote.state, remote.error, now)
-    apply_plan(job, plan, now)
+    apply_plan(job, plan, now, lease)
 
 
 def plan_status(
@@ -135,8 +147,23 @@ def plan_rejected(job: ParseJob, message: str, now: datetime) -> PollPlan:
     )
 
 
-def apply_plan(job: ParseJob, plan: PollPlan, now: datetime) -> None:
+def apply_plan(
+    job: ParseJob, plan: PollPlan, now: datetime, lease: TaskLease | None = None
+) -> None:
     """把轮询结论写入分段任务，并投递下载或重新提交。"""
+    try:
+        lease = lease or _lease(job, parsing_only=True)
+        with lease.writes():
+            _save_plan(job, plan, now, lease)
+    except LeaseLost:
+        return
+    if plan.resubmit:
+        _enqueue_resubmit(job.id)
+    elif plan.download:
+        _enqueue_download(job.id)
+
+
+def _save_plan(job: ParseJob, plan: PollPlan, now: datetime, lease: TaskLease) -> None:
     if plan.fail_document:
         parse_job_orm.set_status(
             job.id,
@@ -145,7 +172,7 @@ def apply_plan(job: ParseJob, plan: PollPlan, now: datetime) -> None:
             None,
             plan.error_message,
         )
-        _fail_document(job, plan.error_message or "解析失败", now)
+        _fail_document(job, plan.error_message or "解析失败", now, lease)
         return
     if plan.resubmit:
         parse_job_orm.mark_retry(
@@ -154,7 +181,6 @@ def apply_plan(job: ParseJob, plan: PollPlan, now: datetime) -> None:
             plan.error_message,
             now,
         )
-        _enqueue_resubmit(job.id)
         return
     parse_job_orm.set_status(
         job.id,
@@ -163,8 +189,6 @@ def apply_plan(job: ParseJob, plan: PollPlan, now: datetime) -> None:
         plan.next_poll_at,
         plan.error_message,
     )
-    if plan.download:
-        _enqueue_download(job.id)
 
 
 def resubmit_job(
@@ -177,30 +201,41 @@ def resubmit_job(
     job = parse_job_orm.get(job_id)
     if job is None or job.status != ParseJobStatus.SUBMITTED:
         return
+    try:
+        with _lease(job, parsing_only=True) as lease:
+            _resubmit(job, mineru, reader, now, lease)
+    except LeaseLost:
+        return
+
+
+def _resubmit(job: ParseJob, mineru, reader, now: datetime, lease: TaskLease) -> None:
     filename = Path(job.source_key).name
     if filename in {"", ".", ".."}:
-        apply_plan(job, plan_rejected(job, "分段文件名无效", now), now)
+        apply_plan(job, plan_rejected(job, "分段文件名无效", now), now, lease)
         return
     try:
         submitted = _submit_source(job, filename, mineru, reader)
     except MinerURequestError as exc:
-        apply_plan(job, plan_rejected(job, exc.message, now), now)
+        apply_plan(job, plan_rejected(job, exc.message, now), now, lease)
         return
     except ParserUnavailable as exc:
-        apply_plan(job, plan_unavailable(job, exc.message, now), now)
+        apply_plan(job, plan_unavailable(job, exc.message, now), now, lease)
         return
     except Exception as exc:
-        logger.exception("重新提交分段失败: %s", job_id)
-        apply_plan(job, plan_unavailable(job, str(exc) or "重新提交失败", now), now)
+        logger.exception("重新提交分段失败: %s", job.id)
+        apply_plan(
+            job, plan_unavailable(job, str(exc) or "重新提交失败", now), now, lease
+        )
         return
-    parse_job_orm.record_submission(
-        job.id,
-        job.mineru_job_id,
-        submitted.file_id,
-        submitted.job_id,
-        now + POLL_INTERVAL,
-        now,
-    )
+    with lease.writes():
+        parse_job_orm.record_submission(
+            job.id,
+            job.mineru_job_id,
+            submitted.file_id,
+            submitted.job_id,
+            now + POLL_INTERVAL,
+            now,
+        )
 
 
 def download_job(
@@ -213,48 +248,53 @@ def download_job(
     job = parse_job_orm.get(job_id)
     if job is None or job.status != ParseJobStatus.DOWNLOADING:
         return
-    if not job.result_key:
-        if not _store_zip(job, mineru, reader, now):
-            return
-    merge_ready(job, reader, now)
+    try:
+        with _lease(job, parsing_only=True) as lease:
+            if not job.result_key and not _store_zip(job, mineru, reader, now, lease):
+                return
+        merge_ready(job, reader, now)
+    except LeaseLost:
+        return
 
 
 def merge_ready(job: ParseJob, reader: ObjectReader, now: datetime) -> None:
-    """全部分段都已下载时，由一个任务完成合并。"""
-    jobs = parse_job_orm.list_by_document_version(job.document_id, job.version)
+    """全部分段都已下载时，由原领取批次的一个任务完成合并。"""
+    try:
+        with _lease(job) as lease:
+            _merge_ready(job, reader, now, lease)
+    except LeaseLost:
+        return
+
+
+def _merge_ready(
+    job: ParseJob, reader: ObjectReader, now: datetime, lease: TaskLease
+) -> None:
+    jobs = parse_job_orm.list_by_document_version(
+        job.document_id, job.version, lease.token
+    )
     if not _all_downloaded(jobs):
         return
-    task = task_orm.get(job.task_id)
-    if (
-        task is None
-        or task.status != DocumentTaskStatus.RUNNING
-        or task.version != job.version
-    ):
-        return
-    if not task_orm.begin_merge(job.task_id, now):
-        return
+    with lease.writes():
+        task = task_orm.get(job.task_id)
+        if task is None or task.version != job.version:
+            return
+        if not task_orm.begin_merge(job.task_id, now, lease.token):
+            return
     document = document_orm.get(job.document_id)
     if document is None:
-        _fail_document(job, "文档不存在", now)
+        _fail_document(job, "文档不存在", now, lease)
         return
     if document.parse_version != job.version:
-        fail_version_mismatch(task, now)
+        with lease.writes():
+            fail_version_mismatch(task, now)
         return
-    parts: list[PartZip] = []
-    for item in jobs:
-        if not item.result_key:
-            _fail_document(job, "分段结果缺失", now)
-            return
-        parts.append(
-            PartZip(
-                part_index=item.part_index,
-                page_start=item.page_start,
-                page_end=item.page_end,
-                result_key=item.result_key,
-            )
-        )
+    parts = [
+        PartZip(item.part_index, item.page_start, item.page_end, item.result_key)
+        for item in jobs
+    ]
     try:
-        stored = DocumentParsingService(reader).collect(
+        lease.ensure()
+        stored = DocumentParsingService(reader, attempt_id=lease.token).collect(
             document.id,
             job.version,
             document.file_type,
@@ -262,39 +302,41 @@ def merge_ready(job: ParseJob, reader: ObjectReader, now: datetime) -> None:
             parts,
         )
         now = datetime.now(timezone.utc)
-        document_orm.set_parsed_artifacts(
-            document.id,
-            stored.md_key,
-            stored.json_key,
-            now,
-            expected_version=job.version,
-        )
-        keys = dict(stored.part_results)
-        for item in jobs:
-            parse_job_orm.record_result(
-                item.id,
-                keys.get(item.part_index, ""),
+        with lease.writes():
+            document_orm.set_parsed_artifacts(
+                document.id,
+                stored.md_key,
+                stored.json_key,
                 now,
+                expected_version=job.version,
             )
-        task_orm.update_progress(
-            job.task_id,
-            DocumentTaskStage.CHUNKING,
-            85,
-            "文档切分中",
-            datetime.now(timezone.utc),
-        )
-        result = DocumentChunkingService().run(
-            document, job.version, stored.md_key, stored.json_key
-        )
-        if result is False:
-            fail_version_mismatch(task, datetime.now(timezone.utc))
-            return
-        enqueue_indexing(job.task_id)
+            keys = dict(stored.part_results)
+            for item in jobs:
+                parse_job_orm.record_result(item.id, keys.get(item.part_index, ""), now)
+            task_orm.update_progress(
+                job.task_id,
+                DocumentTaskStage.CHUNKING,
+                85,
+                "文档切分中",
+                now,
+                lease.token,
+            )
+        with lease.writes():
+            result = DocumentChunkingService().run(
+                document, job.version, stored.md_key, stored.json_key
+            )
+            if result is False:
+                fail_version_mismatch(task, datetime.now(timezone.utc))
+                return
+        lease.ensure()
+        enqueue_indexing(job.task_id, lease.token, lease)
+    except LeaseLost:
+        raise
     except Exception as exc:
-        # 合并、切分和索引是同一个任务边界，任一步失败都不能完成任务。
+        # 合并/切分的错误也必须由原领取者在同一事务里写入任务和文档。
         message = str(exc) or "合并失败"
         logger.exception("合并分段失败: %s", job.task_id)
-        _fail_document(job, message, datetime.now(timezone.utc))
+        _fail_document(job, message, datetime.now(timezone.utc), lease)
         raise
 
 
@@ -338,46 +380,38 @@ def _submit_source(job, filename, mineru, reader):
         return mineru.submit(path, filename, digest.hexdigest())
 
 
-def _store_zip(job, mineru, reader, now: datetime) -> bool:
+def _store_zip(job, mineru, reader, now: datetime, lease: TaskLease) -> bool:
     """下载并保存压缩包。失败时改下次轮询时间，返回是否可以继续合并。"""
     if not job.mineru_job_id:
-        apply_plan(job, plan_lost(job, now), now)
+        apply_plan(job, plan_lost(job, now), now, lease)
         return False
     try:
         with tempfile.TemporaryDirectory() as directory:
             path = mineru.download(job.mineru_job_id, Path(directory))
             key = (
                 f"documents/{job.document_id}/parse/{job.version}"
-                f"/parts/{job.part_index}/result.zip"
+                f"/attempts/{lease.token}/parts/{job.part_index}/{uuid4().hex}.zip"
             )
+            lease.ensure()
             reader.upload_file(key, path, "application/zip")
+    except LeaseLost:
+        raise
     except MinerUJobLost:
-        apply_plan(job, plan_lost(job, now), now)
+        apply_plan(job, plan_lost(job, now), now, lease)
         return False
     except ParserUnavailable as exc:
-        parse_job_orm.set_status(
-            job.id,
-            ParseJobStatus.DOWNLOADING,
-            now,
-            now + _backoff(job.attempts),
-            exc.message,
-        )
+        _defer_download(job, exc.message, now, lease)
         return False
     except MinerURequestError as exc:
-        apply_plan(job, plan_rejected(job, exc.message, now), now)
+        apply_plan(job, plan_rejected(job, exc.message, now), now, lease)
         return False
     except Exception as exc:
         # 下载或对象存储故障走现有延迟重试。
         logger.exception("下载或保存分段失败: %s", job.id)
-        parse_job_orm.set_status(
-            job.id,
-            ParseJobStatus.DOWNLOADING,
-            now,
-            now + _backoff(job.attempts),
-            str(exc) or "保存分段失败",
-        )
+        _defer_download(job, str(exc) or "保存分段失败", now, lease)
         return False
-    parse_job_orm.save_zip(job.id, key, now)
+    with lease.writes():
+        parse_job_orm.save_zip(job.id, key, now)
     return True
 
 
@@ -390,11 +424,36 @@ def _all_downloaded(jobs: list[ParseJob]) -> bool:
     )
 
 
-def _fail_document(job: ParseJob, message: str, now: datetime) -> None:
-    task_orm.fail(job.task_id, message, now)
-    document_orm.mark_failed(
-        job.document_id, message, now, expected_version=job.version
-    )
+def _fail_document(
+    job: ParseJob, message: str, now: datetime, lease: TaskLease
+) -> None:
+    with lease.writes():
+        if task_orm.fail(job.task_id, message, now, job.lease_token):
+            document_orm.mark_failed(
+                job.document_id, message, now, expected_version=job.version
+            )
+
+
+def _defer_download(
+    job: ParseJob, message: str, now: datetime, lease: TaskLease
+) -> None:
+    with lease.writes():
+        parse_job_orm.set_status(
+            job.id,
+            ParseJobStatus.DOWNLOADING,
+            now,
+            now + _backoff(job.attempts),
+            message,
+        )
+
+
+def _lease(job: ParseJob, parsing_only: bool = False) -> TaskLease:
+    if not job.lease_token:
+        # 升级前没有可靠执行标记的结果不能绑定到当前 worker。
+        raise LeaseLost(job.task_id)
+    if parsing_only:
+        return TaskLease(job.task_id, job.lease_token, (DocumentTaskStage.PARSING,))
+    return TaskLease(job.task_id, job.lease_token)
 
 
 def _enqueue_download(job_id: str) -> None:

@@ -38,3 +38,4 @@ class ParseJob:
     result_key: str | None
     created_at: datetime
     updated_at: datetime
+    lease_token: str | None = None

@@ -13,6 +13,7 @@ from uuid import uuid4
 from model.document import orm as document_orm
 from model.document.model import Document
 from model.document_task import orm as task_orm
+from model.document_task.lease import LeaseLost
 from model.document_task.model import DocumentTask
 from model.document_task.model import DocumentTaskStage
 from model.parse_job import orm as parse_job_orm
@@ -26,6 +27,7 @@ from services.parsing.service import DocumentParsingService
 from services.parsing.service import SubmittedParse
 from services.parsing.service import StoredParseResult
 from services.structured.service import StructuredSchemaService
+from services.task_runtime.lease import TaskLease
 from task.app import celery_app
 
 logger = logging.getLogger("rag.task")
@@ -44,76 +46,108 @@ def parse_document(task_id: str) -> None:
     if task is None:
         return
 
-    document = _load_document(task)
+    if not task.lease_token:
+        logger.error("任务缺少领取标记: %s", task_id)
+        return
+    if task.stage == DocumentTaskStage.INDEXING:
+        document = document_orm.get(task.document_id)
+        if document is None:
+            task_orm.fail(task.id, "文档不存在", _now(), task.lease_token)
+        elif document.parse_version != task.version:
+            fail_version_mismatch(task, _now())
+        else:
+            enqueue_indexing(task_id, task.lease_token)
+        return
+    try:
+        with TaskLease(task.id, task.lease_token) as lease:
+            _run(task, lease)
+    except LeaseLost:
+        logger.info("解析任务已失去执行权，停止写入: %s", task_id)
+
+
+def _run(task: DocumentTask, lease: TaskLease) -> None:
+    document = _load_document(task, lease)
     if document is None:
         return
-
-    if document.parse_version != task.version:
-        fail_version_mismatch(task, _now())
-        return
-
-    now = _now()
-    chunking = task.stage in {DocumentTaskStage.CHUNKING, DocumentTaskStage.INDEXING}
+    with lease.writes():
+        if document.parse_version != task.version:
+            fail_version_mismatch(task, _now())
+            return
+    chunking = task.stage == DocumentTaskStage.CHUNKING
     try:
-        if task.stage == DocumentTaskStage.INDEXING:
-            enqueue_indexing(task_id)
+        stored = _parse(task, document, lease, chunking)
+        if stored is None:
             return
-        if chunking and document.parsed_md_key and document.parsed_json_key:
-            stored = StoredParseResult(document.parsed_md_key, document.parsed_json_key)
-        else:
-            if not document_orm.begin_parse(document.id, task.version, now):
-                fail_version_mismatch(task, _now())
-                return
-            service = DocumentParsingService()
-            outcome = service.parse(document, task.version)
-            if isinstance(outcome, SubmittedParse):
-                _record_parts(task, outcome, now)
-                task_orm.update_progress(
-                    task_id,
-                    DocumentTaskStage.PARSING,
-                    5,
-                    "分段已提交",
-                    now,
-                )
-                return
-            stored = service.upload(outcome.parsed)
-            service.persist(outcome.parsed, stored)
         chunking = True
-        if document.file_type in {"csv", "xlsx"}:
-            task_orm.update_progress(
-                task_id, DocumentTaskStage.CHUNKING, 85, "表结构保存中", _now()
-            )
-            result = StructuredSchemaService().run(
-                document, task.version, stored.md_key, stored.json_key
-            )
-            if result is False:
-                fail_version_mismatch(task, _now())
+        _chunk(task, document, stored, lease)
+    except LeaseLost:
+        raise
+    except Exception as exc:
+        # 任务边界统一处理业务异常；失去执行权时不再修改任务或文档。
+        with lease.writes():
+            if isinstance(exc, FeatureNotReady) and not chunking:
+                task_orm.complete(task.id, str(exc), _now(), lease.token)
                 return
-            task_orm.complete(task_id, "结构已保存，待数据入库", _now())
-            return
+            message = str(exc) or "解析失败"
+            logger.exception("解析任务失败: %s", task.id)
+            now = _now()
+            if task_orm.fail(task.id, message, now, lease.token):
+                document_orm.mark_failed(
+                    document.id, message, now, expected_version=task.version
+                )
+        raise
+
+
+def _parse(
+    task: DocumentTask, document: Document, lease: TaskLease, chunking: bool
+) -> StoredParseResult | None:
+    if chunking and document.parsed_md_key and document.parsed_json_key:
+        return StoredParseResult(document.parsed_md_key, document.parsed_json_key)
+    with lease.writes():
+        if not document_orm.begin_parse(document.id, task.version, _now()):
+            fail_version_mismatch(task, _now())
+            return None
+    service = DocumentParsingService(attempt_id=lease.token)
+    lease.ensure()
+    outcome = service.parse(document, task.version)
+    if isinstance(outcome, SubmittedParse):
+        with lease.writes():
+            _record_parts(task, outcome, _now())
+            task_orm.update_progress(
+                task.id, DocumentTaskStage.PARSING, 5, "分段已提交", _now(), lease.token
+            )
+        return None
+    lease.ensure()
+    stored = service.upload(outcome.parsed)
+    with lease.writes():
+        service.persist(outcome.parsed, stored)
+    return stored
+
+
+def _chunk(
+    task: DocumentTask, document: Document, stored: StoredParseResult, lease: TaskLease
+) -> None:
+    structured = document.file_type in {"csv", "xlsx"}
+    with lease.writes():
         task_orm.update_progress(
-            task_id, DocumentTaskStage.CHUNKING, 85, "文档切分中", _now()
+            task.id,
+            DocumentTaskStage.CHUNKING,
+            85,
+            "表结构保存中" if structured else "文档切分中",
+            _now(),
+            lease.token,
         )
-        result = DocumentChunkingService().run(
-            document, task.version, stored.md_key, stored.json_key
-        )
+    with lease.writes():
+        service = StructuredSchemaService() if structured else DocumentChunkingService()
+        result = service.run(document, task.version, stored.md_key, stored.json_key)
         if result is False:
             fail_version_mismatch(task, _now())
             return
-        enqueue_indexing(task_id)
-    except Exception as exc:
-        # 任务边界统一记录解析、切分或索引失败，再交由 worker 处理异常。
-        if isinstance(exc, FeatureNotReady) and not chunking:
-            task_orm.complete(task_id, str(exc), _now())
+        if structured:
+            task_orm.complete(task.id, "结构已保存，待数据入库", _now(), lease.token)
             return
-        message = str(exc) or "解析失败"
-        logger.exception("解析任务失败: %s", task_id)
-        now = _now()
-        task_orm.fail(task_id, message, now)
-        document_orm.mark_failed(
-            document.id, message, now, expected_version=task.version
-        )
-        raise
+    lease.ensure()
+    enqueue_indexing(task.id, lease.token, lease)
 
 
 def _claim_task(task_id: str) -> DocumentTask | None:
@@ -121,11 +155,12 @@ def _claim_task(task_id: str) -> DocumentTask | None:
     return task_orm.claim(task_id, _now())
 
 
-def _load_document(task: DocumentTask) -> Document | None:
+def _load_document(task: DocumentTask, lease: TaskLease) -> Document | None:
     """读取文档；文档不存在时任务直接失败。"""
     document = document_orm.get(task.document_id)
     if document is None:
-        task_orm.fail(task.id, "文档不存在", _now())
+        with lease.writes():
+            task_orm.fail(task.id, "文档不存在", _now(), lease.token)
     return document
 
 
@@ -142,6 +177,7 @@ def _record_parts(
                 document_id=task.document_id,
                 task_id=task.id,
                 version=task.version,
+                lease_token=task.lease_token,
                 part_index=part.part_index,
                 page_start=part.page_start,
                 page_end=part.page_end,

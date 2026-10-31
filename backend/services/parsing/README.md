@@ -78,7 +78,9 @@ adapters/
 
 Markdown 原样保留文本。TXT 把标题作为一级标题，正文按空行保留段落。CSV 和 XLSX 按表头转成 JSON 对象数组。PDF 先下载到本地，超过 180 页或 180MiB 就按页拆开，再逐段交给 MinerU。DOC 和 DOCX 同样先下载，不超过 180MiB 就整份提交，超过则失败。PDF 分段和 Word 的 Markdown 都按起始页合成一份，并在每页前写入 `<!-- page: N -->`。提交后不等待解析结束。
 
-Worker 已接入解析服务。本地解析结果会写入 `documents/{文档}/parsed/{版本}/merged.md`。MinerU 分段提交后由维护任务每 10 秒轮询。状态为完成时，解析 Worker 下载 `result.zip`。同一版本的分段都下载后合并写入同一位置，并带上图片。MinerU 失败或任务丢失时，最多再提交两次。
+Worker 已接入解析服务。本地解析和 MinerU 合并产物会写入 `documents/{文档}/parsed/{版本}/attempts/{lease_token}/`，文档记录保存实际产物 key。MinerU 分段保存提交时的 token，由维护任务每 10 秒轮询；下载的 ZIP 与分段清单也按 token 隔离，同一批次的分段齐备后才合并。MinerU 失败或任务丢失时，最多再提交两次。
+
+解析、合并和切分共用 120 秒续租与事务写入门禁，失去执行权后停止发布结果。已有数据库需要先排空在途解析并执行 `0003_parse_job_lease.sql`；详见 [租约门禁与升级约定](../../../docs/adr/0001-parse-lease-fencing.md)。
 
 ## 官方服务验证
 

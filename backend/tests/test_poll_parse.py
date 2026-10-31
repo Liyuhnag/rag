@@ -7,6 +7,8 @@ from datetime import timezone
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("parse_lease")
+
 from model.document.model import Document
 from model.document_task.model import DocumentTask
 from model.document_task.model import DocumentTaskStage
@@ -44,6 +46,7 @@ def _job(**kwargs: object) -> ParseJob:
         "id": "job-1",
         "document_id": "doc-1",
         "task_id": "task-1",
+        "lease_token": "merge-lease",
         "version": 2,
         "part_index": 1,
         "page_start": 1,
@@ -224,7 +227,7 @@ def test_poll_rejected_fails_document(monkeypatch):
     monkeypatch.setattr(
         poll.task_orm,
         "fail",
-        lambda task_id, message, moment: failed.append(message),
+        lambda task_id, message, moment, token: failed.append(message),
     )
     monkeypatch.setattr(poll.document_orm, "mark_failed", lambda *args, **kwargs: None)
     poll_job(_job(), _Mineru(exc=MinerURequestError("拒绝")), now)
@@ -304,15 +307,17 @@ def test_download_waits_when_a_sibling_is_missing(monkeypatch):
     monkeypatch.setattr(
         poll.parse_job_orm,
         "list_by_document_version",
-        lambda document_id, version: [job, sibling],
+        lambda document_id, version, token: [job, sibling],
     )
     monkeypatch.setattr(
         poll.task_orm,
         "begin_merge",
-        lambda task_id, moment: merged.append(task_id) or True,
+        lambda task_id, moment, token: merged.append(task_id) or True,
     )
     download_job(job.id, _Mineru(body=b"PK"), reader, now)
-    assert saved == ["documents/doc-1/parse/2/parts/1/result.zip"]
+    assert len(saved) == 1
+    assert saved[0].startswith("documents/doc-1/parse/2/attempts/merge-lease/parts/1/")
+    assert saved[0].endswith(".zip")
     assert reader.written[0][1] == "application/zip"
     assert merged == []
 
@@ -346,7 +351,7 @@ def test_download_merges_when_every_part_has_a_zip(monkeypatch, error, chunk_res
     collected = []
 
     class _Service:
-        def __init__(self, reader):
+        def __init__(self, reader, attempt_id=None):
             self.reader = reader
 
         def collect(self, document_id, version, file_type, source_key, parts):
@@ -365,9 +370,9 @@ def test_download_merges_when_every_part_has_a_zip(monkeypatch, error, chunk_res
     monkeypatch.setattr(
         poll.parse_job_orm,
         "list_by_document_version",
-        lambda document_id, version: [first, second],
+        lambda document_id, version, token: [first, second],
     )
-    monkeypatch.setattr(poll.task_orm, "begin_merge", lambda task_id, moment: True)
+    monkeypatch.setattr(poll.task_orm, "begin_merge", lambda task_id, moment, token: True)
     monkeypatch.setattr(poll.task_orm, "get", lambda task_id: _task())
     monkeypatch.setattr(poll.document_orm, "get", lambda document_id: _document())
     monkeypatch.setattr(
@@ -383,7 +388,7 @@ def test_download_merges_when_every_part_has_a_zip(monkeypatch, error, chunk_res
     monkeypatch.setattr(
         poll.task_orm,
         "complete",
-        lambda task_id, step, moment: completed.append(step),
+        lambda task_id, step, moment, token: completed.append(step),
     )
 
     class _Chunking:
@@ -396,7 +401,7 @@ def test_download_merges_when_every_part_has_a_zip(monkeypatch, error, chunk_res
     monkeypatch.setattr(
         poll.task_orm,
         "fail",
-        lambda task_id, message, moment, token=None: completed.append(("fail", message)),
+        lambda task_id, message, moment, token=None: completed.append(("fail", message)) or True,
     )
     monkeypatch.setattr(
         poll.document_orm,
@@ -415,7 +420,7 @@ def test_download_merges_when_every_part_has_a_zip(monkeypatch, error, chunk_res
     monkeypatch.setattr(
         poll.task_orm,
         "update_progress",
-        lambda task_id, stage, percent, step, moment: recorded.append((stage, percent)),
+        lambda task_id, stage, percent, step, moment, token: recorded.append((stage, percent)),
     )
     monkeypatch.setattr(poll, "DocumentParsingService", _Service)
     if error is None:
@@ -454,9 +459,9 @@ def test_second_merge_claim_does_not_collect(monkeypatch):
     monkeypatch.setattr(
         poll.parse_job_orm,
         "list_by_document_version",
-        lambda document_id, version: [job],
+        lambda document_id, version, token: [job],
     )
-    monkeypatch.setattr(poll.task_orm, "begin_merge", lambda task_id, moment: False)
+    monkeypatch.setattr(poll.task_orm, "begin_merge", lambda task_id, moment, token: False)
     monkeypatch.setattr(poll.task_orm, "get", lambda task_id: _task())
     monkeypatch.setattr(
         poll,
@@ -483,7 +488,7 @@ def test_stale_download_fails_task_without_changing_document(monkeypatch, versio
     monkeypatch.setattr(
         poll.parse_job_orm,
         "list_by_document_version",
-        lambda document_id, version: [job],
+        lambda document_id, version, token: [job],
     )
     monkeypatch.setattr(poll.task_orm, "begin_merge", lambda *args: True)
     monkeypatch.setattr(poll.task_orm, "get", lambda *args: task)
@@ -518,7 +523,7 @@ def test_apply_failure_marks_job_and_document(monkeypatch):
         "set_status",
         lambda job_id, status, moment, next_poll_at, error: marked.append(status),
     )
-    monkeypatch.setattr(poll.task_orm, "fail", lambda *args: marked.append("task"))
+    monkeypatch.setattr(poll.task_orm, "fail", lambda *args: marked.append("task") or True)
     monkeypatch.setattr(
         poll.document_orm,
         "mark_failed",
@@ -528,3 +533,67 @@ def test_apply_failure_marks_job_and_document(monkeypatch):
         _job(attempts=3), plan_status(_job(attempts=3), "failed", "坏了", now), now
     )
     assert marked == [ParseJobStatus.FAILED, "task", "document"]
+
+
+@pytest.mark.parametrize("action", ["poll", "download", "resubmit", "merge"])
+def test_old_mineru_claim_is_ignored_even_when_task_has_a_new_token(monkeypatch, action):
+    job = _job(lease_token="original-claim")
+    monkeypatch.setattr(poll.parse_job_orm, "get", lambda *args: job)
+    monkeypatch.setattr(poll.task_orm, "get", lambda *args: _task())
+    tokens = []
+
+    def renew(task_id, token, now, stages):
+        tokens.append(token)
+        return token == "merge-lease"
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("旧批次不能访问 MinerU 或修改任务和文档")
+
+    monkeypatch.setattr(poll.task_orm, "renew", renew)
+    monkeypatch.setattr(poll.task_orm, "fail", unexpected)
+    monkeypatch.setattr(poll.task_orm, "begin_merge", unexpected)
+    monkeypatch.setattr(poll.parse_job_orm, "set_status", unexpected)
+    monkeypatch.setattr(poll.document_orm, "mark_failed", unexpected)
+    mineru = _Mineru()
+    mineru.status = unexpected
+    mineru.download = unexpected
+    mineru.submit = unexpected
+    if action == "poll":
+        poll_job(job, mineru, _now())
+    elif action == "download":
+        job.status = ParseJobStatus.DOWNLOADING
+        download_job(job.id, mineru, _Reader(), _now())
+    elif action == "resubmit":
+        resubmit_job(job.id, mineru, _Reader(), _now())
+    else:
+        merge_ready(job, _Reader(), _now())
+    assert tokens == ["original-claim"]
+
+
+def test_lease_replaced_during_mineru_status_cannot_apply_result(monkeypatch):
+    from contextlib import contextmanager
+
+    from model.document_task.lease import LeaseLost
+
+    owner = ["merge-lease"]
+    mineru = _Mineru()
+
+    def status(job_id):
+        owner[0] = "new-claim"
+        return MinerUStatus(state="failed", error="late error")
+
+    @contextmanager
+    def guard(task_id, token, stages):
+        if token != owner[0]:
+            raise LeaseLost(task_id)
+        yield
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("远程查询返回时已失效，不能写分段、任务或文档")
+
+    mineru.status = status
+    monkeypatch.setattr(poll.task_orm, "lease_guard", guard)
+    monkeypatch.setattr(poll.parse_job_orm, "set_status", unexpected)
+    monkeypatch.setattr(poll.task_orm, "fail", unexpected)
+    monkeypatch.setattr(poll.document_orm, "mark_failed", unexpected)
+    poll_job(_job(attempts=3), mineru, _now())

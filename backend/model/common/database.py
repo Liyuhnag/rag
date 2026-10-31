@@ -2,6 +2,7 @@
 """数据库连接。各模型的 ORM 通过这里执行 SQL。"""
 
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -26,6 +27,20 @@ _db = {
     "password": "",
     "database": "",
 }
+
+_bound_connection: ContextVar[pymysql.Connection | None] = ContextVar(
+    "database_connection", default=None
+)
+
+
+@contextmanager
+def bind_connection(connection: pymysql.Connection) -> Iterator[None]:
+    """让一次受租约保护的写入复用同一事务；后台续租线程不共享连接。"""
+    token = _bound_connection.set(connection)
+    try:
+        yield
+    finally:
+        _bound_connection.reset(token)
 
 
 def configure(
@@ -77,6 +92,11 @@ def execute(
 ) -> list[dict[str, object]]:
     """执行一条 SQL。查询返回行，写入语句返回空列表。"""
     try:
+        bound = _bound_connection.get()
+        if bound is not None:
+            with bound.cursor() as cursor:
+                cursor.execute(sql, params or {})
+                return [] if cursor.description is None else list(cursor.fetchall())
         with _connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(sql, params or {})
@@ -97,6 +117,11 @@ def execute_count(
 ) -> int:
     """执行写入语句并返回受影响行数。"""
     try:
+        bound = _bound_connection.get()
+        if bound is not None:
+            with bound.cursor() as cursor:
+                cursor.execute(sql, params or {})
+                return int(cursor.rowcount)
         with _connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(sql, params or {})
@@ -112,6 +137,10 @@ def execute_count(
 @contextmanager
 def transaction() -> Iterator[pymysql.Connection]:
     """在一个关闭自动提交的连接上执行多条语句。"""
+    bound = _bound_connection.get()
+    if bound is not None:
+        yield bound
+        return
     try:
         connection = pymysql.connect(
             host=str(_db["host"]),

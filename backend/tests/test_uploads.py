@@ -129,7 +129,7 @@ def test_upload_complete_and_query_task(client):
     assert doc.parse_version == 1
 
 
-def test_uploaded_document_first_claim_starts_processing(client, monkeypatch):
+def test_uploaded_document_first_claim_starts_processing(client, monkeypatch, parse_lease):
     worker = importlib.import_module("task.parse_document")
     content = b"demo"
     created = _init(client, content).json()
