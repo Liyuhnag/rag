@@ -46,7 +46,16 @@
   stage、updated_at 和 token，避免覆盖扫描后发生的续租、交接或重新领取。
 - 恢复只将任务置为 PENDING、清除 token；保留阶段、进度、产物与检查点，不修改文档。
   数据库更新提交后按原阶段投递，投递失败由 PENDING 补投兜底。
-- retry 准入矩阵见后续 [统一重试约定](0002-task-retry-admission.md)；维护调度周期调整仍属于后续增量。
+- retry 准入矩阵见后续 [统一重试约定](0002-task-retry-admission.md)。
+
+## 后续变更：#23 的维护调度
+
+- Celery Beat 从公共策略读取 `REDISPATCH_SECONDS=60`，每 60 秒执行恢复与补投。
+- PENDING 补投从公共策略读取 `PENDING_MIN_AGE_SECONDS=120`，只补投更新时间早于该阈值的任务。
+  每轮先恢复失联 RUNNING，再查询旧 PENDING；刚恢复任务的更新时间为本轮 now，不会在本轮重复补投。
+- MinerU 轮询仍独立调度，Beat 从公共策略读取 `MINERU_POLL_SECONDS=10`。
+- 每批上限仍为 100。正常调度且无积压时，PENDING 任务等待约 2–3 分钟后可补投。
+- 调度参数在进程启动时加载，部署后需要重启 Celery Beat 和 maintenance worker 才会使用新参数。
 
 ## 验证
 
