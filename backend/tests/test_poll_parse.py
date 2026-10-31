@@ -208,18 +208,20 @@ def test_poll_completed_enqueues_download(monkeypatch):
 
 def test_poll_lost_job_enqueues_resubmit(monkeypatch):
     now = _now()
-    retries = []
     downloads = []
+    statuses = []
     monkeypatch.setattr(
         poll.parse_job_orm,
-        "mark_retry",
-        lambda job_id, next_poll_at, error, moment: retries.append(error),
+        "set_status",
+        lambda job_id, status, moment, next_poll_at, error: (
+            statuses.append((status, error))
+        ),
     )
     monkeypatch.setattr(
         poll, "_enqueue_resubmit", lambda job_id, token: downloads.append((job_id, token))
     )
-    poll_job(_job(attempts=1), _Mineru(exc=MinerUJobLost("丢失")), now)
-    assert retries == ["MinerU 任务不存在"]
+    poll_job(_job(attempts=1, mineru_job_id=None), _Mineru(exc=MinerUJobLost("丢失")), now)
+    assert statuses == [(ParseJobStatus.RESUBMITTING, "等待重新提交")]
     assert downloads == [("job-1", "merge-lease")]
 
 
@@ -250,7 +252,7 @@ def test_downloading_job_is_enqueued_again(monkeypatch):
 
 def test_resubmit_records_new_mineru_ids(monkeypatch):
     now = _now()
-    job = _job()
+    job = _job(status=ParseJobStatus.RESUBMITTING)
     recorded = {}
     reader = _Reader({job.source_key: b"pdf-bytes"})
     monkeypatch.setattr(poll.parse_job_orm, "get", lambda job_id: job)
@@ -268,7 +270,7 @@ def test_resubmit_records_new_mineru_ids(monkeypatch):
 
 def test_resubmit_transport_error_does_not_fail(monkeypatch):
     now = _now()
-    job = _job()
+    job = _job(status=ParseJobStatus.RESUBMITTING)
     statuses = []
     monkeypatch.setattr(poll.parse_job_orm, "get", lambda job_id: job)
     monkeypatch.setattr(
@@ -286,7 +288,7 @@ def test_resubmit_transport_error_does_not_fail(monkeypatch):
 
     mineru.submit = _submit
     resubmit_job(job.id, mineru, reader, now)
-    assert statuses == [(ParseJobStatus.SUBMITTED, "MinerU 暂不可用")]
+    assert statuses == [(ParseJobStatus.RESUBMITTING, "MinerU 暂不可用")]
 
 
 def test_download_waits_when_a_sibling_is_missing(monkeypatch):
@@ -386,7 +388,7 @@ def test_old_queued_message_cannot_borrow_adopted_jobs_token(monkeypatch, action
     if action == "download":
         download_job(job.id, _Mineru(), _Reader(), _now(), lease_token="old-owner")
     else:
-        job.status = ParseJobStatus.SUBMITTED
+        job.status = ParseJobStatus.RESUBMITTING
         resubmit_job(job.id, _Mineru(), _Reader(), _now(), lease_token="old-owner")
 
 
@@ -467,6 +469,7 @@ def test_old_mineru_claim_is_ignored_even_when_task_has_a_new_token(monkeypatch,
         job.status = ParseJobStatus.DOWNLOADING
         download_job(job.id, mineru, _Reader(), _now())
     elif action == "resubmit":
+        job.status = ParseJobStatus.RESUBMITTING
         resubmit_job(job.id, mineru, _Reader(), _now())
     else:
         merge_ready(job, _Reader(), _now())

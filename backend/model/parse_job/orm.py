@@ -178,7 +178,7 @@ def claim_due(now: datetime, limit: int) -> list[ParseJob]:
                 ) AND next_poll_at IS NOT NULL
                   AND next_poll_at <= %(now)s
                   AND (
-                    status IN ('SUBMITTED', 'RUNNING')
+                    status IN ('SUBMITTED', 'RUNNING', 'RESUBMITTING')
                     OR (status = 'DOWNLOADING' AND result_key IS NULL)
                   )
                 ORDER BY next_poll_at
@@ -201,7 +201,7 @@ def claim_due(now: datetime, limit: int) -> list[ParseJob]:
                 f"""
                 UPDATE parse_jobs
                 SET next_poll_at = CASE
-                        WHEN status = 'DOWNLOADING' THEN %(download_lease)s
+                        WHEN status IN ('DOWNLOADING', 'RESUBMITTING') THEN %(download_lease)s
                         ELSE %(poll_lease)s
                     END,
                     updated_at = %(now)s
@@ -230,7 +230,7 @@ def mark_retry(
         """,
         {
             "id": job_id,
-            "status": ParseJobStatus.SUBMITTED.value,
+            "status": ParseJobStatus.RESUBMITTING.value,
             "next_poll_at": as_utc(next_poll_at),
             "error_message": error_message,
             "now": as_utc(now),

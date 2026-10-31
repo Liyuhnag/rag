@@ -75,10 +75,26 @@ def poll_job(job: ParseJob, mineru: MinerUClient, now: datetime) -> None:
 def _poll_job(
     job: ParseJob, mineru: MinerUClient, now: datetime, lease: TaskLease
 ) -> None:
+    # 1. 重提租约到期后才会被 claim_due 领取到这里，说明上一条消息丢失或失败，补投一次
+    if job.status == ParseJobStatus.RESUBMITTING:
+        _enqueue_resubmit(job.id, job.lease_token)
+        return
+
+    # 2. 在下载队列中，投递下载消息
     if job.status == ParseJobStatus.DOWNLOADING:
         _enqueue_download(job.id, job.lease_token)
         return
+
+    # 3. 发现需要重提，先改状态为 RESUBMITTING，再投递
     if not job.mineru_job_id:
+        with lease.writes():
+            parse_job_orm.set_status(
+                job.id,
+                ParseJobStatus.RESUBMITTING,
+                now,
+                now + RESUBMIT_LEASE,
+                "等待重新提交",
+            )
         _enqueue_resubmit(job.id, job.lease_token)
         return
     try:
@@ -199,7 +215,7 @@ def resubmit_job(
 ) -> None:
     """用分段原文件再向 MinerU 提交一次。"""
     job = parse_job_orm.get(job_id)
-    if job is None or job.status != ParseJobStatus.SUBMITTED:
+    if job is None or job.status != ParseJobStatus.RESUBMITTING:
         return
     if lease_token is not None and job.lease_token != lease_token:
         return
