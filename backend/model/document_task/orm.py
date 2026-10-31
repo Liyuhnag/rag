@@ -2,7 +2,9 @@
 """document_tasks 表的 SQL。"""
 
 import json
+from collections.abc import Callable
 from collections.abc import Iterator
+from collections.abc import Mapping
 from collections.abc import Sequence
 from contextlib import contextmanager
 from datetime import datetime
@@ -76,89 +78,122 @@ def find_pending(
     return [_from_row(row) for row in rows]
 
 
-def recover_chunking(
-    older_than: datetime,
+def recover_stale(
+    cutoffs: Mapping[DocumentTaskStage, datetime],
     now: datetime,
     limit: int,
 ) -> list[DocumentTask]:
-    """条件重置失联的切分/索引任务，返回本次成功恢复的任务用于补投。"""
+    """按阶段阈值恢复失联任务；扫描后续租、交接或换 token 则跳过。"""
+    if not cutoffs or limit <= 0:
+        return []
+    conditions = []
+    params: dict[str, object] = {"limit": limit}
+    for i, (stage, cutoff) in enumerate(cutoffs.items()):
+        conditions.append(f"(stage = %(stage_{i})s AND updated_at < %(cutoff_{i})s)")
+        params[f"stage_{i}"] = stage.value
+        params[f"cutoff_{i}"] = as_utc(cutoff)
+    predicate = " OR ".join(conditions)
     rows = execute(
-        """
+        f"""
         SELECT * FROM document_tasks
-        WHERE status = 'RUNNING' AND stage IN ('CHUNKING', 'INDEXING')
-          AND updated_at < %(older_than)s
-        ORDER BY updated_at ASC
+        WHERE status = 'RUNNING' AND ({predicate})
+        ORDER BY updated_at ASC, id ASC
         LIMIT %(limit)s
         """,
-        {"older_than": as_utc(older_than), "limit": limit},
+        params,
     )
     recovered = []
     for row in rows:
+        task = _from_row(row)
         count = execute_count(
             """
             UPDATE document_tasks
-            SET status = 'PENDING', updated_at = %(now)s
+            SET status = 'PENDING', updated_at = %(now)s,
+                result_json = JSON_REMOVE(COALESCE(result_json, JSON_OBJECT()), '$.lease_token')
             WHERE id = %(id)s AND status = 'RUNNING'
-              AND stage IN ('CHUNKING', 'INDEXING') AND updated_at < %(older_than)s
+              AND stage = %(stage)s AND updated_at = %(updated_at)s
+              AND updated_at < %(cutoff)s
+              AND JSON_UNQUOTE(JSON_EXTRACT(result_json, '$.lease_token')) <=> %(lease_token)s
             """,
-            {"id": row["id"], "now": as_utc(now), "older_than": as_utc(older_than)},
+            {
+                "id": task.id, "stage": task.stage.value,
+                "updated_at": row["updated_at"], "cutoff": as_utc(cutoffs[task.stage]),
+                "lease_token": task.lease_token, "now": as_utc(now),
+            },
         )
         if count == 1:
-            task = _from_row(row)
             task.status = DocumentTaskStatus.PENDING
+            task.lease_token = None
             recovered.append(task)
     return recovered
 
 
-def claim(task_id: str, now: datetime) -> DocumentTask | None:
-    """条件抢占 PENDING → RUNNING，并换成新的领取标记。"""
+def claim(
+    task_id: str,
+    now: datetime,
+    stages: Sequence[DocumentTaskStage] | None = None,
+) -> DocumentTask | None:
+    """只领取指定入口的 PENDING 阶段；已持久化的恢复起点不改写。"""
+    stages = tuple(stages) if stages is not None else tuple(
+        stage for stage in DocumentTaskStage if stage != DocumentTaskStage.DONE
+    )
+    if not stages:
+        return None
     token = uuid4().hex
+    holders = ", ".join(f"%(stage_{i})s" for i in range(len(stages)))
+    params = {f"stage_{i}": stage for i, stage in enumerate(stages)}
+    params.update(id=task_id, lease_token=token, now=as_utc(now))
     count = execute_count(
         """
         UPDATE document_tasks
-        SET status = %(status)s,
-            stage = CASE WHEN stage IN ('CHUNKING', 'INDEXING') THEN stage ELSE %(stage)s END,
-            progress = CASE WHEN stage = 'INDEXING' THEN progress ELSE 0 END,
-            step = CASE WHEN stage = 'INDEXING' THEN step ELSE '解析中' END,
+        SET status = 'RUNNING',
+            stage = CASE WHEN stage = 'PENDING' THEN 'PARSING' ELSE stage END,
             result_json = JSON_SET(
-                COALESCE(result_json, JSON_OBJECT()),
-                '$.lease_token', %(lease_token)s
+                COALESCE(result_json, JSON_OBJECT()), '$.lease_token', %(lease_token)s
             ),
             updated_at = %(now)s
         WHERE id = %(id)s AND status = 'PENDING'
-        """,
-        {
-            "id": task_id,
-            "status": DocumentTaskStatus.RUNNING.value,
-            "stage": DocumentTaskStage.PARSING.value,
-            "lease_token": token,
-            "now": as_utc(now),
-        },
+        """ + f" AND stage IN ({holders})",
+        params,
     )
     if count != 1:
         return None
     task = get(task_id)
-    # 更新和回读之间可能已被恢复并重新领取，不能把新 token 当作自己的。
+    # 更新和回读之间可能已被恢复并重新领取，不能采用另一个领取者的 token。
     return task if task is not None and task.lease_token == token else None
 
 
-def install_index_lease(task_id: str, now: datetime) -> str | None:
-    """给尚未标记的索引任务写上领取标记。写不上说明这次领取不属于当前执行。"""
-    token = uuid4().hex
-    count = execute_count(
+def advance(
+    task_id: str,
+    lease_token: str,
+    next_stage: DocumentTaskStage,
+    progress: int,
+    step: str,
+    now: datetime,
+    stages: Sequence[DocumentTaskStage],
+) -> bool:
+    """原子保存交接/回退起点并撤销执行权；提交后的投递由运行时负责。"""
+    _require_token(lease_token)
+    if next_stage == DocumentTaskStage.DONE or not stages:
+        raise ValueError("交接需要可执行阶段")
+    holders = ", ".join(f"%(stage_{i})s" for i in range(len(stages)))
+    params = {f"stage_{i}": stage for i, stage in enumerate(stages)}
+    params.update(
+        id=task_id, lease_token=lease_token, stage=next_stage.value,
+        progress=progress, step=step, now=as_utc(now),
+    )
+    return execute_count(
         """
         UPDATE document_tasks
-        SET result_json = JSON_SET(
-                COALESCE(result_json, JSON_OBJECT()),
-                '$.lease_token', %(token)s
-            ),
+        SET status = 'PENDING', stage = %(stage)s,
+            progress = %(progress)s, step = %(step)s,
+            result_json = JSON_REMOVE(COALESCE(result_json, JSON_OBJECT()), '$.lease_token'),
             updated_at = %(now)s
-        WHERE id = %(id)s AND status = 'RUNNING' AND stage = 'INDEXING'
-          AND JSON_EXTRACT(result_json, '$.lease_token') IS NULL
-        """,
-        {"id": task_id, "token": token, "now": as_utc(now)},
-    )
-    return token if count == 1 else None
+        WHERE id = %(id)s AND status = 'RUNNING'
+          AND JSON_UNQUOTE(JSON_EXTRACT(result_json, '$.lease_token')) = %(lease_token)s
+        """ + f" AND stage IN ({holders})",
+        params,
+    ) == 1
 
 
 def update_progress(
@@ -231,92 +266,171 @@ def update_index_progress(
     )
 
 
-def touch_indexing(task_id: str, lease_token: str, now: datetime) -> None:
-    """这次领取还在索引时续租，不提前声明 ES 写入成功。"""
-    execute_count(
+def mark_indexing_in_progress(
+    task_id: str,
+    token: str,
+    now: datetime,
+) -> bool:
+    """标记任务正在索引中，更新心跳时间，不改变 status。"""
+    _require_token(token)
+    affected = execute_count(
         """
-        UPDATE document_tasks SET updated_at = %(now)s
-        WHERE id = %(id)s AND status = 'RUNNING' AND stage = 'INDEXING'
-          AND JSON_UNQUOTE(JSON_EXTRACT(result_json, '$.lease_token')) = %(lease_token)s
+        UPDATE document_tasks
+        SET updated_at = %(now)s,
+            step = '正在索引中'
+        WHERE id = %(task_id)s
+          AND JSON_UNQUOTE(JSON_EXTRACT(result_json, '$.lease_token')) = %(token)s
+          AND status = 'RUNNING'
+          AND stage = 'INDEXING'
         """,
-        {"id": task_id, "lease_token": lease_token, "now": as_utc(now)},
+        {"task_id": task_id, "token": token, "now": as_utc(now)},
     )
+    return affected == 1
 
 
-def retry_failed_indexing(task_id: str, now: datetime) -> bool:
-    """仅允许当前文档版本的失败索引重新排队。"""
+def mark_chunking_in_progress(
+    task_id: str,
+    token: str,
+    now: datetime,
+) -> bool:
+    """标记任务正在切分中，更新心跳时间，不改变 status。"""
+    _require_token(token)
+    affected = execute_count(
+        """
+        UPDATE document_tasks
+        SET updated_at = %(now)s,
+            step = '正在切分中'
+        WHERE id = %(task_id)s
+          AND JSON_UNQUOTE(JSON_EXTRACT(result_json, '$.lease_token')) = %(token)s
+          AND status = 'RUNNING'
+          AND stage = 'CHUNKING'
+        """,
+        {"task_id": task_id, "token": token, "now": as_utc(now)},
+    )
+    return affected == 1
+
+
+def update_chunking_progress_lightweight(
+    task_id: str,
+    written: int,
+    token: str,
+    now: datetime,
+) -> bool:
+    """切分阶段轻量心跳：只刷新步骤与 updated_at，不持有长事务、不改 result_json。"""
+    _require_token(token)
+    affected = execute_count(
+        """
+        UPDATE document_tasks
+        SET step = %(step)s,
+            updated_at = %(now)s
+        WHERE id = %(task_id)s
+          AND JSON_UNQUOTE(JSON_EXTRACT(result_json, '$.lease_token')) = %(token)s
+          AND status = 'RUNNING'
+          AND stage = 'CHUNKING'
+        """,
+        {"task_id": task_id, "step": f"已切分 {written} 块", "token": token, "now": as_utc(now)},
+    )
+    return affected == 1
+
+
+def update_index_progress_lightweight(
+    task_id: str,
+    completed: int,
+    total: int,
+    last_chunk_id: str,
+    token: str,
+    now: datetime,
+) -> bool:
+    """轻量级进度更新，不持有长事务。"""
+    _require_token(token)
+    result_json = json.dumps({
+        "lease_token": token,
+        "last_chunk_id": last_chunk_id,
+        "embedded_count": completed,
+        "es_indexed": completed,
+        "milvus_indexed": completed,
+    })
+
+    affected = execute_count(
+        """
+        UPDATE document_tasks
+        SET progress = %(progress)s,
+            step = %(step)s,
+            result_json = %(result_json)s,
+            updated_at = %(now)s
+        WHERE id = %(task_id)s
+          AND JSON_UNQUOTE(JSON_EXTRACT(result_json, '$.lease_token')) = %(token)s
+          AND status = 'RUNNING'
+        """,
+        {
+            "task_id": task_id,
+            "progress": 90 + min(9, 9 * completed // total) if total > 0 else 90,
+            "step": f"已索引 {completed}/{total} 块",
+            "result_json": result_json,
+            "now": as_utc(now),
+            "token": token,
+        },
+    )
+    return affected == 1
+
+
+def retry_failed(
+    task_id: str,
+    now: datetime,
+    stages: Sequence[DocumentTaskStage],
+    prepare: Callable[[DocumentTask], None] | None = None,
+) -> DocumentTask | None:
+    """锁定任务行 → 文档行，准入通过后在同一事务中准备并重新排队。
+
+    prepare 中的 ORM 写入复用本事务；拒绝时返回 None，成功时返回排队快照。
+    """
     with transaction() as connection:
         with connection.cursor() as cursor:
             cursor.execute(
-                """
-                SELECT t.status, t.stage, t.version, d.parse_version,
-                       d.status AS document_status
-                FROM document_tasks AS t
-                JOIN documents AS d ON d.id = t.document_id
-                WHERE t.id = %(id)s FOR UPDATE
-                """,
+                "SELECT * FROM document_tasks WHERE id = %(id)s FOR UPDATE",
                 {"id": task_id},
             )
             row = cursor.fetchone()
+            if row is None or row["status"] != "FAILED" or row["stage"] not in stages:
+                return None
+            task = _from_row(row)
+            cursor.execute(
+                "SELECT status, parse_version FROM documents WHERE id = %(id)s FOR UPDATE",
+                {"id": task.document_id},
+            )
+            document = cursor.fetchone()
             if (
-                row is None
-                or row["status"] != "FAILED"
-                or row["stage"] != "INDEXING"
-                or row["document_status"] != "FAILED"
-                or int(row["version"]) != int(row["parse_version"])
+                document is None
+                or document["status"] != "FAILED"
+                or task.version != int(document["parse_version"])
             ):
-                return False
+                return None
+            with bind_connection(connection):
+                if prepare is not None:
+                    prepare(task)
             cursor.execute(
                 """
-                UPDATE documents AS d
-                JOIN document_tasks AS t ON t.document_id = d.id
-                SET d.status = 'PROCESSING', d.error_message = NULL,
-                    d.updated_at = %(now)s
-                WHERE t.id = %(id)s
+                UPDATE documents
+                SET status = 'PROCESSING', error_message = NULL, updated_at = %(now)s
+                WHERE id = %(id)s
                 """,
-                {"id": task_id, "now": as_utc(now)},
+                {"id": task.document_id, "now": as_utc(now)},
             )
             cursor.execute(
                 """
                 UPDATE document_tasks
-                SET status = 'PENDING', progress = 90,
-                    step = '等待重新索引', error_message = NULL,
-                    result_json = JSON_REMOVE(
-                        COALESCE(result_json, JSON_OBJECT()),
-                        '$.embedded_count', '$.es_indexed',
-                        '$.milvus_indexed', '$.last_chunk_id'
-                    ),
+                SET status = 'PENDING', step = '等待重试', error_message = NULL,
+                    result_json = JSON_REMOVE(COALESCE(result_json, JSON_OBJECT()), '$.lease_token'),
                     updated_at = %(now)s
                 WHERE id = %(id)s
                 """,
                 {"id": task_id, "now": as_utc(now)},
             )
-    return True
-
-
-def begin_merge(task_id: str, now: datetime, lease_token: str) -> bool:
-    """只有一个调度能把解析阶段推进到合并。"""
-    _require_token(lease_token)
-    count = execute_count(
-        """
-        UPDATE document_tasks
-        SET stage = %(stage)s,
-            progress = 80,
-            step = '正在合并',
-            updated_at = %(now)s
-        WHERE id = %(id)s
-          AND status = 'RUNNING'
-          AND stage = 'PARSING'
-          AND JSON_UNQUOTE(JSON_EXTRACT(result_json, '$.lease_token')) = %(lease_token)s
-        """,
-        {
-            "id": task_id,
-            "stage": DocumentTaskStage.MERGING.value,
-            "now": as_utc(now),
-            "lease_token": lease_token,
-        },
-    )
-    return count == 1
+    task.status = DocumentTaskStatus.PENDING
+    task.lease_token = None
+    task.error_message = None
+    task.step = "等待重试"
+    return task
 
 
 def complete(
@@ -332,6 +446,7 @@ def complete(
         SET status = %(status)s,
             stage = %(stage)s,
             progress = 100,
+            result_json = JSON_REMOVE(COALESCE(result_json, JSON_OBJECT()), '$.lease_token'),
             step = %(step)s,
             updated_at = %(now)s
         WHERE id = %(id)s AND status = 'RUNNING'
@@ -362,6 +477,7 @@ def fail(
     sql = """
         UPDATE document_tasks
         SET status = 'FAILED',
+            result_json = JSON_REMOVE(COALESCE(result_json, JSON_OBJECT()), '$.lease_token'),
             error_message = %(message)s,
             updated_at = %(now)s
         WHERE id = %(id)s AND status = 'RUNNING'
@@ -377,6 +493,22 @@ def fail(
     )
     params["lease_token"] = lease_token
     return execute_count(sql, params) == 1
+
+
+def supersede(task_id: str, message: str, now: datetime, lease_token: str) -> bool:
+    """仅结束持有 token 的过期任务，不修改文档或恢复起点。"""
+    _require_token(lease_token)
+    return execute_count(
+        """
+        UPDATE document_tasks
+        SET status = 'SUPERSEDED', error_message = %(message)s,
+            result_json = JSON_REMOVE(COALESCE(result_json, JSON_OBJECT()), '$.lease_token'),
+            updated_at = %(now)s
+        WHERE id = %(id)s AND status = 'RUNNING'
+          AND JSON_UNQUOTE(JSON_EXTRACT(result_json, '$.lease_token')) = %(lease_token)s
+        """,
+        {"id": task_id, "message": message[:1024], "now": as_utc(now), "lease_token": lease_token},
+    ) == 1
 
 
 def _require_token(lease_token: str) -> None:

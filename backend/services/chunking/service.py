@@ -41,6 +41,26 @@ class DocumentChunkingService:
                 document.id, version, _require_chunks(chunks)
             )
 
+    def compute_chunks(self, document, version, md_key, json_key, heartbeat=None):
+        """锁外切分：读取 S3 并在内存生成块列表；版本已过期返回 None。
+
+        heartbeat(written) 每 200 块调用一次，用于轻量心跳，不持有事务。
+        """
+        if document.parse_version > version:
+            return None
+        result = []
+        with self.source.read(document, version, md_key, json_key) as parsed:
+            chunks = self.chunker.iter_split(parsed, self.options)
+            for chunk in _require_chunks(chunks):
+                result.append(chunk)
+                if heartbeat is not None and len(result) % 200 == 0:
+                    heartbeat(len(result))
+        return result
+
+    def persist_chunks(self, document_id, version, chunks) -> bool:
+        """短事务写库：复核版本、替换旧块并更新计数；False 表示版本过期。"""
+        return chunk_orm.replace_current_version(document_id, version, chunks)
+
 
 def _require_chunks(chunks: Iterable[DocumentChunk]) -> Iterator[DocumentChunk]:
     """空文档不能伪装成成功的切分结果。"""

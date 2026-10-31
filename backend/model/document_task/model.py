@@ -12,13 +12,13 @@ class DocumentTaskStatus(str, Enum):
     RUNNING = "RUNNING"      # Worker 正在执行
     COMPLETED = "COMPLETED"  # 执行成功
     FAILED = "FAILED"        # 执行失败
+    SUPERSEDED = "SUPERSEDED"  # 已被新版本取代，不可重跑
 
 
 class DocumentTaskStage(str, Enum):
     """解析/索引任务阶段。"""
 
     PENDING = "PENDING"      # 等待处理
-    SPLITTING = "SPLITTING"  # 拆分文件
     PARSING = "PARSING"      # 解析内容
     MERGING = "MERGING"      # 合并解析结果
     CHUNKING = "CHUNKING"    # 文本切分

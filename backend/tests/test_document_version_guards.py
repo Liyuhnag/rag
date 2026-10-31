@@ -94,7 +94,9 @@ def test_mark_failed_requires_expected_version_and_truncates_message(executed):
     orm.mark_failed("doc-1", "x" * 1100, now, expected_version=0)
 
     sql, params = executed[0]
-    assert "WHERE id = %(id)s AND parse_version = %(expected_version)s" in sql
+    assert "WHERE id = %(id)s" in sql
+    assert "AND status = 'PROCESSING'" in sql
+    assert "AND parse_version = %(expected_version)s" in sql
     assert params == {
         "id": "doc-1",
         "message": "x" * 1024,
@@ -115,7 +117,9 @@ def test_legacy_calls_do_not_require_version(executed, explicit_none, operation)
         orm.mark_failed("doc-1", "failed", now, **options)
 
     sql, params = executed[0]
-    assert sql.endswith("WHERE id = %(id)s")
+    assert "WHERE id = %(id)s" in sql
+    if operation == "failed":
+        assert "AND status = 'PROCESSING'" in sql
     assert "parse_version" not in sql
     assert "expected_version" not in params
     assert params["id"] == "doc-1"

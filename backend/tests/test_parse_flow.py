@@ -14,7 +14,6 @@ from model.document.model import DocumentStatus
 from model.document_task.model import DocumentTask
 from model.document_task.model import DocumentTaskStage
 from model.document_task.model import DocumentTaskStatus
-from services.common.exceptions import FeatureNotReady
 from services.parsing.models import ParseRequest
 from services.parsing.models import ParsedDocument
 from services.parsing.models import SubmittedPart
@@ -71,453 +70,230 @@ def _parsed() -> ParsedDocument:
     )
 
 
-def _prepare(monkeypatch):
-    monkeypatch.setattr(worker.task_orm, "claim", lambda task_id, now: _task())
-    monkeypatch.setattr(worker.document_orm, "get", lambda document_id: _document())
-    monkeypatch.setattr(worker.document_orm, "begin_parse", lambda *args: True)
-    monkeypatch.setattr(worker, "enqueue_indexing", lambda *args: None, raising=False)
+def _prepare(monkeypatch, stage=DocumentTaskStage.PARSING):
+    from services.task_runtime import lifecycle
 
-
-def test_submitted_parse_does_not_upload(monkeypatch):
-    _prepare(monkeypatch)
-    progress = []
-    monkeypatch.setattr(
-        worker.task_orm,
-        "update_progress",
-        lambda task_id, stage, percent, step, now, token: progress.append(step),
-    )
-    monkeypatch.setattr(
-        worker.DocumentParsingService,
-        "parse",
-        lambda self, document, version: SubmittedParse(),
-    )
-    monkeypatch.setattr(
-        worker.DocumentParsingService,
-        "upload",
-        lambda self, parsed: (_ for _ in ()).throw(AssertionError("不应上传")),
-    )
-    monkeypatch.setattr(
-        worker.parse_job_orm,
-        "insert",
-        lambda job: (_ for _ in ()).throw(AssertionError("不应写入分段")),
-    )
-
-    worker.parse_document.run("task-1")
-
-    assert progress == ["分段已提交"]
-
-
-def test_submitted_parse_records_job(monkeypatch):
-    _prepare(monkeypatch)
-    inserted = []
-    progress = []
-    part = SubmittedPart(
-        file_id="file-1",
-        job_id="job-1",
-        part_index=1,
-        page_start=1,
-        page_end=0,
-        source_key="documents/doc-1/demo.pdf",
-    )
-    monkeypatch.setattr(
-        worker.DocumentParsingService,
-        "parse",
-        lambda self, document, version: SubmittedParse(parts=(part,)),
-    )
-    monkeypatch.setattr(
-        worker.parse_job_orm,
-        "insert",
-        lambda job: inserted.append(job),
-    )
-    monkeypatch.setattr(
-        worker.task_orm,
-        "update_progress",
-        lambda task_id, stage, percent, step, now, token: progress.append(step),
-    )
-    monkeypatch.setattr(
-        worker.DocumentParsingService,
-        "upload",
-        lambda self, parsed: (_ for _ in ()).throw(AssertionError("不应上传")),
-    )
-
-    worker.parse_document.run("task-1")
-
-    assert progress == ["分段已提交"]
-    assert inserted[0].mineru_file_id == "file-1"
-    assert inserted[0].mineru_job_id == "job-1"
-    assert inserted[0].status.value == "SUBMITTED"
-    assert inserted[0].task_id == "task-1"
-    assert inserted[0].lease_token == "parse-lease"
-    assert inserted[0].source_key == "documents/doc-1/demo.pdf"
-    assert inserted[0].next_poll_at is not None
-
-
-@pytest.mark.parametrize(
-    ("error", "chunk_result"),
-    [
-        (None, True),
-        (None, False),
-        (RuntimeError("切分失败"), None),
-        (FeatureNotReady("切分未就绪"), None),
-    ],
-)
-def test_finished_parse_uploads_and_persists(monkeypatch, error, chunk_result):
-    _prepare(monkeypatch)
-    calls = []
-    stored = StoredParseResult("parsed.md", "parsed.json")
-
-    class _Chunking:
-        def run(self, document, version, md_key, json_key):
-            calls.append(("chunk", document.id, version, md_key, json_key))
-            if error is not None:
-                raise error
-            return chunk_result
-
-    monkeypatch.setattr(
-        worker.task_orm,
-        "fail",
-        lambda task_id, message, now, token=None: calls.append(("fail", message)) or True,
-    )
-    monkeypatch.setattr(
-        worker.document_orm,
-        "mark_failed",
-        lambda document_id, message, now, **kwargs: calls.append(
-            ("document_failed", kwargs["expected_version"])
-        ),
-    )
-    monkeypatch.setattr(worker, "DocumentChunkingService", _Chunking, raising=False)
-    monkeypatch.setattr(
-        worker.task_orm,
-        "update_progress",
-        lambda task_id, stage, percent, step, now, token: calls.append((stage, percent)),
-    )
-    monkeypatch.setattr(
-        worker.DocumentParsingService,
-        "parse",
-        lambda self, document, version: FinishedParse(_parsed()),
-    )
-    monkeypatch.setattr(
-        worker.DocumentParsingService,
-        "upload",
-        lambda self, parsed: calls.append("upload") or stored,
-    )
-    monkeypatch.setattr(
-        worker.DocumentParsingService,
-        "persist",
-        lambda self, parsed, stored: calls.append(("persist", stored)),
-    )
-    monkeypatch.setattr(
-        worker.task_orm,
-        "complete",
-        lambda task_id, step, now, token: calls.append(("complete", step)),
-    )
-
-    monkeypatch.setattr(
-        worker,
-        "enqueue_indexing",
-        lambda task_id, token, lease=None: calls.append(("index", task_id)),
-    )
-    if error is None:
-        worker.parse_document.run("task-1")
-    else:
-        with pytest.raises(type(error), match=str(error)):
-            worker.parse_document.run("task-1")
-
-    expected_end = [("index", "task-1")]
-    if chunk_result is False:
-        expected_end = [("fail", "文档版本不匹配，解析任务已过期")]
-    if error is not None:
-        expected_end = [("fail", str(error)), ("document_failed", 1)]
-    assert (
-        calls
-        == [
-            "upload",
-            ("persist", stored),
-            (DocumentTaskStage.CHUNKING, 85),
-            ("chunk", "doc-1", 1, "parsed.md", "parsed.json"),
-        ]
-        + expected_end
-    )
-
-
-@pytest.mark.parametrize("file_type", ["csv", "xlsx"])
-@pytest.mark.parametrize("schema_result", [True, False])
-def test_structured_files_persist_schema_without_chunking(
-    monkeypatch, file_type, schema_result
-):
-    _prepare(monkeypatch)
-    document = _document()
-    document.file_type = file_type
-    calls = []
-    stored = StoredParseResult("parsed.md", "parsed.json")
-    monkeypatch.setattr(worker.document_orm, "get", lambda document_id: document)
-    monkeypatch.setattr(
-        worker.DocumentParsingService,
-        "parse",
-        lambda self, document, version: FinishedParse(_parsed()),
-    )
-    monkeypatch.setattr(
-        worker.DocumentParsingService,
-        "upload",
-        lambda self, parsed: calls.append("upload") or stored,
-    )
-    monkeypatch.setattr(
-        worker.DocumentParsingService,
-        "persist",
-        lambda self, parsed, result: calls.append(("persist", result.json_key)),
-    )
-
-    def unexpected(*args, **kwargs):
-        raise AssertionError("结构化数据不应进入文本切分或提前标记就绪")
-
-    monkeypatch.setattr(
-        worker.task_orm, "fail", lambda *args: calls.append(("failed", args[3]))
-    )
-    monkeypatch.setattr(
-        worker.document_orm, "mark_failed", lambda *args, **kwargs: None
-    )
-
-    class _Schema:
-        def run(self, document, version, md_key, json_key):
-            calls.append(("schema", version, md_key, json_key))
-            return schema_result
-
-    monkeypatch.setattr(worker, "DocumentChunkingService", unexpected)
-    monkeypatch.setattr(worker, "StructuredSchemaService", _Schema, raising=False)
-    monkeypatch.setattr(
-        worker.task_orm,
-        "update_progress",
-        lambda task_id, stage, percent, step, now, token: calls.append((stage, percent)),
-    )
-    monkeypatch.setattr(worker.document_orm, "mark_ready", unexpected)
-    monkeypatch.setattr(
-        worker.task_orm,
-        "complete",
-        lambda task_id, step, now, token: calls.append(("complete", step)),
-    )
-    worker.parse_document.run("task-1")
-    assert calls == [
-        "upload",
-        ("persist", "parsed.json"),
-        (DocumentTaskStage.CHUNKING, 85),
-        ("schema", 1, "parsed.md", "parsed.json"),
-    ] + (
-        [("complete", "结构已保存，待数据入库")]
-        if schema_result else [("failed", "parse-lease")]
-    )
-
-
-@pytest.mark.parametrize(
-    "schema_error", [RuntimeError("结构保存失败"), FeatureNotReady("结构保存不可用")]
-)
-def test_schema_failure_fails_task_and_preserves_version_guard(
-    monkeypatch, schema_error
-):
-    _prepare(monkeypatch)
-    document = _document()
-    document.file_type = "csv"
-    document.parsed_md_key = "stored.md"
-    document.parsed_json_key = "stored.json"
-    task = _task()
-    task.stage = DocumentTaskStage.CHUNKING
-    calls = []
-    monkeypatch.setattr(worker.task_orm, "claim", lambda *args: task)
-    monkeypatch.setattr(worker.document_orm, "get", lambda *args: document)
-
-    class _Schema:
-        def run(self, *args):
-            raise schema_error
-
-    monkeypatch.setattr(worker, "StructuredSchemaService", _Schema, raising=False)
-    monkeypatch.setattr(worker.task_orm, "update_progress", lambda *args: None)
-    monkeypatch.setattr(worker.task_orm, "fail", lambda *args: calls.append("failed") or True)
-    monkeypatch.setattr(
-        worker.document_orm,
-        "mark_failed",
-        lambda *args, **kwargs: calls.append(kwargs["expected_version"]),
-    )
-    monkeypatch.setattr(
-        worker.task_orm, "complete", lambda *args: pytest.fail("失败不能完成")
-    )
-    with pytest.raises(type(schema_error), match=str(schema_error)):
-        worker.parse_document.run("task-1")
-    assert calls == ["failed", 1]
-
-
-def test_recovered_parse_resumes_stored_artifacts(monkeypatch):
-    _prepare(monkeypatch)
-    document = _document()
-    document.parsed_md_key = "stored.md"
-    document.parsed_json_key = "stored.json"
-    task = _task()
-    task.stage = DocumentTaskStage.CHUNKING
-    monkeypatch.setattr(worker.task_orm, "claim", lambda *args: task)
-    monkeypatch.setattr(worker.document_orm, "get", lambda document_id: document)
-    calls = []
-
-    def unexpected(*args):
-        pytest.fail("恢复任务不应重新解析已有产物")
-
-    class _Chunking:
-        def run(self, document, version, md_key, json_key):
-            calls.append((version, md_key, json_key))
-            return True
-
-    monkeypatch.setattr(worker, "DocumentParsingService", unexpected)
-    monkeypatch.setattr(worker, "DocumentChunkingService", _Chunking)
-    monkeypatch.setattr(worker.task_orm, "update_progress", lambda *args: None)
-    monkeypatch.setattr(worker.task_orm, "complete", lambda *args: calls.append("done"))
-    monkeypatch.setattr(worker, "enqueue_indexing", lambda *args: calls.append("index"))
-    worker.parse_document.run("task-1")
-    assert calls == [(1, "stored.md", "stored.json"), "index"]
-
-
-def test_recovered_indexing_does_not_parse_or_split(monkeypatch):
-    _prepare(monkeypatch)
-    task = _task()
-    task.stage = DocumentTaskStage.INDEXING
-    monkeypatch.setattr(worker.task_orm, "claim", lambda *args: task)
-    calls = []
-
-    def unexpected(*args):
-        pytest.fail("索引恢复只重放 MySQL 子块")
-
-    monkeypatch.setattr(worker, "DocumentParsingService", unexpected)
-    monkeypatch.setattr(worker, "DocumentChunkingService", unexpected)
-    monkeypatch.setattr(worker, "enqueue_indexing", lambda *args: calls.append("index"))
-    worker.parse_document.run("task-1")
-    assert calls == ["index"]
-
-
-def test_stale_indexing_fails_without_reindex(monkeypatch):
-    _prepare(monkeypatch)
-    document = _document()
-    document.parse_version = 2
-    task = _task()
-    task.stage = DocumentTaskStage.INDEXING
-    calls = []
-    monkeypatch.setattr(worker.task_orm, "claim", lambda *args: task)
-    monkeypatch.setattr(worker.document_orm, "get", lambda document_id: document)
-    monkeypatch.setattr(worker.task_orm, "fail", lambda *args: calls.append(args[1]))
-    monkeypatch.setattr(
-        worker.document_orm,
-        "mark_failed",
-        lambda *args, **kwargs: calls.append("document"),
-    )
-    monkeypatch.setattr(
-        worker, "enqueue_indexing", lambda *args: calls.append("index")
-    )
-
-    def unexpected(*args):
-        pytest.fail("旧版本索引不应再解析或切分")
-
-    monkeypatch.setattr(worker, "DocumentParsingService", unexpected)
-    monkeypatch.setattr(worker, "DocumentChunkingService", unexpected)
-    worker.parse_document.run("task-1")
-    assert calls == ["文档版本已变化，索引任务已过期"]
-
-
-def test_first_parse_starts_document_processing(monkeypatch):
-    _prepare(monkeypatch)
-    document = _document()
-    calls = []
-    monkeypatch.setattr(worker.document_orm, "get", lambda *args: document)
-
-    def begin_parse(document_id, version, now):
-        assert document_id == document.id
-        assert version == document.parse_version == 1
-        document.status = DocumentStatus.PROCESSING
-        calls.append("begin")
-        return True
-
-    def parse(self, current, version):
-        calls.append(("parse", current.status, version))
-        return SubmittedParse()
-
-    monkeypatch.setattr(worker.document_orm, "begin_parse", begin_parse)
-    monkeypatch.setattr(worker.DocumentParsingService, "parse", parse)
-    monkeypatch.setattr(worker.task_orm, "update_progress", lambda *args: None)
-    worker.parse_document.run("task-1")
-
-    assert calls == ["begin", ("parse", DocumentStatus.PROCESSING, 1)]
-
-
-@pytest.mark.parametrize("version", [0, 2])
-@pytest.mark.parametrize(
-    "stage",
-    [DocumentTaskStage.PARSING, DocumentTaskStage.CHUNKING,
-     DocumentTaskStage.INDEXING],
-)
-def test_version_mismatch_fails_only_claimed_task(monkeypatch, version, stage):
-    _prepare(monkeypatch)
-    document = _document()
-    document.parse_version = version
-    document.status = DocumentStatus.READY
-    document.parsed_md_key = "current.md"
     task = _task()
     task.stage = stage
-    failures = []
-    monkeypatch.setattr(worker.task_orm, "claim", lambda *args: task)
-    monkeypatch.setattr(worker.document_orm, "get", lambda *args: document)
+    document = _document()
+    calls = []
 
-    def fail(task_id, message, now, token=None):
-        failures.append((task_id, message, token))
-        task.status = DocumentTaskStatus.FAILED
+    def claim(task_id, now, stages):
+        assert DocumentTaskStage.INDEXING not in stages
+        task.status = DocumentTaskStatus.RUNNING
+        task.lease_token = "parse-lease"
+        return task
+
+    def begin(*args):
+        document.status = DocumentStatus.PROCESSING
         return True
 
-    def unexpected(*args, **kwargs):
-        pytest.fail("版本不匹配不能开始业务处理或修改文档")
+    def handoff(task_id, token, target, progress, step, now, stages):
+        task.status = DocumentTaskStatus.PENDING
+        task.stage = target
+        task.lease_token = None
+        calls.append(("handoff", target))
+        return True
 
-    monkeypatch.setattr(worker.task_orm, "fail", fail)
-    monkeypatch.setattr(worker.document_orm, "begin_parse", unexpected)
-    monkeypatch.setattr(worker.document_orm, "mark_failed", unexpected)
-    monkeypatch.setattr(worker, "DocumentParsingService", unexpected)
-    monkeypatch.setattr(worker, "enqueue_indexing", unexpected)
+    def failed(task_id, message, now, token):
+        task.status = DocumentTaskStatus.FAILED
+        task.error_message = message
+        return True
+
+    def superseded(task_id, message, now, token):
+        task.status = DocumentTaskStatus.SUPERSEDED
+        return True
+
+    def document_failed(*args, **kwargs):
+        document.status = DocumentStatus.FAILED
+
+    def complete(*args):
+        task.status = DocumentTaskStatus.COMPLETED
+        task.stage = DocumentTaskStage.DONE
+        return True
+
+    monkeypatch.setattr(worker.task_orm, "claim", claim)
+    monkeypatch.setattr(worker.document_orm, "get", lambda *args: document)
+    monkeypatch.setattr(worker.document_orm, "begin_parse", begin)
+    monkeypatch.setattr(worker.parse_job_orm, "adopt_task_jobs", lambda *args: [])
+    monkeypatch.setattr(worker.task_orm, "advance", handoff)
+    monkeypatch.setattr(worker.task_orm, "fail", failed)
+    monkeypatch.setattr(worker.task_orm, "supersede", superseded)
+    monkeypatch.setattr(worker.task_orm, "complete", complete)
+    monkeypatch.setattr(worker.task_orm, "update_progress", lambda *args: True)
+    monkeypatch.setattr(worker.task_orm, "mark_chunking_in_progress", lambda *args: True)
+    monkeypatch.setattr(worker.task_orm, "update_chunking_progress_lightweight", lambda *args: True)
+    monkeypatch.setattr(worker.document_orm, "mark_failed", document_failed)
+    monkeypatch.setattr(lifecycle, "dispatch", lambda task_id, target: calls.append(("dispatch", target)))
+    return task, document, calls
+
+
+def test_submitted_parse_records_jobs_and_waits(monkeypatch):
+    task, document, calls = _prepare(monkeypatch)
+    part = SubmittedPart("file-1", "remote-1", 1, 1, 10, "source.pdf")
+    monkeypatch.setattr(worker.DocumentParsingService, "parse", lambda *args: SubmittedParse(parts=(part,)))
+    inserted = []
+    monkeypatch.setattr(worker.parse_job_orm, "insert", inserted.append)
     worker.parse_document.run(task.id)
-
-    assert task.status == DocumentTaskStatus.FAILED
-    assert failures[0][0] == task.id
-    assert failures[0][2] == "parse-lease"
-    assert document.parse_version == version
-    assert document.status == DocumentStatus.READY
-    assert document.parsed_md_key == "current.md"
+    assert task.status == "RUNNING"
+    assert document.status == "PROCESSING"
+    assert inserted[0].lease_token == "parse-lease"
+    assert inserted[0].mineru_job_id == "remote-1"
+    assert calls == []
 
 
-def test_version_changes_before_begin_parse_fails_task(monkeypatch):
-    _prepare(monkeypatch)
-    task = _task()
-    calls = []
-    monkeypatch.setattr(worker.task_orm, "claim", lambda *args: task)
+@pytest.mark.parametrize("downloaded", [False, True])
+def test_reclaimed_mineru_parts_are_reused_without_resubmission(monkeypatch, downloaded):
+    from types import SimpleNamespace
+
+    from model.parse_job.model import ParseJobStatus
+
+    task, document, calls = _prepare(monkeypatch)
+    document.file_type = "pdf"
+    document.status = DocumentStatus.PROCESSING
+    part = SimpleNamespace(
+        id="existing-part",
+        status=ParseJobStatus.DOWNLOADING if downloaded else ParseJobStatus.SUBMITTED,
+        result_key="existing.zip" if downloaded else None,
+        mineru_job_id="existing-remote-job",
+    )
+    adopted = []
+
+    def adopt(task_id, document_id, version, token):
+        adopted.append((task_id, document_id, version, token))
+        return [part]
+
+    monkeypatch.setattr(worker.parse_job_orm, "adopt_task_jobs", adopt)
+    monkeypatch.setattr(
+        worker, "DocumentParsingService",
+        lambda *args, **kwargs: pytest.fail("已有分段不能重新解析或提交"),
+    )
+    worker.parse_document.run(task.id)
+    assert adopted == [("task-1", "doc-1", 1, "parse-lease")]
+    assert part.mineru_job_id == "existing-remote-job"
+    assert document.status == "PROCESSING"
+    if downloaded:
+        assert (task.status, task.stage) == ("PENDING", "MERGING")
+        assert calls == [("handoff", "MERGING"), ("dispatch", "MERGING")]
+        assert part.result_key == "existing.zip"
+    else:
+        assert (task.status, task.stage) == ("RUNNING", "PARSING")
+        assert calls == []
+
+
+def test_local_parse_publishes_then_dispatches_independent_chunking(monkeypatch):
+    task, document, calls = _prepare(monkeypatch)
+    monkeypatch.setattr(worker.DocumentParsingService, "parse", lambda *args: FinishedParse(_parsed()))
+    monkeypatch.setattr(worker.DocumentParsingService, "upload", lambda *args: StoredParseResult("md", "json"))
+
+    def persist(*args):
+        document.parsed_md_key = "md"
+        document.parsed_json_key = "json"
+        calls.append("persist")
+
+    monkeypatch.setattr(worker.DocumentParsingService, "persist", persist)
+    monkeypatch.setattr(worker, "DocumentChunkingService", lambda: pytest.fail("解析消息不执行切分"))
+    worker.parse_document.run(task.id)
+    assert task.status == "PENDING"
+    assert task.stage == "CHUNKING"
+    assert task.lease_token is None
+    assert document.status == "PROCESSING"
+    assert calls == ["persist", ("handoff", "CHUNKING"), ("dispatch", "CHUNKING")]
+
+
+@pytest.mark.parametrize("file_type", ["txt", "csv", "xlsx"])
+def test_chunking_reuses_artifacts_and_hands_off_or_completes(monkeypatch, file_type):
+    task, document, calls = _prepare(monkeypatch, DocumentTaskStage.CHUNKING)
+    document.file_type = file_type
+    document.status = DocumentStatus.PROCESSING
+    document.parsed_md_key, document.parsed_json_key = "md", "json"
+    monkeypatch.setattr(worker, "DocumentParsingService", lambda *args: pytest.fail("不得重新解析"))
+
+    class Service:
+        def run(self, current, version, md_key, json_key):
+            calls.append(("save", current.id, version, md_key, json_key))
+            return True
+
+        def compute_chunks(self, document, version, md_key, json_key, heartbeat=None):
+            calls.append(("save", document.id, version, md_key, json_key))
+            return ["chunk-1", "chunk-2"]
+
+        def persist_chunks(self, document_id, version, chunks):
+            return True
+
+    monkeypatch.setattr(worker, "DocumentChunkingService", Service)
+    monkeypatch.setattr(worker, "StructuredSchemaService", Service)
+    worker.parse_document.run(task.id)
+    assert calls[0] == ("save", "doc-1", 1, "md", "json")
+    if file_type == "txt":
+        assert (task.status, task.stage) == ("PENDING", "INDEXING")
+        assert calls[1:] == [("handoff", "INDEXING"), ("dispatch", "INDEXING")]
+    else:
+        assert (task.status, task.stage) == ("COMPLETED", "DONE")
+        assert len(calls) == 1
+
+
+def test_missing_chunking_input_rolls_back_to_parsing(monkeypatch):
+    task, _, calls = _prepare(monkeypatch, DocumentTaskStage.CHUNKING)
+    worker.parse_document.run(task.id)
+    assert (task.status, task.stage) == ("PENDING", "PARSING")
+    assert calls == [("handoff", "PARSING"), ("dispatch", "PARSING")]
+
+
+@pytest.mark.parametrize("stage", [DocumentTaskStage.PARSING, DocumentTaskStage.MERGING, DocumentTaskStage.CHUNKING])
+def test_stale_version_supersedes_task_without_modifying_document(monkeypatch, stage):
+    task, document, calls = _prepare(monkeypatch, stage)
+    document.parse_version = 2
+    document.status = DocumentStatus.READY
+    monkeypatch.setattr(worker, "DocumentParsingService", lambda *args: pytest.fail("过期任务不能执行"))
+    worker.parse_document.run(task.id)
+    assert task.status == "SUPERSEDED"
+    assert task.stage == stage
+    assert document.status == "READY"
+    assert calls == []
+
+
+@pytest.mark.parametrize("stage", [DocumentTaskStage.PARSING, DocumentTaskStage.CHUNKING, DocumentTaskStage.MERGING])
+def test_business_error_fails_task_and_current_document(monkeypatch, stage):
+    task, document, calls = _prepare(monkeypatch, stage)
+    document.status = DocumentStatus.PROCESSING
+    document.parsed_md_key, document.parsed_json_key = "md", "json"
+
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("service unavailable")
+
+    monkeypatch.setattr(worker.DocumentParsingService, "parse", unavailable)
+    monkeypatch.setattr(worker, "run_merge", unavailable)
+
+    class Service:
+        run = unavailable
+        compute_chunks = unavailable
+        persist_chunks = unavailable
+
+    monkeypatch.setattr(worker, "DocumentChunkingService", Service)
+    with pytest.raises(RuntimeError, match="service unavailable"):
+        worker.parse_document.run(task.id)
+    assert (task.status, task.stage) == ("FAILED", stage)
+    assert document.status == "FAILED"
+    assert calls == []
+
+
+def test_version_changed_before_begin_parse_is_superseded(monkeypatch):
+    task, document, _ = _prepare(monkeypatch)
     monkeypatch.setattr(worker.document_orm, "begin_parse", lambda *args: False)
-    monkeypatch.setattr(
-        worker.task_orm,
-        "fail",
-        lambda task_id, message, now, token=None: calls.append(token),
-    )
-    monkeypatch.setattr(
-        worker.DocumentParsingService,
-        "parse",
-        lambda *args: calls.append("parse") or SubmittedParse(),
-    )
-    monkeypatch.setattr(
-        worker.document_orm,
-        "mark_failed",
-        lambda *args, **kwargs: calls.append("document"),
-    )
+    monkeypatch.setattr(worker.DocumentParsingService, "parse", lambda *args: pytest.fail("不能解析"))
     worker.parse_document.run(task.id)
+    assert task.status == "SUPERSEDED"
+    assert document.status == "UPLOADED"
 
-    assert calls == ["parse-lease"]
 
-
-@pytest.mark.parametrize("lost_at", ["parse", "upload", "error"])
-def test_lost_parse_lease_never_publishes_or_fails_document(monkeypatch, lost_at):
+@pytest.mark.parametrize("lost_at", ["parse", "upload"])
+def test_lost_lease_during_external_work_cannot_publish_or_fail(monkeypatch, lost_at):
     from contextlib import contextmanager
-
     from model.document_task.lease import LeaseLost
 
-    _prepare(monkeypatch)
+    task, document, calls = _prepare(monkeypatch)
     owner = ["parse-lease"]
-    calls = []
 
     @contextmanager
     def guard(task_id, token, stages):
@@ -526,65 +302,20 @@ def test_lost_parse_lease_never_publishes_or_fails_document(monkeypatch, lost_at
         yield
 
     def parse(*args):
-        if lost_at in {"parse", "error"}:
+        if lost_at == "parse":
             owner[0] = "new-worker"
-        if lost_at == "error":
-            raise RuntimeError("late parse error")
         return FinishedParse(_parsed())
 
     def upload(*args):
-        calls.append("upload")
         owner[0] = "new-worker"
-        return StoredParseResult("old.md", "old.json")
-
-    def unexpected(*args, **kwargs):
-        pytest.fail("旧 worker 不能发布产物、切分、收尾或修改文档")
+        return StoredParseResult("md", "json")
 
     monkeypatch.setattr(worker.task_orm, "lease_guard", guard)
     monkeypatch.setattr(worker.task_orm, "owns_lease", lambda task_id, token, stages: token == owner[0])
     monkeypatch.setattr(worker.DocumentParsingService, "parse", parse)
     monkeypatch.setattr(worker.DocumentParsingService, "upload", upload)
-    monkeypatch.setattr(worker.DocumentParsingService, "persist", unexpected)
-    monkeypatch.setattr(worker, "DocumentChunkingService", unexpected)
-    monkeypatch.setattr(worker.task_orm, "fail", unexpected)
-    monkeypatch.setattr(worker.task_orm, "complete", unexpected)
-    monkeypatch.setattr(worker.document_orm, "mark_failed", unexpected)
-    worker.parse_document.run("task-1")
-    assert calls == (["upload"] if lost_at == "upload" else [])
-
-
-@pytest.mark.parametrize("file_type", ["txt", "csv"])
-def test_reclaimed_lease_before_chunking_does_not_run_business_writes(monkeypatch, file_type):
-    from contextlib import contextmanager
-
-    from model.document_task.lease import LeaseLost
-
-    _prepare(monkeypatch)
-    document = _document()
-    document.file_type = file_type
-    document.parsed_md_key = "md"
-    document.parsed_json_key = "json"
-    task = _task()
-    task.stage = DocumentTaskStage.CHUNKING
-    lost = [False]
-
-    @contextmanager
-    def guard(*args):
-        if lost[0]:
-            raise LeaseLost("task-1")
-        yield
-
-    def progress(*args):
-        lost[0] = True
-
-    def unexpected(*args, **kwargs):
-        pytest.fail("失去执行权后不能切分、保存 schema 或错误收尾")
-
-    monkeypatch.setattr(worker.task_orm, "claim", lambda *args: task)
-    monkeypatch.setattr(worker.document_orm, "get", lambda *args: document)
-    monkeypatch.setattr(worker.task_orm, "lease_guard", guard)
-    monkeypatch.setattr(worker.task_orm, "update_progress", progress)
-    monkeypatch.setattr(worker, "DocumentChunkingService", unexpected)
-    monkeypatch.setattr(worker, "StructuredSchemaService", unexpected)
-    monkeypatch.setattr(worker.task_orm, "fail", unexpected)
-    worker.parse_document.run("task-1")
+    monkeypatch.setattr(worker.DocumentParsingService, "persist", lambda *args: pytest.fail("旧执行不能发布"))
+    worker.parse_document.run(task.id)
+    assert task.status == "RUNNING"
+    assert document.status == "PROCESSING"
+    assert calls == []

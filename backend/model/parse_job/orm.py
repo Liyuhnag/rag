@@ -178,7 +178,7 @@ def claim_due(now: datetime, limit: int) -> list[ParseJob]:
                 ) AND next_poll_at IS NOT NULL
                   AND next_poll_at <= %(now)s
                   AND (
-                    status IN ('SUBMITTED', 'RUNNING')
+                    status IN ('SUBMITTED', 'RUNNING', 'RESUBMITTING')
                     OR (status = 'DOWNLOADING' AND result_key IS NULL)
                   )
                 ORDER BY next_poll_at
@@ -201,7 +201,7 @@ def claim_due(now: datetime, limit: int) -> list[ParseJob]:
                 f"""
                 UPDATE parse_jobs
                 SET next_poll_at = CASE
-                        WHEN status = 'DOWNLOADING' THEN %(download_lease)s
+                        WHEN status IN ('DOWNLOADING', 'RESUBMITTING') THEN %(download_lease)s
                         ELSE %(poll_lease)s
                     END,
                     updated_at = %(now)s
@@ -230,7 +230,7 @@ def mark_retry(
         """,
         {
             "id": job_id,
-            "status": ParseJobStatus.SUBMITTED.value,
+            "status": ParseJobStatus.RESUBMITTING.value,
             "next_poll_at": as_utc(next_poll_at),
             "error_message": error_message,
             "now": as_utc(now),
@@ -311,3 +311,53 @@ def record_result(job_id: str, result_key: str, now: datetime) -> None:
             "now": as_utc(now),
         },
     )
+
+
+def adopt_task_jobs(task_id: str, document_id: str, version: int, token: str) -> list[ParseJob]:
+    """在任务租约事务内接管最近一组可靠分段，保留远端编号与 ZIP。
+
+    调用方必须先持有任务行门禁；不能将升级前 token 为空的分段认领为当前结果。
+    """
+    old_token = _latest_task_token(task_id, document_id, version)
+    if old_token is None:
+        return []
+    execute_count(
+        "UPDATE parse_jobs SET lease_token=%(token)s WHERE task_id=%(task_id)s "
+        "AND document_id=%(document_id)s AND version=%(version)s AND lease_token=%(old)s",
+        {"task_id": task_id, "document_id": document_id, "version": version,
+         "token": token, "old": old_token},
+    )
+    return list_by_document_version(document_id, version, token)
+
+
+def retry_failed_parts(task_id: str, document_id: str, version: int, now: datetime) -> None:
+    """在 retry 事务内准备最近一组分段；仅失败且无 ZIP 的分段需要重新提交。"""
+    token = _latest_task_token(task_id, document_id, version)
+    if token is None:
+        return
+    execute_count(
+        """
+        UPDATE parse_jobs
+        SET status = CASE WHEN result_key IS NULL THEN 'SUBMITTED' ELSE 'COMPLETED' END,
+            mineru_file_id = CASE WHEN result_key IS NULL THEN NULL ELSE mineru_file_id END,
+            mineru_job_id = CASE WHEN result_key IS NULL THEN NULL ELSE mineru_job_id END,
+            attempts = CASE WHEN result_key IS NULL THEN 0 ELSE attempts END,
+            next_poll_at = CASE WHEN result_key IS NULL THEN %(now)s ELSE NULL END,
+            error_message = NULL, updated_at = %(now)s
+        WHERE task_id = %(task_id)s AND document_id = %(document_id)s AND version = %(version)s
+          AND lease_token = %(token)s AND status = 'FAILED'
+        """,
+        {"task_id": task_id, "document_id": document_id, "version": version,
+         "token": token, "now": as_utc(now)},
+    )
+
+
+def _latest_task_token(task_id: str, document_id: str, version: int) -> str | None:
+    """恢复和手动重试使用同一分段组，跳过升级前没有 token 的历史记录。"""
+    rows = execute(
+        "SELECT lease_token FROM parse_jobs WHERE task_id=%(task_id)s "
+        "AND document_id=%(document_id)s AND version=%(version)s "
+        "AND lease_token IS NOT NULL ORDER BY created_at DESC, id DESC LIMIT 1",
+        {"task_id": task_id, "document_id": document_id, "version": version},
+    )
+    return None if not rows else str(rows[0]["lease_token"])

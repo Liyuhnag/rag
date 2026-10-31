@@ -74,7 +74,7 @@ uv run pytest
 | `GET` | `/api/health` | 健康检查 |
 | `GET` | `/api/documents` | 分页返回已上传文档 |
 | `GET` | `/api/tasks/{id}` | 返回解析任务状态 |
-| `POST` | `/api/tasks/{id}/retry` | 重新投递当前版本失败的索引任务，返回 202 |
+| `POST` | `/api/tasks/{id}/retry` | 按原阶段重试当前版本的失败任务，要求文档也为 FAILED，返回 202 |
 | `GET` | `/api/documents/{id}` | 返回一条文档记录 |
 | `DELETE` | `/api/documents/{id}` | 删除文档记录和对象 |
 | `POST` | `/api/chat` | 校验问题后返回 `501`，检索生成尚未接入 |

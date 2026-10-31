@@ -13,6 +13,7 @@ class ParseJobStatus(str, Enum):
     SUBMITTED = "SUBMITTED"      # 已提交 MinerU
     RUNNING = "RUNNING"          # MinerU 正在处理
     DOWNLOADING = "DOWNLOADING"  # 正在下载解析结果
+    RESUBMITTING = "RESUBMITTING"  # 正在重新提交中（去重标记）
     COMPLETED = "COMPLETED"      # 分段解析完成
     FAILED = "FAILED"            # 分段解析失败
 

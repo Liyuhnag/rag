@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 
 from config import ENV_FILE
 from config import load_settings
+from services.task_runtime.policy import MINERU_POLL_SECONDS
+from services.task_runtime.policy import REDISPATCH_SECONDS
 
 load_dotenv(ENV_FILE, override=False)
 
@@ -74,11 +76,11 @@ celery_app.conf.beat_schedule = {
     },
     "redispatch-pending-tasks": {
         "task": "rag.redispatch_pending_tasks",
-        "schedule": 300.0,
+        "schedule": float(REDISPATCH_SECONDS),
     },
     "poll-parse-jobs": {
         "task": "rag.poll_parse_jobs",
-        "schedule": 10.0,
+        "schedule": float(MINERU_POLL_SECONDS),
     },
 }
 
