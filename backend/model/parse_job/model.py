@@ -40,3 +40,5 @@ class ParseJob:
     created_at: datetime
     updated_at: datetime
     lease_token: str | None = None
+    upload_url: str | None = None
+    upload_expires_at: datetime | None = None
