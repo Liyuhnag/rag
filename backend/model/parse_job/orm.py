@@ -52,6 +52,12 @@ def _from_row(row: dict[str, object]) -> ParseJob:
         ),
         created_at=as_aware(row["created_at"]),
         updated_at=as_aware(row["updated_at"]),
+        upload_url=row.get("upload_url"),
+        upload_expires_at=(
+            None
+            if row.get("upload_expires_at") is None
+            else as_aware(row["upload_expires_at"])
+        ),
     )
 
 
@@ -65,14 +71,15 @@ def insert(job: ParseJob) -> None:
             id, document_id, task_id, version, lease_token, part_index,
             page_start, page_end, source_key, mineru_file_id,
             mineru_job_id, status, attempts, next_poll_at,
-            error_message, result_key, created_at, updated_at
+            error_message, result_key, created_at, updated_at,
+            upload_url, upload_expires_at
         ) VALUES (
             %(id)s, %(document_id)s, %(task_id)s, %(version)s, %(lease_token)s,
             %(part_index)s, %(page_start)s, %(page_end)s,
             %(source_key)s, %(mineru_file_id)s, %(mineru_job_id)s,
             %(status)s, %(attempts)s, %(next_poll_at)s,
             %(error_message)s, %(result_key)s, %(created_at)s,
-            %(updated_at)s
+            %(updated_at)s, %(upload_url)s, %(upload_expires_at)s
         )
         """,
         {
@@ -98,6 +105,12 @@ def insert(job: ParseJob) -> None:
             "result_key": job.result_key,
             "created_at": as_utc(job.created_at),
             "updated_at": as_utc(job.updated_at),
+            "upload_url": job.upload_url,
+            "upload_expires_at": (
+                None
+                if job.upload_expires_at is None
+                else as_utc(job.upload_expires_at)
+            ),
         },
     )
 

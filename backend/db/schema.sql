@@ -134,6 +134,8 @@ CREATE TABLE IF NOT EXISTS parse_jobs (
     next_poll_at DATETIME(6) NULL COMMENT '下次轮询时间，UTC',
     error_message VARCHAR(1024) NULL COMMENT '失败原因',
     result_key VARCHAR(768) NULL COMMENT '分段结果 manifest key',
+    upload_url VARCHAR(2048) NULL COMMENT '预签名上传链接',
+    upload_expires_at DATETIME(6) NULL COMMENT '上传链接过期时间，UTC',
     created_at DATETIME(6) NOT NULL COMMENT '创建时间，UTC',
     updated_at DATETIME(6) NOT NULL COMMENT '更新时间，UTC',
     PRIMARY KEY (id),
