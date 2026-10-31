@@ -110,36 +110,72 @@ def recover_chunking(
     return recovered
 
 
-def claim(task_id: str, now: datetime) -> DocumentTask | None:
-    """条件抢占 PENDING → RUNNING，并换成新的领取标记。"""
+def claim(
+    task_id: str,
+    now: datetime,
+    stages: Sequence[DocumentTaskStage] | None = None,
+) -> DocumentTask | None:
+    """只领取指定入口的 PENDING 阶段；已持久化的恢复起点不改写。"""
+    stages = tuple(stages) if stages is not None else tuple(
+        stage for stage in DocumentTaskStage if stage != DocumentTaskStage.DONE
+    )
+    if not stages:
+        return None
     token = uuid4().hex
+    holders = ", ".join(f"%(stage_{i})s" for i in range(len(stages)))
+    params = {f"stage_{i}": stage for i, stage in enumerate(stages)}
+    params.update(id=task_id, lease_token=token, now=as_utc(now))
     count = execute_count(
         """
         UPDATE document_tasks
-        SET status = %(status)s,
-            stage = CASE WHEN stage IN ('CHUNKING', 'INDEXING') THEN stage ELSE %(stage)s END,
-            progress = CASE WHEN stage = 'INDEXING' THEN progress ELSE 0 END,
-            step = CASE WHEN stage = 'INDEXING' THEN step ELSE '解析中' END,
+        SET status = 'RUNNING',
+            stage = CASE WHEN stage = 'PENDING' THEN 'PARSING' ELSE stage END,
             result_json = JSON_SET(
-                COALESCE(result_json, JSON_OBJECT()),
-                '$.lease_token', %(lease_token)s
+                COALESCE(result_json, JSON_OBJECT()), '$.lease_token', %(lease_token)s
             ),
             updated_at = %(now)s
         WHERE id = %(id)s AND status = 'PENDING'
-        """,
-        {
-            "id": task_id,
-            "status": DocumentTaskStatus.RUNNING.value,
-            "stage": DocumentTaskStage.PARSING.value,
-            "lease_token": token,
-            "now": as_utc(now),
-        },
+        """ + f" AND stage IN ({holders})",
+        params,
     )
     if count != 1:
         return None
     task = get(task_id)
-    # 更新和回读之间可能已被恢复并重新领取，不能把新 token 当作自己的。
+    # 更新和回读之间可能已被恢复并重新领取，不能采用另一个领取者的 token。
     return task if task is not None and task.lease_token == token else None
+
+
+def advance(
+    task_id: str,
+    lease_token: str,
+    next_stage: DocumentTaskStage,
+    progress: int,
+    step: str,
+    now: datetime,
+    stages: Sequence[DocumentTaskStage],
+) -> bool:
+    """原子保存交接/回退起点并撤销执行权；提交后的投递由运行时负责。"""
+    _require_token(lease_token)
+    if next_stage == DocumentTaskStage.DONE or not stages:
+        raise ValueError("交接需要可执行阶段")
+    holders = ", ".join(f"%(stage_{i})s" for i in range(len(stages)))
+    params = {f"stage_{i}": stage for i, stage in enumerate(stages)}
+    params.update(
+        id=task_id, lease_token=lease_token, stage=next_stage.value,
+        progress=progress, step=step, now=as_utc(now),
+    )
+    return execute_count(
+        """
+        UPDATE document_tasks
+        SET status = 'PENDING', stage = %(stage)s,
+            progress = %(progress)s, step = %(step)s,
+            result_json = JSON_REMOVE(COALESCE(result_json, JSON_OBJECT()), '$.lease_token'),
+            updated_at = %(now)s
+        WHERE id = %(id)s AND status = 'RUNNING'
+          AND JSON_UNQUOTE(JSON_EXTRACT(result_json, '$.lease_token')) = %(lease_token)s
+        """ + f" AND stage IN ({holders})",
+        params,
+    ) == 1
 
 
 def install_index_lease(task_id: str, now: datetime) -> str | None:
@@ -332,6 +368,7 @@ def complete(
         SET status = %(status)s,
             stage = %(stage)s,
             progress = 100,
+            result_json = JSON_REMOVE(COALESCE(result_json, JSON_OBJECT()), '$.lease_token'),
             step = %(step)s,
             updated_at = %(now)s
         WHERE id = %(id)s AND status = 'RUNNING'
@@ -362,6 +399,7 @@ def fail(
     sql = """
         UPDATE document_tasks
         SET status = 'FAILED',
+            result_json = JSON_REMOVE(COALESCE(result_json, JSON_OBJECT()), '$.lease_token'),
             error_message = %(message)s,
             updated_at = %(now)s
         WHERE id = %(id)s AND status = 'RUNNING'
@@ -377,6 +415,22 @@ def fail(
     )
     params["lease_token"] = lease_token
     return execute_count(sql, params) == 1
+
+
+def supersede(task_id: str, message: str, now: datetime, lease_token: str) -> bool:
+    """仅结束持有 token 的过期任务，不修改文档或恢复起点。"""
+    _require_token(lease_token)
+    return execute_count(
+        """
+        UPDATE document_tasks
+        SET status = 'SUPERSEDED', error_message = %(message)s,
+            result_json = JSON_REMOVE(COALESCE(result_json, JSON_OBJECT()), '$.lease_token'),
+            updated_at = %(now)s
+        WHERE id = %(id)s AND status = 'RUNNING'
+          AND JSON_UNQUOTE(JSON_EXTRACT(result_json, '$.lease_token')) = %(lease_token)s
+        """,
+        {"id": task_id, "message": message[:1024], "now": as_utc(now), "lease_token": lease_token},
+    ) == 1
 
 
 def _require_token(lease_token: str) -> None:

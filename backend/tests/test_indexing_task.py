@@ -319,8 +319,8 @@ def test_claim_and_index_lease_sql_keep_the_current_token(monkeypatch):
     task_orm.claim("task", now)
     task_orm.touch_indexing("task", "lease-1", now)
     assert task_orm.fail("task", "索引失败", now, "lease-1") is True
-    assert "CASE WHEN stage = 'INDEXING' THEN progress ELSE 0 END" in statements[0][0]
-    assert "CASE WHEN stage = 'INDEXING' THEN step ELSE '解析中' END" in statements[0][0]
+    assert "CASE WHEN stage = 'PENDING' THEN 'PARSING' ELSE stage END" in statements[0][0]
+    assert "progress =" not in statements[0][0]
     assert "$.lease_token" in statements[0][0]
     assert statements[0][1]["lease_token"]
     assert "$.lease_token" in statements[1][0]

@@ -219,6 +219,36 @@ def test_same_timestamp_renew_is_not_a_lost_lease(mysql):
     assert not orm.renew("task", task.lease_token, mysql, (DocumentTaskStage.INDEXING,))
 
 
+@pytest.mark.parametrize("stage", ["PARSING", "MERGING", "CHUNKING", "INDEXING"])
+def test_claim_preserves_stage_and_rejects_wrong_queue(mysql, stage):
+    database.execute("UPDATE document_tasks SET stage=%(stage)s WHERE id='task'", {"stage": stage})
+    wrong = (DocumentTaskStage.PARSING,) if stage == "INDEXING" else (DocumentTaskStage.INDEXING,)
+    assert orm.claim("task", mysql, wrong) is None
+    assert orm.get("task").status == "PENDING"
+    task = orm.claim("task", mysql, (DocumentTaskStage(stage),))
+    assert task.stage == stage
+    assert task.lease_token
+
+
+def test_handoff_revokes_old_token_and_preserves_checkpoint(mysql):
+    task = orm.claim("task", mysql)
+    database.execute(
+        "UPDATE document_tasks SET result_json=JSON_SET(result_json,'$.checkpoint',"
+        "JSON_OBJECT('batch',3)) WHERE id='task'"
+    )
+    assert orm.advance(
+        "task", task.lease_token, DocumentTaskStage.INDEXING, 90, "等待索引", mysql, PARSE_STAGES
+    )
+    pending = orm.get("task")
+    assert (pending.status, pending.stage, pending.lease_token) == ("PENDING", "INDEXING", None)
+    assert not orm.fail("task", "old error", mysql, task.lease_token)
+    assert not orm.claim("task", mysql, PARSE_STAGES)
+    new = orm.claim("task", mysql, (DocumentTaskStage.INDEXING,))
+    assert new.lease_token != task.lease_token
+    rows = database.execute("SELECT result_json->'$.checkpoint.batch' AS batch FROM document_tasks")
+    assert int(rows[0]["batch"]) == 3
+
+
 def test_mineru_jobs_are_grouped_and_polled_by_original_claim(mysql):
     from tests.test_poll_parse import _job
 
