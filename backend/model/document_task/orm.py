@@ -3,6 +3,7 @@
 
 import json
 from collections.abc import Iterator
+from collections.abc import Mapping
 from collections.abc import Sequence
 from contextlib import contextmanager
 from datetime import datetime
@@ -76,36 +77,52 @@ def find_pending(
     return [_from_row(row) for row in rows]
 
 
-def recover_chunking(
-    older_than: datetime,
+def recover_stale(
+    cutoffs: Mapping[DocumentTaskStage, datetime],
     now: datetime,
     limit: int,
 ) -> list[DocumentTask]:
-    """条件重置失联的切分/索引任务，返回本次成功恢复的任务用于补投。"""
+    """按阶段阈值恢复失联任务；扫描后续租、交接或换 token 则跳过。"""
+    if not cutoffs or limit <= 0:
+        return []
+    conditions = []
+    params: dict[str, object] = {"limit": limit}
+    for i, (stage, cutoff) in enumerate(cutoffs.items()):
+        conditions.append(f"(stage = %(stage_{i})s AND updated_at < %(cutoff_{i})s)")
+        params[f"stage_{i}"] = stage.value
+        params[f"cutoff_{i}"] = as_utc(cutoff)
+    predicate = " OR ".join(conditions)
     rows = execute(
-        """
+        f"""
         SELECT * FROM document_tasks
-        WHERE status = 'RUNNING' AND stage IN ('CHUNKING', 'INDEXING')
-          AND updated_at < %(older_than)s
-        ORDER BY updated_at ASC
+        WHERE status = 'RUNNING' AND ({predicate})
+        ORDER BY updated_at ASC, id ASC
         LIMIT %(limit)s
         """,
-        {"older_than": as_utc(older_than), "limit": limit},
+        params,
     )
     recovered = []
     for row in rows:
+        task = _from_row(row)
         count = execute_count(
             """
             UPDATE document_tasks
-            SET status = 'PENDING', updated_at = %(now)s
+            SET status = 'PENDING', updated_at = %(now)s,
+                result_json = JSON_REMOVE(COALESCE(result_json, JSON_OBJECT()), '$.lease_token')
             WHERE id = %(id)s AND status = 'RUNNING'
-              AND stage IN ('CHUNKING', 'INDEXING') AND updated_at < %(older_than)s
+              AND stage = %(stage)s AND updated_at = %(updated_at)s
+              AND updated_at < %(cutoff)s
+              AND JSON_UNQUOTE(JSON_EXTRACT(result_json, '$.lease_token')) <=> %(lease_token)s
             """,
-            {"id": row["id"], "now": as_utc(now), "older_than": as_utc(older_than)},
+            {
+                "id": task.id, "stage": task.stage.value,
+                "updated_at": row["updated_at"], "cutoff": as_utc(cutoffs[task.stage]),
+                "lease_token": task.lease_token, "now": as_utc(now),
+            },
         )
         if count == 1:
-            task = _from_row(row)
             task.status = DocumentTaskStatus.PENDING
+            task.lease_token = None
             recovered.append(task)
     return recovered
 

@@ -36,7 +36,17 @@
 3. 历史 parse_jobs.lease_token 保持 NULL，不使用当前任务的 token 回填未知批次。
    新代码忽略这些历史回调；如果无法排空，应先单独制定在途任务的停用与重新执行方案。
 
-不扩大 recover 阶段，不修改 retry API 或重试次数策略。
+#22 的范围不扩大 recover 阶段，不修改 retry API 或重试次数策略。
+
+## 后续变更：#23 的统一 recover
+
+- recover 扩展到 PARSING / MERGING / CHUNKING / INDEXING，空闲阈值读取公共阶段策略表。
+  当前 PARSING 为 900 秒，其余三个阶段为 600 秒；有效 MinerU 轮询会续租。
+- 一次查询按各阶段阈值筛选 RUNNING 任务，再逐条条件更新。更新时核对扫描到的
+  stage、updated_at 和 token，避免覆盖扫描后发生的续租、交接或重新领取。
+- 恢复只将任务置为 PENDING、清除 token；保留阶段、进度、产物与检查点，不修改文档。
+  数据库更新提交后按原阶段投递，投递失败由 PENDING 补投兜底。
+- retry 准入矩阵与维护调度周期调整仍属于后续增量。
 
 ## 验证
 

@@ -3,14 +3,38 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from model.document_task.model import DocumentTaskStage as Stage
 from task import maintenance
 
 
-def test_redispatch_pending_tasks(monkeypatch):
+@pytest.mark.parametrize("has_pending", [False, True])
+def test_redispatch_recovers_before_finding_pending_tasks(monkeypatch, has_pending):
     calls = []
-    monkeypatch.setattr(maintenance.task_orm, "find_pending", lambda *args: [SimpleNamespace(id="task", stage=Stage.INDEXING)])
-    monkeypatch.setattr(maintenance.task_orm, "recover_chunking", lambda *args: [SimpleNamespace(id="recovered", stage=Stage.CHUNKING)])
-    monkeypatch.setattr(maintenance, "dispatch_task", lambda task_id, stage: calls.append((task_id, stage)))
+    recovered_at = []
+
+    def recover(now, limit):
+        recovered_at.append(now)
+        assert limit == maintenance._REDISPATCH_BATCH
+        calls.append("recover")
+        return 1
+
+    def find_pending(older_than, limit):
+        assert len(recovered_at) == 1
+        assert older_than < recovered_at[0]
+        assert limit == maintenance._REDISPATCH_BATCH
+        calls.append("find-pending")
+        return [SimpleNamespace(id="task", stage=Stage.INDEXING)] if has_pending else []
+
+    def dispatch(task_id, stage):
+        calls.append((task_id, stage))
+
+    monkeypatch.setattr(maintenance, "recover_tasks", recover)
+    monkeypatch.setattr(maintenance.task_orm, "find_pending", find_pending)
+    monkeypatch.setattr(maintenance, "dispatch_task", dispatch)
     maintenance.redispatch_pending_tasks()
-    assert calls == [("recovered", Stage.CHUNKING), ("task", Stage.INDEXING)]
+    expected = ["recover", "find-pending"]
+    if has_pending:
+        expected.append(("task", Stage.INDEXING))
+    assert calls == expected

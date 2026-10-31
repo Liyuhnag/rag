@@ -3,6 +3,7 @@
 
 from collections.abc import Callable
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 
 from model.document import orm as document_orm
@@ -11,6 +12,7 @@ from model.document_task.model import DocumentTask
 from model.document_task.model import DocumentTaskStage
 from services.task_runtime.dispatch import dispatch
 from services.task_runtime.lease import TaskLease
+from services.task_runtime.policy import POLICIES
 from services.task_runtime.policy import policy_for
 
 
@@ -43,3 +45,16 @@ def fail(task: DocumentTask, lease: TaskLease, message: str) -> bool:
         if changed:
             document_orm.mark_failed(task.document_id, message, now, expected_version=task.version)
     return changed
+
+
+def recover(now: datetime, limit: int) -> int:
+    """按阶段空闲阈值收回失联执行权，数据库更新提交后再投递。"""
+    cutoffs = {
+        stage: now - timedelta(seconds=policy.idle_seconds)
+        for stage, policy in POLICIES.items()
+        if stage != DocumentTaskStage.PENDING
+    }
+    recovered = task_orm.recover_stale(cutoffs, now, limit)
+    for task in recovered:
+        dispatch(task.id, task.stage)
+    return len(recovered)

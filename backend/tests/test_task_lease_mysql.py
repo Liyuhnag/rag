@@ -6,6 +6,7 @@
 """
 
 import importlib
+import json
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -32,6 +33,7 @@ from model.parse_job.model import ParseJobStatus
 from services.task_runtime import lifecycle
 from services.task_runtime.lease import PARSE_STAGES
 from services.task_runtime.lease import TaskLease
+from task import maintenance
 
 pytestmark = pytest.mark.skipif(
     os.getenv("RAG_TEST_MYSQL") != "1", reason="需要显式启用临时 MySQL 集成测试"
@@ -181,7 +183,9 @@ def test_guard_blocks_recovery_and_refreshes_time_before_commit(mysql):
 
     def recover():
         attempted.set()
-        return orm.recover_chunking(mysql - timedelta(minutes=5), mysql, 10)
+        return orm.recover_stale(
+            {DocumentTaskStage.CHUNKING: mysql - timedelta(minutes=10)}, mysql, 10,
+        )
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         with TaskLease("task", task.lease_token).writes():
@@ -195,6 +199,226 @@ def test_guard_blocks_recovery_and_refreshes_time_before_commit(mysql):
         assert future.result(timeout=3) == []
     assert orm.get("task").status == "RUNNING"
     assert document_orm.get("doc").parsed_md_key == "md"
+
+
+def _prepare_stale_task(now, stage=DocumentTaskStage.CHUNKING):
+    database.execute(
+        "UPDATE document_tasks SET stage=%(stage)s WHERE id='task'", {"stage": stage.value},
+    )
+    return orm.claim("task", now - timedelta(hours=1), (stage,))
+
+
+@pytest.mark.parametrize("stage, idle_seconds", [
+    (DocumentTaskStage.PARSING, 900),
+    (DocumentTaskStage.MERGING, 600),
+    (DocumentTaskStage.CHUNKING, 600),
+    (DocumentTaskStage.INDEXING, 600),
+])
+@pytest.mark.parametrize("offset_us", [-1, 0, 1], ids=["expired", "exact", "healthy"])
+def test_recovery_threshold_and_checkpoint_preservation(mysql, monkeypatch, stage, idle_seconds, offset_us):
+    task = _prepare_stale_task(mysql, stage)
+    updated_at = mysql - timedelta(seconds=idle_seconds) + timedelta(microseconds=offset_us)
+    checkpoint = {"chunking": {"generation": "g1"}, "indexing": {"milvus_through": "child-3"}}
+    result = {"lease_token": task.lease_token, "checkpoint": checkpoint, "embedded_count": 3}
+    database.execute(
+        "UPDATE document_tasks SET progress=87, step='保留步骤', result_json=%(result)s, "
+        "updated_at=%(updated_at)s WHERE id='task'",
+        {"result": json.dumps(result), "updated_at": database.as_utc(updated_at)},
+    )
+    messages = []
+    monkeypatch.setattr(lifecycle, "dispatch", lambda *args: messages.append(args))
+    # 使用非 UTC 的等价时间，覆盖数据库 DATETIME 的 UTC 转换。
+    recovery_now = mysql.astimezone(timezone(timedelta(hours=8)))
+    assert lifecycle.recover(recovery_now, 10) == int(offset_us < 0)
+    current = orm.get("task")
+    row = database.execute("SELECT result_json, updated_at FROM document_tasks WHERE id='task'")[0]
+    assert (current.stage, current.progress, current.step) == (stage, 87, "保留步骤")
+    assert current.error_message is None
+    if offset_us < 0:
+        assert (current.status, current.lease_token) == ("PENDING", None)
+        assert json.loads(row["result_json"]) == {"checkpoint": checkpoint, "embedded_count": 3}
+        assert row["updated_at"] == database.as_utc(mysql)
+        assert messages == [("task", stage)]
+        # 尚无新 worker 领取，旧 token 就必须已经失效。
+        assert not orm.renew("task", task.lease_token, mysql, (stage,))
+        assert not orm.fail("task", "late error", mysql, task.lease_token)
+        assert not orm.complete("task", "late completion", mysql, task.lease_token)
+        with pytest.raises(LeaseLost):
+            with TaskLease("task", task.lease_token, (stage,)).writes():
+                document_orm.mark_failed("doc", "late error", mysql, expected_version=1)
+    else:
+        assert (current.status, current.lease_token) == ("RUNNING", task.lease_token)
+        assert json.loads(row["result_json"]) == result
+        assert row["updated_at"] == database.as_utc(updated_at)
+        assert messages == []
+    assert document_orm.get("doc").status == "PROCESSING"
+
+
+@pytest.mark.parametrize("status, stage", [
+    ("PENDING", "CHUNKING"), ("FAILED", "PARSING"), ("SUPERSEDED", "INDEXING"),
+    ("COMPLETED", "DONE"), ("RUNNING", "PENDING"), ("RUNNING", "DONE"),
+])
+def test_recovery_ignores_ineligible_status_or_stage(mysql, monkeypatch, status, stage):
+    database.execute(
+        "UPDATE document_tasks SET status=%(status)s, stage=%(stage)s, updated_at=%(old)s WHERE id='task'",
+        {"status": status, "stage": stage, "old": database.as_utc(mysql - timedelta(days=1))},
+    )
+    before = database.execute("SELECT * FROM document_tasks WHERE id='task'")
+    messages = []
+    monkeypatch.setattr(lifecycle, "dispatch", lambda *args: messages.append(args))
+    assert lifecycle.recover(mysql, 10) == 0
+    assert database.execute("SELECT * FROM document_tasks WHERE id='task'") == before
+    assert messages == []
+
+
+@pytest.mark.parametrize("change", ["renew", "stage", "token", "handoff", "complete", "fail", "supersede"])
+def test_recovery_skips_task_changed_after_scan(mysql, monkeypatch, change):
+    task = _prepare_stale_task(mysql)
+    original_select = orm.execute
+    after_change = []
+
+    def select_then_change(sql, params):
+        rows = original_select(sql, params)
+        if "limit" not in params:
+            return rows
+        assert [row["id"] for row in rows] == ["task"]
+        old = mysql - timedelta(hours=1)
+        if change == "renew":
+            # 即使续租后的时间仍旧超过阈值，也不能覆盖扫描后的更新。
+            assert orm.renew("task", task.lease_token, old + timedelta(microseconds=1), PARSE_STAGES)
+        elif change == "stage":
+            assert orm.update_progress("task", DocumentTaskStage.MERGING, 80, "merge", old, task.lease_token)
+        elif change == "token":
+            database.execute("UPDATE document_tasks SET status='PENDING' WHERE id='task'")
+            new = orm.claim("task", old, (DocumentTaskStage.CHUNKING,))
+            assert new.lease_token != task.lease_token
+        elif change == "handoff":
+            assert orm.advance(
+                "task", task.lease_token, DocumentTaskStage.INDEXING, 90, "index", mysql, PARSE_STAGES,
+            )
+        elif change == "complete":
+            assert orm.complete("task", "done", mysql, task.lease_token)
+        elif change == "fail":
+            assert orm.fail("task", "failed", mysql, task.lease_token)
+        else:
+            assert orm.supersede("task", "stale version", mysql, task.lease_token)
+        after_change.extend(database.execute("SELECT * FROM document_tasks WHERE id='task'"))
+        return rows
+
+    messages = []
+    monkeypatch.setattr(orm, "execute", select_then_change)
+    monkeypatch.setattr(lifecycle, "dispatch", lambda *args: messages.append(args))
+    assert lifecycle.recover(mysql, 10) == 0
+    assert database.execute("SELECT * FROM document_tasks WHERE id='task'") == after_change
+    assert messages == []
+    assert document_orm.get("doc").status == "PROCESSING"
+
+
+def test_concurrent_recoverers_reset_and_dispatch_task_only_once(mysql, monkeypatch):
+    _prepare_stale_task(mysql)
+    scanned = Barrier(2)
+    original_select = orm.execute
+    messages = []
+
+    def select_together(sql, params):
+        rows = original_select(sql, params)
+        if "limit" in params:
+            assert [row["id"] for row in rows] == ["task"]
+            scanned.wait(timeout=3)
+        return rows
+
+    monkeypatch.setattr(orm, "execute", select_together)
+    monkeypatch.setattr(lifecycle, "dispatch", lambda *args: messages.append(args))
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(lifecycle.recover, mysql, 10) for _ in range(2)]
+        counts = [future.result(timeout=5) for future in futures]
+    assert sorted(counts) == [0, 1]
+    assert messages == [("task", DocumentTaskStage.CHUNKING)]
+    current = orm.get("task")
+    assert (current.status, current.lease_token) == ("PENDING", None)
+
+
+def test_recovery_commits_before_dispatch_and_broker_failure_keeps_pending(mysql, monkeypatch):
+    _prepare_stale_task(mysql)
+    messages = []
+
+    def broker_unavailable(task_id, stage):
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            current = pool.submit(orm.get, task_id).result(timeout=3)
+        assert (current.status, current.stage, current.lease_token) == ("PENDING", stage, None)
+        messages.append((task_id, stage))
+        return False
+
+    monkeypatch.setattr(lifecycle, "dispatch", broker_unavailable)
+    assert lifecycle.recover(mysql, 10) == 1
+    assert lifecycle.recover(mysql, 10) == 0
+    assert messages == [("task", DocumentTaskStage.CHUNKING)]
+    assert orm.get("task").status == "PENDING"
+    assert document_orm.get("doc").status == "PROCESSING"
+
+
+@pytest.mark.parametrize("result", [None, {"checkpoint": {"batch": 3}}])
+def test_recovery_accepts_legacy_task_without_token(mysql, monkeypatch, result):
+    _prepare_stale_task(mysql)
+    database.execute(
+        "UPDATE document_tasks SET result_json=%(result)s WHERE id='task'",
+        {"result": None if result is None else json.dumps(result)},
+    )
+    messages = []
+    monkeypatch.setattr(lifecycle, "dispatch", lambda *args: messages.append(args))
+    assert lifecycle.recover(mysql, 10) == 1
+    row = database.execute("SELECT status, result_json FROM document_tasks WHERE id='task'")[0]
+    assert row["status"] == "PENDING"
+    assert json.loads(row["result_json"]) == ({} if result is None else result)
+    assert messages == [("task", DocumentTaskStage.CHUNKING)]
+
+
+def test_recovery_batch_limit_and_equal_timestamp_order(mysql, monkeypatch):
+    _prepare_stale_task(mysql)
+    old = database.as_utc(mysql - timedelta(hours=1))
+    for task_id, version in [("a", 2), ("z", 3)]:
+        database.execute(
+            "INSERT INTO document_tasks (id,document_id,version,status,stage,created_at,updated_at) "
+            "VALUES (%(id)s,'doc',%(version)s,'RUNNING','CHUNKING',%(old)s,%(old)s)",
+            {"id": task_id, "version": version, "old": old},
+        )
+    messages = []
+    monkeypatch.setattr(lifecycle, "dispatch", lambda *args: messages.append(args))
+    assert lifecycle.recover(mysql, 2) == 2
+    assert [task_id for task_id, stage in messages] == ["a", "task"]
+    assert orm.get("z").status == "RUNNING"
+    assert lifecycle.recover(mysql, 2) == 1
+    assert [task_id for task_id, stage in messages] == ["a", "task", "z"]
+
+
+def test_maintenance_does_not_redispatch_just_recovered_task_in_same_scan(mysql, monkeypatch):
+    _prepare_stale_task(mysql)
+    cutoff = mysql - timedelta(seconds=maintenance._REDISPATCH_MIN_AGE_SECONDS)
+    for version, offset_us in enumerate([-1, 0, 1], start=2):
+        database.execute(
+            "INSERT INTO document_tasks (id,document_id,version,status,stage,created_at,updated_at) "
+            "VALUES (%(id)s,'doc',%(version)s,'PENDING','INDEXING',%(updated_at)s,%(updated_at)s)",
+            {
+                "id": f"pending-{offset_us}", "version": version,
+                "updated_at": database.as_utc(cutoff + timedelta(microseconds=offset_us)),
+            },
+        )
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return mysql if tz is None else mysql.astimezone(tz)
+
+    messages = []
+    monkeypatch.setattr(maintenance, "datetime", FrozenDatetime)
+    monkeypatch.setattr(lifecycle, "dispatch", lambda *args: messages.append(args))
+    monkeypatch.setattr(maintenance, "dispatch_task", lambda *args: messages.append(args))
+    maintenance.redispatch_pending_tasks()
+    assert messages == [
+        ("task", DocumentTaskStage.CHUNKING),
+        ("pending--1", DocumentTaskStage.INDEXING),
+    ]
+    assert orm.get("task").status == "PENDING"
 
 
 def test_background_thread_uses_independent_connection(mysql):
