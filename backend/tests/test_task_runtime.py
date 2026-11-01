@@ -16,11 +16,13 @@ from services.task_runtime.policy import POLICIES
 
 @pytest.mark.parametrize("stage", list(POLICIES))
 def test_dispatch_uses_stage_queue_and_limits(monkeypatch, stage):
+    from task.chunk_document import chunk_document
     from task.index_document import index_document
     from task.merge_document import merge_document
     from task.parse_document import parse_document
 
     calls = []
+    monkeypatch.setattr(chunk_document, "apply_async", lambda **kw: calls.append(("chunk", kw)))
     monkeypatch.setattr(index_document, "apply_async", lambda **kw: calls.append(("index", kw)))
     monkeypatch.setattr(merge_document, "apply_async", lambda **kw: calls.append(("merge", kw)))
     monkeypatch.setattr(parse_document, "apply_async", lambda **kw: calls.append(("parse", kw)))
@@ -31,6 +33,8 @@ def test_dispatch_uses_stage_queue_and_limits(monkeypatch, stage):
         if stage == Stage.INDEXING
         else "merge"
         if stage == Stage.MERGING
+        else "chunk"
+        if stage == Stage.CHUNKING
         else "parse"
     )
     assert entry == expected_entry

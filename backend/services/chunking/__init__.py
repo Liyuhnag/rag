@@ -5,7 +5,7 @@
 """
 
 from services.chunking.common.models import ChunkOptions
-from services.chunking.token import TokenChunker
+from services.chunking.splitter import TokenChunker
 
 __all__ = [
     "ChunkOptions",

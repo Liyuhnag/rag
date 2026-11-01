@@ -32,7 +32,7 @@ POLICIES = {
         "全部分段的 ZIP", "分段齐全则重新合并，否则回退 PARSING",
     ),
     Stage.CHUNKING: StagePolicy(
-        "parse", "parse_document", 120, 600, 900, 930,
+        "parse", "chunk_document", 120, 600, 900, 930,
         "本版本解析产物", "复用解析产物，否则回退 PARSING",
     ),
     Stage.INDEXING: StagePolicy(
@@ -43,6 +43,7 @@ POLICIES = {
 
 PARSE_STAGES = tuple(stage for stage, policy in POLICIES.items() if policy.queue == "parse")
 MERGE_STAGES = (Stage.MERGING,)
+CHUNK_STAGES = (Stage.CHUNKING,)
 INDEX_STAGES = (Stage.INDEXING,)
 MINERU_POLL_SECONDS = 10
 REDISPATCH_SECONDS = 60

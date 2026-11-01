@@ -12,18 +12,16 @@ from llama_index.core.schema import TextNode
 
 from services.chunking.common.errors import ChunkingFailed
 from services.chunking.common.models import ChunkOptions
-from services.chunking.token import TokenChunker
-from services.chunking.token import _parser
-from services.chunking.token import _tokenizer
+from services.chunking.splitter import TokenChunker
 from services.parsing.models import ParseRequest
 from services.parsing.models import ParsedBlock
 from services.parsing.models import ParsedDocument
 
 
 def test_plain_native_splitters_use_requested_sizes_and_overlap():
-    tokenizer = _tokenizer()
+    chunker = TokenChunker()
     options = ChunkOptions(parent_chunk_size=100, child_chunk_size=30, chunk_overlap=8)
-    parser = _parser(options, tokenizer)
+    parser = chunker.build_parser(options)
     assert type(parser) is HierarchicalNodeParser
     parent = parser.node_parser_map["parent"]
     child = parser.node_parser_map["child"]
@@ -76,18 +74,18 @@ def test_native_tokenizers_work_offline_and_accept_special_token_literals(monkey
 
     monkeypatch.setattr(requests, "get", forbid_network)
     monkeypatch.setattr(nltk, "download", forbid_network)
-    tokenizer = _tokenizer()
-    parser = _parser(
+    chunker = TokenChunker()
+    parser = chunker.build_parser(
         ChunkOptions(parent_chunk_size=60, child_chunk_size=20, chunk_overlap=4),
-        tokenizer,
     )
     nodes = parser.get_nodes_from_documents(
         [Document(text=("Hello world. <|endoftext|> 中文🙂 " * 100))]
     )
     assert nodes
-    assert tokenizer("hello world") == [15339, 1917]
+    assert chunker.tokenizer("hello world") == [15339, 1917]
     assert all(
-        len(tokenizer(node.text)) <= (20 if node.parent_node else 60) for node in nodes
+        len(chunker.tokenizer(node.text)) <= (20 if node.parent_node else 60)
+        for node in nodes
     )
 
 

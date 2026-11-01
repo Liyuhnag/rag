@@ -9,7 +9,7 @@ import tiktoken
 from model.document_chunk.model import ChunkLevel
 from services.chunking.common.errors import ChunkingFailed
 from services.chunking.common.models import ChunkOptions
-from services.chunking.token import TokenChunker
+from services.chunking.splitter import TokenChunker
 from services.parsing.models import ParseRequest
 from services.parsing.models import ParsedBlock
 from services.parsing.models import ParsedDocument

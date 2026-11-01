@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Map native LlamaIndex parent/child nodes to versioned business chunks."""
+"""将 LlamaIndex 原生父子节点映射为带版本标识的业务切分块。"""
 
+from collections.abc import Callable
 from collections.abc import Iterator
 from functools import partial
 from uuid import NAMESPACE_URL
@@ -9,6 +10,8 @@ from uuid import uuid5
 import tiktoken
 from llama_index.core.node_parser import HierarchicalNodeParser
 from llama_index.core.node_parser import SentenceSplitter
+from llama_index.core.node_parser import get_child_nodes
+from llama_index.core.node_parser import get_root_nodes
 from llama_index.core.node_parser.text.utils import split_by_sentence_tokenizer_internal
 from llama_index.core.schema import Document
 from nltk.tokenize import PunktSentenceTokenizer
@@ -21,15 +24,8 @@ from services.parsing.models import ParsedBlock
 from services.parsing.models import ParsedDocument
 
 
-def _tokenizer():
-    """Use tiktoken's native encoding initialization and cache handling."""
-    return tiktoken.get_encoding("cl100k_base").encode_ordinary
-
-
-def _groups(
-    parsed: ParsedDocument, size: int, tokenizer
-) -> Iterator[tuple[ParsedBlock, str, str]]:
-    """Batch compatible blocks; never collect a document or split text ourselves."""
+def _groups(parsed: ParsedDocument) -> Iterator[tuple[ParsedBlock, str, str]]:
+    """按页码、工作表与标题路径聚合相邻文本块，具体按 token 切分交由 LlamaIndex 处理。"""
     first = None
     text = ""
     locators: list[str] = []
@@ -59,7 +55,6 @@ def _groups(
             or count >= 128
             or len(candidate) > 65536
             or len("; ".join(candidate_locators)) > 512
-            or len(tokenizer(candidate)) > size
         ):
             yield first, text, "; ".join(locators)
             first = None
@@ -76,35 +71,42 @@ def _groups(
         yield first, text, "; ".join(locators)
 
 
-def _parser(options: ChunkOptions, tokenizer) -> HierarchicalNodeParser:
-    # LlamaIndex's default helper downloads NLTK data before constructing this
-    # same resource-free native tokenizer. Use its sentence-span adapter directly.
-    sentences = partial(
-        split_by_sentence_tokenizer_internal, tokenizer=PunktSentenceTokenizer()
-    )
-    splitters = {}
-    for name, size, overlap in (
-        ("parent", options.parent_chunk_size, 0),
-        ("child", options.child_chunk_size, options.chunk_overlap),
-    ):
-        splitters[name] = SentenceSplitter(
-            chunk_size=size,
-            chunk_overlap=overlap,
-            tokenizer=tokenizer,
-            chunking_tokenizer_fn=sentences,
+class TokenChunker:
+    """按有界分组逐段调用 LlamaIndex 原生双层切分器。"""
+
+    def __init__(self, tokenizer: Callable[[str], list[int]] | None = None) -> None:
+        self.tokenizer = (
+            tokenizer or tiktoken.get_encoding("cl100k_base").encode_ordinary
+        )
+        # LlamaIndex 默认辅助函数会尝试联网下载 NLTK 数据包；
+        # 这里直接持有无需外部资源的 PunktSentenceTokenizer 保持离线可用。
+        self.sentence_tokenizer = partial(
+            split_by_sentence_tokenizer_internal,
+            tokenizer=PunktSentenceTokenizer(),
+        )
+
+    def build_parser(self, options: ChunkOptions) -> HierarchicalNodeParser:
+        """根据切分参数构造父子双层切分器。"""
+        splitters = {
+            name: SentenceSplitter(
+                chunk_size=size,
+                chunk_overlap=overlap,
+                tokenizer=self.tokenizer,
+                chunking_tokenizer_fn=self.sentence_tokenizer,
+                include_metadata=False,
+                include_prev_next_rel=False,
+            )
+            for name, size, overlap in (
+                ("parent", options.parent_chunk_size, 0),
+                ("child", options.child_chunk_size, options.chunk_overlap),
+            )
+        }
+        return HierarchicalNodeParser.from_defaults(
+            node_parser_ids=["parent", "child"],
+            node_parser_map=splitters,
             include_metadata=False,
             include_prev_next_rel=False,
         )
-    return HierarchicalNodeParser.from_defaults(
-        node_parser_ids=["parent", "child"],
-        node_parser_map=splitters,
-        include_metadata=False,
-        include_prev_next_rel=False,
-    )
-
-
-class TokenChunker:
-    """Run a native two-level parser on one bounded source group at a time."""
 
     def split(
         self, parsed: ParsedDocument, options: ChunkOptions
@@ -114,32 +116,26 @@ class TokenChunker:
     def iter_split(
         self, parsed: ParsedDocument, options: ChunkOptions
     ) -> Iterator[DocumentChunk]:
-        """Yield parents before children; provenance describes the source group."""
-        tokenizer = _tokenizer()
-        parser = _parser(options, tokenizer)
+        """按「父块在前、所属子块在后」的顺序产出，并附带来源定位信息。"""
+        parser = self.build_parser(options)
         chunk_index = 0
         parent_index = 0
-        for block, text, locator in _groups(
-            parsed, options.parent_chunk_size, tokenizer
-        ):
+        for block, text, locator in _groups(parsed):
             try:
                 nodes = parser.get_nodes_from_documents([Document(text=text)])
             except ValueError as exc:
                 raise ChunkingFailed(
                     f"LlamaIndex could not split source block: {exc}"
                 ) from exc
-            by_id = {node.node_id: node for node in nodes}
-            for node in nodes:
-                if node.parent_node is not None:
-                    continue
+            for root in get_root_nodes(nodes):
                 parent_id = str(
                     uuid5(
                         NAMESPACE_URL,
                         f"rag:{parsed.request.document_id}:{parsed.request.version}:parent:{parent_index}",
                     )
                 )
-                children = [by_id[child.node_id] for child in node.child_nodes or []]
-                for order, current in enumerate([node, *children]):
+                children = get_child_nodes([root], all_nodes=nodes)
+                for order, current in enumerate([root, *children]):
                     is_parent = order == 0
                     content = current.get_content()
                     yield DocumentChunk(
@@ -164,7 +160,7 @@ class TokenChunker:
                         locator=locator,
                         heading_path=block.heading_path,
                         content=content,
-                        token_count=len(tokenizer(content)),
+                        token_count=len(self.tokenizer(content)),
                     )
                     chunk_index += 1
                 parent_index += 1

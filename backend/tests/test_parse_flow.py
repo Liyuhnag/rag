@@ -23,6 +23,7 @@ from services.parsing.service import StoredParseResult
 
 worker = importlib.import_module("task.parse_document")
 merge_worker = importlib.import_module("task.merge_document")
+chunk_worker = importlib.import_module("task.chunk_document")
 
 
 def _document() -> Document:
@@ -194,7 +195,7 @@ def test_local_parse_publishes_then_dispatches_independent_chunking(monkeypatch)
         calls.append("persist")
 
     monkeypatch.setattr(worker.DocumentParsingService, "persist", persist)
-    monkeypatch.setattr(worker, "DocumentChunkingService", lambda: pytest.fail("解析消息不执行切分"))
+    monkeypatch.setattr(chunk_worker, "DocumentChunkingService", lambda: pytest.fail("解析消息不执行切分"))
     worker.parse_document.run(task.id)
     assert task.status == "PENDING"
     assert task.stage == "CHUNKING"
@@ -223,9 +224,9 @@ def test_chunking_reuses_artifacts_and_hands_off_or_completes(monkeypatch, file_
         def persist_chunks(self, document_id, version, chunks):
             return True
 
-    monkeypatch.setattr(worker, "DocumentChunkingService", Service)
-    monkeypatch.setattr(worker, "StructuredSchemaService", Service)
-    worker.parse_document.run(task.id)
+    monkeypatch.setattr(chunk_worker, "DocumentChunkingService", Service)
+    monkeypatch.setattr(chunk_worker, "StructuredSchemaService", Service)
+    chunk_worker.chunk_document.run(task.id)
     assert calls[0] == ("save", "doc-1", 1, "md", "json")
     if file_type == "txt":
         assert (task.status, task.stage) == ("PENDING", "INDEXING")
@@ -237,9 +238,17 @@ def test_chunking_reuses_artifacts_and_hands_off_or_completes(monkeypatch, file_
 
 def test_missing_chunking_input_rolls_back_to_parsing(monkeypatch):
     task, _, calls = _prepare(monkeypatch, DocumentTaskStage.CHUNKING)
-    worker.parse_document.run(task.id)
+    chunk_worker.chunk_document.run(task.id)
     assert (task.status, task.stage) == ("PENDING", "PARSING")
     assert calls == [("handoff", "PARSING"), ("dispatch", "PARSING")]
+
+
+def _stage_runner(stage: DocumentTaskStage):
+    if stage == DocumentTaskStage.MERGING:
+        return merge_worker.merge_document
+    if stage == DocumentTaskStage.CHUNKING:
+        return chunk_worker.chunk_document
+    return worker.parse_document
 
 
 @pytest.mark.parametrize("stage", [DocumentTaskStage.PARSING, DocumentTaskStage.MERGING, DocumentTaskStage.CHUNKING])
@@ -249,8 +258,8 @@ def test_stale_version_supersedes_task_without_modifying_document(monkeypatch, s
     document.status = DocumentStatus.READY
     monkeypatch.setattr(worker, "DocumentParsingService", lambda *args: pytest.fail("过期任务不能执行"))
     monkeypatch.setattr(merge_worker, "run_merge", lambda *args: pytest.fail("过期任务不能合并"))
-    runner = merge_worker.merge_document if stage == DocumentTaskStage.MERGING else worker.parse_document
-    runner.run(task.id)
+    monkeypatch.setattr(chunk_worker, "DocumentChunkingService", lambda *args: pytest.fail("过期任务不能切分"))
+    _stage_runner(stage).run(task.id)
     assert task.status == "SUPERSEDED"
     assert task.stage == stage
     assert document.status == "READY"
@@ -274,10 +283,9 @@ def test_business_error_fails_task_and_current_document(monkeypatch, stage):
         compute_chunks = unavailable
         persist_chunks = unavailable
 
-    monkeypatch.setattr(worker, "DocumentChunkingService", Service)
-    runner = merge_worker.merge_document if stage == DocumentTaskStage.MERGING else worker.parse_document
+    monkeypatch.setattr(chunk_worker, "DocumentChunkingService", Service)
     with pytest.raises(RuntimeError, match="service unavailable"):
-        runner.run(task.id)
+        _stage_runner(stage).run(task.id)
     assert (task.status, task.stage) == ("FAILED", stage)
     assert document.status == "FAILED"
     assert calls == []
@@ -332,7 +340,7 @@ def test_chunking_requires_parsed_version_to_match_task(monkeypatch, offset):
     document.status = DocumentStatus.PROCESSING
     document.parsed_md_key, document.parsed_json_key = "md", "json"
     document.parsed_version = None if offset is None else task.version + offset
-    monkeypatch.setattr(worker, "DocumentChunkingService", lambda: pytest.fail("版本不符不应执行切分"))
-    worker.parse_document.run(task.id)
+    monkeypatch.setattr(chunk_worker, "DocumentChunkingService", lambda: pytest.fail("版本不符不应执行切分"))
+    chunk_worker.chunk_document.run(task.id)
     assert (task.status, task.stage) == ("PENDING", "PARSING")
     assert calls == [("handoff", "PARSING"), ("dispatch", "PARSING")]

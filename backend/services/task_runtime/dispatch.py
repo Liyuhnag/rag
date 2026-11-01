@@ -13,11 +13,13 @@ def dispatch(task_id: str, stage: DocumentTaskStage) -> bool:
     """消息只提供定位信息，执行权由目标 worker 自行领取。"""
     policy = policy_for(stage)
     # 延迟导入，避免上传、Celery 任务注册与运行时之间形成导入环。
+    from task.chunk_document import chunk_document
     from task.index_document import index_document
     from task.merge_document import merge_document
     from task.parse_document import parse_document
 
     entries = {
+        "chunk_document": chunk_document,
         "index_document": index_document,
         "merge_document": merge_document,
         "parse_document": parse_document,

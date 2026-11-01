@@ -4,13 +4,12 @@
 from collections.abc import Iterable
 from collections.abc import Iterator
 
-from model.document.model import Document
 from model.document_chunk import orm as chunk_orm
 from model.document_chunk.model import DocumentChunk
 from services.chunking.common.errors import ChunkingFailed
 from services.chunking.common.models import ChunkOptions
 from services.chunking.source import StoredParsedSource
-from services.chunking.token import TokenChunker
+from services.chunking.splitter import TokenChunker
 
 
 class DocumentChunkingService:
@@ -20,26 +19,6 @@ class DocumentChunkingService:
         self.source = source or StoredParsedSource()
         self.chunker = chunker or TokenChunker()
         self.options = options or ChunkOptions()
-
-    def run(
-        self,
-        document: Document,
-        version: int,
-        md_key: str,
-        json_key: str,
-    ) -> bool:
-        """流式执行切分；返回 False 表示版本过期、未写入。
-
-        source 管理 S3 响应流；chunker 用框架原生层级切分并映射数据库字段。
-        ORM 在消费块流前锁定并复核版本，分批写入块及计数，异常整体回滚。
-        """
-        if document.parse_version > version:
-            return False
-        with self.source.read(document, version, md_key, json_key) as parsed:
-            chunks = self.chunker.iter_split(parsed, self.options)
-            return chunk_orm.replace_current_version(
-                document.id, version, _require_chunks(chunks)
-            )
 
     def compute_chunks(self, document, version, md_key, json_key, heartbeat=None):
         """锁外切分：读取 S3 并在内存生成块列表；版本已过期返回 None。
