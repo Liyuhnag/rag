@@ -17,15 +17,24 @@ from services.task_runtime.policy import POLICIES
 @pytest.mark.parametrize("stage", list(POLICIES))
 def test_dispatch_uses_stage_queue_and_limits(monkeypatch, stage):
     from task.index_document import index_document
+    from task.merge_document import merge_document
     from task.parse_document import parse_document
 
     calls = []
     monkeypatch.setattr(index_document, "apply_async", lambda **kw: calls.append(("index", kw)))
+    monkeypatch.setattr(merge_document, "apply_async", lambda **kw: calls.append(("merge", kw)))
     monkeypatch.setattr(parse_document, "apply_async", lambda **kw: calls.append(("parse", kw)))
     assert dispatch_module.dispatch("task", stage)
-    queue, message = calls[0]
-    assert queue == ("index" if stage == Stage.INDEXING else "parse")
-    assert message["queue"] == queue
+    entry, message = calls[0]
+    expected_entry = (
+        "index"
+        if stage == Stage.INDEXING
+        else "merge"
+        if stage == Stage.MERGING
+        else "parse"
+    )
+    assert entry == expected_entry
+    assert message["queue"] == ("index" if stage == Stage.INDEXING else "parse")
     assert message["args"] == ["task"]
     assert 0 < message["soft_time_limit"] < message["time_limit"]
 

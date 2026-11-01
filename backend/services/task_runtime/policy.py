@@ -28,7 +28,7 @@ POLICIES = {
         "源文件 / 已提交分段", "本地重放或接管已有 MinerU 分段",
     ),
     Stage.MERGING: StagePolicy(
-        "parse", "parse_document", 120, 600, 300, 330,
+        "parse", "merge_document", 120, 600, 300, 330,
         "全部分段的 ZIP", "分段齐全则重新合并，否则回退 PARSING",
     ),
     Stage.CHUNKING: StagePolicy(
@@ -42,6 +42,7 @@ POLICIES = {
 }
 
 PARSE_STAGES = tuple(stage for stage, policy in POLICIES.items() if policy.queue == "parse")
+MERGE_STAGES = (Stage.MERGING,)
 INDEX_STAGES = (Stage.INDEXING,)
 MINERU_POLL_SECONDS = 10
 REDISPATCH_SECONDS = 60
