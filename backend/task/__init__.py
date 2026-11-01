@@ -10,6 +10,7 @@ from task.maintenance import recover_completing_uploads
 from task.maintenance import redispatch_pending_tasks
 from task.maintenance import retry_aborting_uploads
 from task.index_document import index_document
+from task.merge_document import merge_document
 from task.parse_document import parse_document
 from task.poll_parse import download_parse_result
 from task.poll_parse import poll_parse_jobs
@@ -23,6 +24,7 @@ __all__ = [
     "expire_uploads",
     "index_document",
     "download_parse_result",
+    "merge_document",
     "parse_document",
     "poll_parse_jobs",
     "resubmit_parse_part",

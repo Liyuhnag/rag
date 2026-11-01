@@ -22,7 +22,6 @@ from model.parse_job.model import ParseJobStatus
 from services.chunking.service import DocumentChunkingService
 from services.document.versioning import fail_version_mismatch
 from services.parsing.poll import resume_parts
-from services.parsing.poll import run_merge
 from services.parsing.service import DocumentParsingService
 from services.parsing.service import SubmittedParse
 from services.parsing.service import StoredParseResult
@@ -30,12 +29,16 @@ from services.structured.service import StructuredSchemaService
 from services.task_runtime.lease import TaskLease
 from services.task_runtime.lifecycle import advance
 from services.task_runtime.lifecycle import fail
-from services.task_runtime.policy import PARSE_STAGES
 from services.task_runtime.policy import MINERU_POLL_SECONDS
 from services.task_runtime.policy import policy_for
 from task.app import celery_app
 
 logger = logging.getLogger("rag.task")
+_PARSE_CLAIM_STAGES = (
+    DocumentTaskStage.PENDING,
+    DocumentTaskStage.PARSING,
+    DocumentTaskStage.CHUNKING,
+)
 
 
 @celery_app.task(
@@ -70,9 +73,7 @@ def _run(task: DocumentTask, lease: TaskLease) -> None:
             if document.parse_version != task.version:
                 fail_version_mismatch(task, _now())
                 return
-        if task.stage == DocumentTaskStage.MERGING:
-            run_merge(task, document, lease)
-        elif task.stage == DocumentTaskStage.CHUNKING:
+        if task.stage == DocumentTaskStage.CHUNKING:
             completed = (
                 document.parsed_md_key
                 and document.parsed_json_key
@@ -189,7 +190,7 @@ def _chunk(
 
 def _claim_task(task_id: str) -> DocumentTask | None:
     """条件抢占 PENDING 任务。"""
-    return task_orm.claim(task_id, _now(), PARSE_STAGES)
+    return task_orm.claim(task_id, _now(), _PARSE_CLAIM_STAGES)
 
 
 def _load_document(task: DocumentTask, lease: TaskLease) -> Document | None:

@@ -253,7 +253,9 @@ def test_retry_reuses_zip_and_active_parts_and_resubmits_only_failed_part(mysql,
     assert job_orm.claim_due(mysql, 10) == []
     task = orm.claim("task", mysql, (stage,))
     if stage == Stage.MERGING:
-        poll.run_merge(task, document_orm.get("doc"), TaskLease("task", task.lease_token, (stage,)))
+        from services.merge.service import run_merge
+
+        run_merge(task, document_orm.get("doc"), TaskLease("task", task.lease_token, (stage,)))
         assert orm.get("task").stage == "PARSING"
         task = orm.claim("task", mysql, (Stage.PARSING,))
     lease = TaskLease("task", task.lease_token, (Stage.PARSING,))

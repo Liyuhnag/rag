@@ -7,7 +7,6 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
-from datetime import timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -18,14 +17,13 @@ from model.document_task.model import DocumentTaskStage
 from model.parse_job import orm as parse_job_orm
 from model.parse_job.model import ParseJob
 from model.parse_job.model import ParseJobStatus
+from services.merge.service import all_downloaded
 from services.parsing.adapters.object_reader import StorageObjectReader
-from services.parsing.collect import PartZip
 from services.parsing.errors import MinerUJobLost
 from services.parsing.errors import MinerURequestError
 from services.parsing.errors import ParserUnavailable
 from services.parsing.mineru.client import MinerUClient
 from services.parsing.ports import ObjectReader
-from services.parsing.service import DocumentParsingService
 from services.task_runtime.lease import TaskLease
 from services.task_runtime.lifecycle import advance
 from services.task_runtime.policy import MINERU_POLL_SECONDS
@@ -266,13 +264,20 @@ def download_job(
 ) -> None:
     """下载分段，齐备后交接独立 MERGING 消息。"""
     job = parse_job_orm.get(job_id)
-    if job is None or job.status != ParseJobStatus.DOWNLOADING:
+    if job is None or job.status not in (
+        ParseJobStatus.DOWNLOADING,
+        ParseJobStatus.COMPLETED,
+    ):
         return
     if lease_token is not None and job.lease_token != lease_token:
         return
     try:
         with _lease(job, parsing_only=True) as lease:
-            if not job.result_key and not _store_zip(job, mineru, reader, now, lease):
+            if (
+                job.status == ParseJobStatus.DOWNLOADING
+                and not job.result_key
+                and not _store_zip(job, mineru, reader, now, lease)
+            ):
                 return
         merge_ready(job, reader, now)
     except LeaseLost:
@@ -285,7 +290,7 @@ def merge_ready(job: ParseJob, reader: ObjectReader, now: datetime) -> None:
         with _lease(job, parsing_only=True) as lease:
             with lease.writes():
                 jobs = parse_job_orm.list_by_document_version(job.document_id, job.version, lease.token)
-                ready = _all_downloaded(jobs)
+                ready = all_downloaded(jobs)
             if ready:
                 advance(lease, DocumentTaskStage.MERGING, 80, "等待合并")
     except LeaseLost:
@@ -298,32 +303,9 @@ def resume_parts(task, lease: TaskLease) -> bool:
         jobs = parse_job_orm.adopt_task_jobs(task.id, task.document_id, task.version, lease.token)
     if not jobs:
         return False
-    if _all_downloaded(jobs):
+    if all_downloaded(jobs):
         advance(lease, DocumentTaskStage.MERGING, 80, "等待合并")
     return True
-
-
-def run_merge(task, document, lease: TaskLease, reader: ObjectReader | None = None) -> None:
-    """独立 MERGING 入口；发布解析指针与交接 CHUNKING 原子提交。"""
-    with lease.writes():
-        jobs = parse_job_orm.adopt_task_jobs(task.id, task.document_id, task.version, lease.token)
-    if not _all_downloaded(jobs):
-        advance(lease, DocumentTaskStage.PARSING, 5, "分段未齐，继续等待解析")
-        return
-    parts = [PartZip(item.part_index, item.page_start, item.page_end, item.result_key) for item in jobs]
-    lease.ensure()
-    stored = DocumentParsingService(reader, attempt_id=lease.token).collect(
-        document.id, task.version, document.file_type, document.object_key, parts,
-    )
-
-    def publish() -> None:
-        document_orm.set_parsed_artifacts(
-            document.id, stored.md_key, stored.json_key, datetime.now(timezone.utc),
-            expected_version=task.version,
-        )
-        # result_key 在此仍保留 ZIP，避免恢复时误把 manifest 当作压缩包。
-
-    advance(lease, DocumentTaskStage.CHUNKING, 85, "等待切分", prepare=publish)
 
 
 def _wait(status: ParseJobStatus, now: datetime) -> PollPlan:
@@ -399,15 +381,6 @@ def _store_zip(job, mineru, reader, now: datetime, lease: TaskLease) -> bool:
     with lease.writes():
         parse_job_orm.save_zip(job.id, key, now)
     return True
-
-
-def _all_downloaded(jobs: list[ParseJob]) -> bool:
-    if not jobs:
-        return False
-    return all(
-        item.status == ParseJobStatus.DOWNLOADING and bool(item.result_key)
-        for item in jobs
-    )
 
 
 def _fail_document(

@@ -177,10 +177,7 @@ def claim_due(now: datetime, limit: int) -> list[ParseJob]:
                           = parse_jobs.lease_token
                 ) AND next_poll_at IS NOT NULL
                   AND next_poll_at <= %(now)s
-                  AND (
-                    status IN ('SUBMITTED', 'RUNNING', 'RESUBMITTING')
-                    OR (status = 'DOWNLOADING' AND result_key IS NULL)
-                  )
+                  AND status IN ('SUBMITTED', 'RUNNING', 'RESUBMITTING', 'DOWNLOADING')
                 ORDER BY next_poll_at
                 LIMIT %(limit)s
                 FOR UPDATE SKIP LOCKED
@@ -274,11 +271,13 @@ def record_submission(
 
 
 def save_zip(job_id: str, zip_key: str, now: datetime) -> bool:
-    """记下已下载的压缩包。只有第一次写入成功。"""
+    """记下已下载的压缩包，将分段推进到 COMPLETED 并清除下次轮询时间。"""
     count = execute_count(
         """
         UPDATE parse_jobs
-        SET result_key = %(zip_key)s,
+        SET status = %(status)s,
+            result_key = %(zip_key)s,
+            next_poll_at = NULL,
             updated_at = %(now)s
         WHERE id = %(id)s
           AND status = 'DOWNLOADING'
@@ -286,6 +285,7 @@ def save_zip(job_id: str, zip_key: str, now: datetime) -> bool:
         """,
         {
             "id": job_id,
+            "status": ParseJobStatus.COMPLETED.value,
             "zip_key": zip_key,
             "now": as_utc(now),
         },

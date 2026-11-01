@@ -329,25 +329,28 @@ def test_download_waits_when_a_sibling_is_missing(monkeypatch):
 
 
 def test_download_hands_off_without_collecting_or_chunking(monkeypatch):
-    job = _job(status=ParseJobStatus.DOWNLOADING, result_key="part.zip")
+    from services.merge import service as merge_service
+
+    job = _job(status=ParseJobStatus.COMPLETED, result_key="part.zip")
     calls = []
     monkeypatch.setattr(poll.parse_job_orm, "get", lambda *args: job)
     monkeypatch.setattr(poll.parse_job_orm, "list_by_document_version", lambda *args: [job])
     monkeypatch.setattr(poll, "advance", lambda lease, stage, *args: calls.append(stage))
-    monkeypatch.setattr(poll, "DocumentParsingService", lambda *args: pytest.fail("下载消息不能合并"))
+    monkeypatch.setattr(merge_service, "DocumentParsingService", lambda *args: pytest.fail("下载消息不能合并"))
     download_job(job.id, _Mineru(), _Reader(), _now())
     assert calls == [DocumentTaskStage.MERGING]
     assert job.result_key == "part.zip"
 
 
 def test_merge_publishes_and_hands_off_with_zip_pointer_preserved(monkeypatch):
+    from services.merge import service as merge_service
     from services.task_runtime.lease import TaskLease
 
-    job = _job(status=ParseJobStatus.DOWNLOADING, result_key="part.zip")
+    job = _job(status=ParseJobStatus.COMPLETED, result_key="part.zip")
     task = _task()
     task.stage = DocumentTaskStage.MERGING
     calls = []
-    monkeypatch.setattr(poll.parse_job_orm, "adopt_task_jobs", lambda *args: [job])
+    monkeypatch.setattr(merge_service.parse_job_orm, "adopt_task_jobs", lambda *args: [job])
 
     class Service:
         def __init__(self, *args, **kwargs):
@@ -361,23 +364,24 @@ def test_merge_publishes_and_hands_off_with_zip_pointer_preserved(monkeypatch):
         prepare()
         calls.append(("handoff", stage))
 
-    monkeypatch.setattr(poll, "DocumentParsingService", Service)
-    monkeypatch.setattr(poll, "advance", advance)
-    monkeypatch.setattr(poll.document_orm, "set_parsed_artifacts", lambda *args, **kw: calls.append("publish"))
-    poll.run_merge(task, _document(), TaskLease(task.id, task.lease_token), _Reader())
+    monkeypatch.setattr(merge_service, "DocumentParsingService", Service)
+    monkeypatch.setattr(merge_service, "advance", advance)
+    monkeypatch.setattr(merge_service.document_orm, "set_parsed_artifacts", lambda *args, **kw: calls.append("publish"))
+    merge_service.run_merge(task, _document(), TaskLease(task.id, task.lease_token), _Reader())
     assert calls == ["publish", ("handoff", DocumentTaskStage.CHUNKING)]
     assert job.result_key == "part.zip"
 
 
 def test_merge_missing_parts_rolls_back_to_parsing(monkeypatch):
+    from services.merge import service as merge_service
     from services.task_runtime.lease import TaskLease
 
     task = _task()
     task.stage = DocumentTaskStage.MERGING
     calls = []
-    monkeypatch.setattr(poll.parse_job_orm, "adopt_task_jobs", lambda *args: [])
-    monkeypatch.setattr(poll, "advance", lambda lease, stage, *args: calls.append(stage))
-    poll.run_merge(task, _document(), TaskLease(task.id, task.lease_token))
+    monkeypatch.setattr(merge_service.parse_job_orm, "adopt_task_jobs", lambda *args: [])
+    monkeypatch.setattr(merge_service, "advance", lambda lease, stage, *args: calls.append(stage))
+    merge_service.run_merge(task, _document(), TaskLease(task.id, task.lease_token))
     assert calls == [DocumentTaskStage.PARSING]
 
 
@@ -505,3 +509,19 @@ def test_lease_replaced_during_mineru_status_cannot_apply_result(monkeypatch):
     monkeypatch.setattr(poll.task_orm, "fail", unexpected)
     monkeypatch.setattr(poll.document_orm, "mark_failed", unexpected)
     poll_job(_job(attempts=3), mineru, _now())
+
+
+def test_save_zip_marks_completed_and_clears_next_poll_at(monkeypatch):
+    executed = []
+    monkeypatch.setattr(
+        poll.parse_job_orm,
+        "execute_count",
+        lambda sql, params: executed.append((sql, params)) or 1,
+    )
+    now = _now()
+    assert poll.parse_job_orm.save_zip("job-1", "part-1.zip", now)
+    sql, params = executed[0]
+    assert "status = %(status)s" in sql
+    assert "next_poll_at = NULL" in sql
+    assert params["status"] == ParseJobStatus.COMPLETED.value
+    assert params["zip_key"] == "part-1.zip"

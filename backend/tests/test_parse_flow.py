@@ -22,6 +22,7 @@ from services.parsing.service import SubmittedParse
 from services.parsing.service import StoredParseResult
 
 worker = importlib.import_module("task.parse_document")
+merge_worker = importlib.import_module("task.merge_document")
 
 
 def _document() -> Document:
@@ -153,7 +154,7 @@ def test_reclaimed_mineru_parts_are_reused_without_resubmission(monkeypatch, dow
     document.status = DocumentStatus.PROCESSING
     part = SimpleNamespace(
         id="existing-part",
-        status=ParseJobStatus.DOWNLOADING if downloaded else ParseJobStatus.SUBMITTED,
+        status=ParseJobStatus.COMPLETED if downloaded else ParseJobStatus.SUBMITTED,
         result_key="existing.zip" if downloaded else None,
         mineru_job_id="existing-remote-job",
     )
@@ -247,7 +248,9 @@ def test_stale_version_supersedes_task_without_modifying_document(monkeypatch, s
     document.parse_version = 2
     document.status = DocumentStatus.READY
     monkeypatch.setattr(worker, "DocumentParsingService", lambda *args: pytest.fail("过期任务不能执行"))
-    worker.parse_document.run(task.id)
+    monkeypatch.setattr(merge_worker, "run_merge", lambda *args: pytest.fail("过期任务不能合并"))
+    runner = merge_worker.merge_document if stage == DocumentTaskStage.MERGING else worker.parse_document
+    runner.run(task.id)
     assert task.status == "SUPERSEDED"
     assert task.stage == stage
     assert document.status == "READY"
@@ -264,7 +267,7 @@ def test_business_error_fails_task_and_current_document(monkeypatch, stage):
         raise RuntimeError("service unavailable")
 
     monkeypatch.setattr(worker.DocumentParsingService, "parse", unavailable)
-    monkeypatch.setattr(worker, "run_merge", unavailable)
+    monkeypatch.setattr(merge_worker, "run_merge", unavailable)
 
     class Service:
         run = unavailable
@@ -272,8 +275,9 @@ def test_business_error_fails_task_and_current_document(monkeypatch, stage):
         persist_chunks = unavailable
 
     monkeypatch.setattr(worker, "DocumentChunkingService", Service)
+    runner = merge_worker.merge_document if stage == DocumentTaskStage.MERGING else worker.parse_document
     with pytest.raises(RuntimeError, match="service unavailable"):
-        worker.parse_document.run(task.id)
+        runner.run(task.id)
     assert (task.status, task.stage) == ("FAILED", stage)
     assert document.status == "FAILED"
     assert calls == []
