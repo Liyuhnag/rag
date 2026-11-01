@@ -264,13 +264,20 @@ def download_job(
 ) -> None:
     """下载分段，齐备后交接独立 MERGING 消息。"""
     job = parse_job_orm.get(job_id)
-    if job is None or job.status != ParseJobStatus.DOWNLOADING:
+    if job is None or job.status not in (
+        ParseJobStatus.DOWNLOADING,
+        ParseJobStatus.COMPLETED,
+    ):
         return
     if lease_token is not None and job.lease_token != lease_token:
         return
     try:
         with _lease(job, parsing_only=True) as lease:
-            if not job.result_key and not _store_zip(job, mineru, reader, now, lease):
+            if (
+                job.status == ParseJobStatus.DOWNLOADING
+                and not job.result_key
+                and not _store_zip(job, mineru, reader, now, lease)
+            ):
                 return
         merge_ready(job, reader, now)
     except LeaseLost:

@@ -19,11 +19,11 @@ from services.task_runtime.lifecycle import advance
 
 
 def all_downloaded(jobs: list[ParseJob]) -> bool:
-    """全部分段均处于 DOWNLOADING 且已写入 ZIP 对象 key。"""
+    """全部分段均已完成下载（COMPLETED）且已写入 ZIP 对象 key。"""
     if not jobs:
         return False
     return all(
-        item.status == ParseJobStatus.DOWNLOADING and bool(item.result_key)
+        item.status == ParseJobStatus.COMPLETED and bool(item.result_key)
         for item in jobs
     )
 

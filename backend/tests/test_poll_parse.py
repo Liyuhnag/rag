@@ -331,7 +331,7 @@ def test_download_waits_when_a_sibling_is_missing(monkeypatch):
 def test_download_hands_off_without_collecting_or_chunking(monkeypatch):
     from services.merge import service as merge_service
 
-    job = _job(status=ParseJobStatus.DOWNLOADING, result_key="part.zip")
+    job = _job(status=ParseJobStatus.COMPLETED, result_key="part.zip")
     calls = []
     monkeypatch.setattr(poll.parse_job_orm, "get", lambda *args: job)
     monkeypatch.setattr(poll.parse_job_orm, "list_by_document_version", lambda *args: [job])
@@ -346,7 +346,7 @@ def test_merge_publishes_and_hands_off_with_zip_pointer_preserved(monkeypatch):
     from services.merge import service as merge_service
     from services.task_runtime.lease import TaskLease
 
-    job = _job(status=ParseJobStatus.DOWNLOADING, result_key="part.zip")
+    job = _job(status=ParseJobStatus.COMPLETED, result_key="part.zip")
     task = _task()
     task.stage = DocumentTaskStage.MERGING
     calls = []
@@ -509,3 +509,19 @@ def test_lease_replaced_during_mineru_status_cannot_apply_result(monkeypatch):
     monkeypatch.setattr(poll.task_orm, "fail", unexpected)
     monkeypatch.setattr(poll.document_orm, "mark_failed", unexpected)
     poll_job(_job(attempts=3), mineru, _now())
+
+
+def test_save_zip_marks_completed_and_clears_next_poll_at(monkeypatch):
+    executed = []
+    monkeypatch.setattr(
+        poll.parse_job_orm,
+        "execute_count",
+        lambda sql, params: executed.append((sql, params)) or 1,
+    )
+    now = _now()
+    assert poll.parse_job_orm.save_zip("job-1", "part-1.zip", now)
+    sql, params = executed[0]
+    assert "status = %(status)s" in sql
+    assert "next_poll_at = NULL" in sql
+    assert params["status"] == ParseJobStatus.COMPLETED.value
+    assert params["zip_key"] == "part-1.zip"

@@ -154,7 +154,7 @@ def test_reclaimed_mineru_parts_are_reused_without_resubmission(monkeypatch, dow
     document.status = DocumentStatus.PROCESSING
     part = SimpleNamespace(
         id="existing-part",
-        status=ParseJobStatus.DOWNLOADING if downloaded else ParseJobStatus.SUBMITTED,
+        status=ParseJobStatus.COMPLETED if downloaded else ParseJobStatus.SUBMITTED,
         result_key="existing.zip" if downloaded else None,
         mineru_job_id="existing-remote-job",
     )

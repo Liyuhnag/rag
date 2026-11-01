@@ -492,7 +492,7 @@ def test_adoption_reuses_remote_job_and_downloaded_zip(mysql):
     job_orm.insert(_job(
         id="part", task_id="task", document_id="doc", version=1,
         lease_token=old.lease_token,
-        status=ParseJobStatus.DOWNLOADING, result_key="old.zip",
+        status=ParseJobStatus.COMPLETED, result_key="old.zip",
     ))
     database.execute("UPDATE document_tasks SET status='PENDING' WHERE id='task'")
     new = orm.claim("task", mysql)
