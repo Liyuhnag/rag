@@ -70,10 +70,7 @@ class PdfParser(BaseParser):
         index: int,
         segment: PdfSegment,
     ) -> SubmittedPart:
-        """提交一段。成功后立即写入 parse_jobs，已有远端任务的段不再提交。"""
-        saved = _saved_part(source, index)
-        if saved is not None:
-            return saved
+        """提交一段。成功后立即写入 parse_jobs。"""
         if segment.path == source_path:
             key = source.request.object_key
             part_name = filename
@@ -99,23 +96,6 @@ class PdfParser(BaseParser):
         )
         _store_part(source, part)
         return part
-
-
-def _saved_part(source: ParseInput, index: int) -> SubmittedPart | None:
-    """这一段已经交给 MinerU 时，直接用库里的任务号。"""
-    if not source.task_id or not source.lease_token:
-        return None
-    existing = parse_job_orm.find_part(source.request.document_id, source.request.version, index)
-    if existing is None or not existing.mineru_job_id:
-        return None
-    return SubmittedPart(
-        file_id=existing.mineru_file_id or "",
-        job_id=existing.mineru_job_id,
-        part_index=index,
-        page_start=existing.page_start,
-        page_end=existing.page_end,
-        source_key=existing.source_key,
-    )
 
 
 def _store_part(source: ParseInput, part: SubmittedPart) -> None:

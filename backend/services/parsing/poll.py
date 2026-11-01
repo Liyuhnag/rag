@@ -293,16 +293,13 @@ def merge_ready(job: ParseJob, reader: ObjectReader, now: datetime) -> None:
 
 
 def resume_parts(task, lease: TaskLease) -> bool:
-    """领取后接管已提交分段。提交循环没写完时返回 False，调用方继续缺的段。"""
+    """领取后接管已提交分段；不重新解析已有远端任务。"""
     with lease.writes():
         jobs = parse_job_orm.adopt_task_jobs(task.id, task.document_id, task.version, lease.token)
     if not jobs:
         return False
     if _all_downloaded(jobs):
         advance(lease, DocumentTaskStage.MERGING, 80, "等待合并")
-        return True
-    if task.step != "分段已提交":
-        return False
     return True
 
 

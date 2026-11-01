@@ -151,7 +151,6 @@ def test_reclaimed_mineru_parts_are_reused_without_resubmission(monkeypatch, dow
     task, document, calls = _prepare(monkeypatch)
     document.file_type = "pdf"
     document.status = DocumentStatus.PROCESSING
-    task.step = "分段已提交"
     part = SimpleNamespace(
         id="existing-part",
         status=ParseJobStatus.DOWNLOADING if downloaded else ParseJobStatus.SUBMITTED,
@@ -180,32 +179,6 @@ def test_reclaimed_mineru_parts_are_reused_without_resubmission(monkeypatch, dow
     else:
         assert (task.status, task.stage) == ("RUNNING", "PARSING")
         assert calls == []
-
-
-def test_unfinished_pdf_submission_continues_parse(monkeypatch):
-    from types import SimpleNamespace
-
-    from model.parse_job.model import ParseJobStatus
-
-    task, document, calls = _prepare(monkeypatch)
-    document.file_type = "pdf"
-    document.status = DocumentStatus.PROCESSING
-    existing = SimpleNamespace(
-        status=ParseJobStatus.SUBMITTED,
-        result_key=None,
-        mineru_job_id="remote-1",
-    )
-    monkeypatch.setattr(worker.parse_job_orm, "adopt_task_jobs", lambda *args: [existing])
-    called = []
-    monkeypatch.setattr(
-        worker.DocumentParsingService,
-        "parse",
-        lambda self, document, version: called.append(self.task_id) or SubmittedParse(parts=()),
-    )
-    worker.parse_document.run(task.id)
-    assert called == ["task-1"]
-    assert task.status == "RUNNING"
-    assert calls == []
 
 
 def test_local_parse_publishes_then_dispatches_independent_chunking(monkeypatch):
