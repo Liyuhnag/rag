@@ -32,7 +32,7 @@ def _document() -> Document:
         file_type="txt",
         size_bytes=4,
         chunk_count=0,
-        status=DocumentStatus.UPLOADED,
+        status=DocumentStatus.PROCESSING,
         uploaded_at=now,
         updated_at=now,
         object_key="documents/doc-1/demo.txt",
@@ -285,7 +285,7 @@ def test_version_changed_before_begin_parse_is_superseded(monkeypatch):
     monkeypatch.setattr(worker.DocumentParsingService, "parse", lambda *args: pytest.fail("不能解析"))
     worker.parse_document.run(task.id)
     assert task.status == "SUPERSEDED"
-    assert document.status == "UPLOADED"
+    assert document.status == "PROCESSING"
 
 
 @pytest.mark.parametrize("lost_at", ["parse", "upload"])

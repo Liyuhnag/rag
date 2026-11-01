@@ -140,7 +140,7 @@ def test_uploaded_document_first_claim_starts_processing(client, monkeypatch, pa
     task = repository.get_task(completed["taskId"])
     document = repository.documents[created["documentId"]]
     parsed_versions = []
-    assert document.status == DocumentStatus.UPLOADED
+    assert document.status == DocumentStatus.PROCESSING
     assert document.parse_version == task.version == 1
 
     def claim_update(sql, params):

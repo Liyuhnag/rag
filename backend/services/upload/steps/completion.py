@@ -287,7 +287,7 @@ def _completed_document(session: UploadSession, now: datetime) -> Document:
         file_type=session.file_type,
         size_bytes=session.size_bytes,
         chunk_count=0,
-        status=DocumentStatus.UPLOADED,
+        status=DocumentStatus.PROCESSING,
         uploaded_at=now,
         updated_at=now,
         object_key=session.object_key,
