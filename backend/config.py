@@ -47,6 +47,28 @@ def _required(name: str) -> str:
     return value
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{name} 必须是布尔值")
+
+
+def _str_env(name: str, default: str) -> str:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = raw.strip()
+    if not value:
+        raise RuntimeError(f"{name} 不能为空")
+    return value
+
+
 def _int_env(name: str, default: int, minimum: int = 1) -> int:
     raw = os.getenv(name, str(default))
     try:
@@ -55,6 +77,20 @@ def _int_env(name: str, default: int, minimum: int = 1) -> int:
         raise RuntimeError(f"{name} 必须是整数") from exc
     if value < minimum:
         raise RuntimeError(f"{name} 必须大于等于 {minimum}")
+    return value
+
+
+def _rerank_candidates_from_env() -> int:
+    value = _int_env("RETRIEVAL_RERANK_CANDIDATES", 20)
+    if value > 50:
+        raise RuntimeError("RETRIEVAL_RERANK_CANDIDATES 不能超过 50")
+    return value
+
+
+def _rerank_top_n_from_env() -> int:
+    value = _int_env("RETRIEVAL_RERANK_TOP_N", 10)
+    if value > _rerank_candidates_from_env():
+        raise RuntimeError("RETRIEVAL_RERANK_TOP_N 不能超过 RETRIEVAL_RERANK_CANDIDATES")
     return value
 
 
@@ -117,6 +153,17 @@ class Settings:
     es_bulk_size: int = 500
     es_analyzer: str = "ik_max_word"
     es_search_analyzer: str = "ik_smart"
+    retrieval_rerank_enabled: bool = False
+    rerank_base_url: str = "https://dashscope.aliyuncs.com/api/v1"
+    rerank_model: str = "gte-rerank-v2"
+    retrieval_rerank_candidates: int = 20
+    retrieval_rerank_top_n: int = 10
+    rerank_timeout_seconds: int = 15
+    rerank_connect_timeout_seconds: int = 5
+    rerank_max_retries: int = 1
+    rerank_max_doc_chars: int = 4000
+    rerank_failure_circuit_threshold: int = 5
+    rerank_circuit_open_seconds: int = 300
 
 
 def load_settings() -> Settings:
@@ -273,5 +320,25 @@ def load_settings() -> Settings:
         indexing_batch_size=indexing_batch_size,
         indexing_timeout_seconds=_int_env("INDEXING_TIMEOUT_SECONDS", 60),
         es_bulk_size=_int_env("ES_BULK_SIZE", 500),
+        retrieval_rerank_enabled=_bool_env("RETRIEVAL_RERANK_ENABLED", False),
+        rerank_base_url=_str_env(
+            "RERANK_BASE_URL",
+            "https://dashscope.aliyuncs.com/api/v1",
+        ),
+        rerank_model=_str_env("RERANK_MODEL", "gte-rerank-v2"),
+        retrieval_rerank_candidates=_rerank_candidates_from_env(),
+        retrieval_rerank_top_n=_rerank_top_n_from_env(),
+        rerank_timeout_seconds=_int_env("RERANK_TIMEOUT_SECONDS", 15),
+        rerank_connect_timeout_seconds=_int_env(
+            "RERANK_CONNECT_TIMEOUT_SECONDS",
+            5,
+        ),
+        rerank_max_retries=_int_env("RERANK_MAX_RETRIES", 1, minimum=0),
+        rerank_max_doc_chars=_int_env("RERANK_MAX_DOC_CHARS", 4000),
+        rerank_failure_circuit_threshold=_int_env(
+            "RERANK_FAILURE_CIRCUIT_THRESHOLD",
+            5,
+        ),
+        rerank_circuit_open_seconds=_int_env("RERANK_CIRCUIT_OPEN_SECONDS", 300),
         **indexing_strings,
     )

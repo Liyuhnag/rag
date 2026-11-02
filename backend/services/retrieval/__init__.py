@@ -19,6 +19,11 @@ from services.retrieval.keyword import KeywordRetrievalInput
 from services.retrieval.keyword import KeywordRetriever
 from services.retrieval.keyword import KeywordSearchResult
 from services.retrieval.keyword import build_es_dsl
+from services.retrieval.rerank import DashScopeRerankClient
+from services.retrieval.rerank import RerankCallError
+from services.retrieval.rerank import RerankInput
+from services.retrieval.rerank import RerankOutput
+from services.retrieval.rerank import Reranker
 from services.retrieval.rewrite import ChatMessage
 from services.retrieval.rewrite import DashScopeRewriteClient
 from services.retrieval.rewrite import LLMRewriteOutput
@@ -46,6 +51,7 @@ __all__ = [
     "BackfillResult",
     "ChatMessage",
     "DEFAULT_RRF_K",
+    "DashScopeRerankClient",
     "DashScopeRewriteClient",
     "DashScopeRouterClient",
     "FusedParent",
@@ -67,6 +73,10 @@ __all__ = [
     "QueryRewriter",
     "QueryRouter",
     "RRFFuser",
+    "RerankCallError",
+    "RerankInput",
+    "RerankOutput",
+    "Reranker",
     "RedisParentCache",
     "RewriteRequest",
     "RewriteResult",
