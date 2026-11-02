@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""L2 二级缓存：基于 Redis MGET / Pipeline、随机 TTL 抖动与分布式互斥锁的父块缓存。"""
+"""基于 Redis MGET / Pipeline、随机 TTL 抖动与分布式互斥锁的父块缓存。"""
 
 import hashlib
 import json
@@ -13,8 +13,8 @@ from services.retrieval.fusion.backfill.models import ParentChunkPayload
 
 logger = logging.getLogger("rag.retrieval.backfill")
 
-DEFAULT_L2_TTL_SECONDS = 3600
-DEFAULT_L2_JITTER_SECONDS = 600
+DEFAULT_REDIS_TTL_SECONDS = 3600
+DEFAULT_REDIS_JITTER_SECONDS = 600
 DEFAULT_LOCK_TTL_MS = 3000
 DEFAULT_REDIS_KEY_PREFIX = "rag:parent_chunk:"
 DEFAULT_REDIS_LOCK_PREFIX = "rag:parent_lock:"
@@ -30,7 +30,7 @@ end
 
 
 class RedisParentCache:
-    """L2：基于 Redis MGET / Pipeline 的分布式父块缓存。
+    """基于 Redis MGET / Pipeline 的分布式父块缓存。
 
     内置防护：
     1. 防缓存雪崩：每个 key 写入时独立附加 [0, jitter_seconds] 随机 TTL 抖动；
@@ -42,8 +42,8 @@ class RedisParentCache:
         redis_url: str = "",
         client=None,
         *,
-        ttl_seconds: int = DEFAULT_L2_TTL_SECONDS,
-        jitter_seconds: int = DEFAULT_L2_JITTER_SECONDS,
+        ttl_seconds: int = DEFAULT_REDIS_TTL_SECONDS,
+        jitter_seconds: int = DEFAULT_REDIS_JITTER_SECONDS,
         lock_ttl_ms: int = DEFAULT_LOCK_TTL_MS,
         key_prefix: str = DEFAULT_REDIS_KEY_PREFIX,
         lock_prefix: str = DEFAULT_REDIS_LOCK_PREFIX,
@@ -84,7 +84,7 @@ class RedisParentCache:
     def get_many(
         self, parent_ids: Sequence[str]
     ) -> tuple[dict[str, ParentChunkPayload], list[str]]:
-        """使用单次 MGET 批量查询 Redis；Redis 不可用时全部计入 missed 交由 L3 MySQL 兜底。"""
+        """使用单次 MGET 批量查询 Redis；Redis 不可用时全部计入 missed 交由 MySQL 兜底。"""
         if not parent_ids:
             return {}, []
         try:
@@ -94,7 +94,7 @@ class RedisParentCache:
             keys = [self._key(pid) for pid in parent_ids]
             raw_values = client.mget(keys)
         except Exception as exc:
-            logger.warning("L2 Redis 父块缓存读取失败，降级直查 MySQL: %s", exc)
+            logger.warning("Redis 父块缓存读取失败，降级直查 MySQL: %s", exc)
             return {}, list(parent_ids)
 
         hits: dict[str, ParentChunkPayload] = {}
@@ -131,7 +131,7 @@ class RedisParentCache:
                 pipe.setex(self._key(pid), ttl, serialized)
             pipe.execute()
         except Exception as exc:
-            logger.warning("L2 Redis 父块缓存回填失败（已忽略）: %s", exc)
+            logger.warning("Redis 父块缓存回填失败（已忽略）: %s", exc)
 
     def acquire_lock(self, parent_ids: Sequence[str]) -> tuple[str, str] | None:
         """防缓存击穿：尝试获取回源分布式互斥锁（SET key token NX PX）。
@@ -139,7 +139,7 @@ class RedisParentCache:
         返回：
         - (lock_key, token)：成功获取锁，当前进程负责查 MySQL 并回填；
         - ("", "")：Redis 未启用或异常，无需等待直接放行回源；
-        - None：锁已被其他并发进程持有，当前进程应短暂等待后重查 L2。
+        - None：锁已被其他并发进程持有，当前进程应短暂等待后重查 Redis。
         """
         if not parent_ids:
             return ("", "")

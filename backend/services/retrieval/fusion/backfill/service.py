@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
-"""父块三级回查服务（ParentBackfiller）。
+"""父块回查服务（ParentBackfiller）。
 
-完整解决缓存三大问题：
-1. 缓存穿透（Cache Penetration）：
+采用三级架构解决缓存三大问题：
+1. 第一级（bloom.py - 防缓存穿透）：
    - 使用固定内存的 ParentBloomFilter（位数组布隆过滤器）拦截不存在的 parent_id，
      无需缓存空值，避免海量无效 ID 撑爆内存与 Redis。
-2. 缓存击穿（Cache Breakdown）：
-   - 当 L2 Redis 未命中需要回源 MySQL 时，通过 Redis 分布式互斥锁（SET NX PX + Lua 解锁）控制并发；
-   - 未抢到锁的进程短暂等待后重试读取 L2 Redis，复用持锁进程刚回填的结果。
-3. 缓存雪崩（Cache Avalanche）：
-   - L1 与 L2 写入时均为每个 key 独立附加随机 TTL 抖动（Jitter），打散过期时间；
-   - L3 MySQLParentStore 使用 BoundedSemaphore 限制最大并发查询数，保护数据库不被洪峰击穿。
+2. 第二级（redis_cache.py - 防缓存击穿 & 雪崩）：
+   - 使用 Redis MGET 批量读取父块；写入时每个 key 独立附加随机 TTL 抖动（Jitter）；
+   - 未命中需回源时，通过 Redis 分布式互斥锁（SET NX PX + Lua 解锁）控制并发，
+     未抢到锁的进程短暂等待后重试读取 Redis，复用持锁进程刚回填的结果。
+3. 第三级（mysql_store.py - 防缓存雪崩）：
+   - 使用 MySQLParentStore 批量联表查询，内置 BoundedSemaphore 限制最大并发数。
 """
 
 import logging
@@ -19,7 +19,6 @@ from collections.abc import Callable
 from collections.abc import Iterable
 from collections.abc import Sequence
 
-from services.retrieval.fusion.backfill.cache import LocalParentCache
 from services.retrieval.fusion.backfill.cache import MySQLParentStore
 from services.retrieval.fusion.backfill.cache import ParentBloomFilter
 from services.retrieval.fusion.backfill.cache import RedisParentCache
@@ -35,13 +34,12 @@ DEFAULT_LOCK_WAIT_SECONDS = 0.02
 
 
 class ParentBackfiller:
-    """按 布隆过滤器 -> L1 本地内存 -> L2 Redis -> L3 MySQL 回查父块正文并保持 RRF 排名顺序。"""
+    """按 布隆过滤器 -> Redis 分布式缓存 -> MySQL 回查父块正文并保持 RRF 排名顺序。"""
 
     def __init__(
         self,
-        l1_cache: LocalParentCache | None = None,
-        l2_cache: RedisParentCache | None = None,
-        l3_store: MySQLParentStore | None = None,
+        redis_cache: RedisParentCache | None = None,
+        mysql_store: MySQLParentStore | None = None,
         bloom_filter: ParentBloomFilter | None = None,
         db_loader: Callable[[Sequence[str]], list[dict[str, object]]] | None = None,
         *,
@@ -49,11 +47,10 @@ class ParentBackfiller:
         lock_wait_seconds: float = DEFAULT_LOCK_WAIT_SECONDS,
         sleep=time.sleep,
     ) -> None:
-        self.l1 = l1_cache if l1_cache is not None else LocalParentCache()
-        self.l2 = l2_cache if l2_cache is not None else RedisParentCache()
-        self.l3 = (
-            l3_store
-            if l3_store is not None
+        self.redis = redis_cache if redis_cache is not None else RedisParentCache()
+        self.mysql = (
+            mysql_store
+            if mysql_store is not None
             else MySQLParentStore(db_loader=db_loader)
         )
         self.bloom = (
@@ -73,12 +70,12 @@ class ParentBackfiller:
         *,
         allowed_versions: dict[str, int] | None = None,
     ) -> BackfillResult:
-        """按三级缓存回查父块，严格按 candidates 的 RRF 顺序组装 FusedParent。"""
+        """按 布隆过滤器 -> Redis -> MySQL 回查父块，严格按 candidates 的 RRF 顺序组装 FusedParent。"""
         started = time.monotonic()
         if not candidates:
             return BackfillResult()
 
-        # ==================== 第零级：布隆过滤器防穿透拦截 ====================
+        # ==================== 第一级：布隆过滤器防穿透拦截 ====================
         ordered_ids: list[str] = []
         seen: set[str] = set()
         for item in candidates:
@@ -93,49 +90,31 @@ class ParentBackfiller:
 
         resolved: dict[str, ParentChunkPayload] = {}
 
-        # ==================== 第一级：L1 进程内本地 LRU 缓存 ====================
-        l1_found, l1_missed = self.l1.get_many(ordered_ids)
-        l1_valid: dict[str, ParentChunkPayload] = {}
-        l2_lookup_ids: list[str] = []
-        for pid, payload in l1_found.items():
-            if _is_version_valid(payload, allowed_versions):
-                l1_valid[pid] = payload
-            else:
-                l2_lookup_ids.append(pid)
-        l2_lookup_ids.extend(l1_missed)
-        resolved.update(l1_valid)
-        l1_hit_count = len(l1_valid)
-
-        # ==================== 第二级：L2 Redis 分布式缓存 ====================
-        l2_hit_count = 0
-        l3_lookup_ids: list[str] = []
-        if l2_lookup_ids:
-            l2_found, l2_missed = self.l2.get_many(l2_lookup_ids)
-            l2_valid: dict[str, ParentChunkPayload] = {}
-            for pid, payload in l2_found.items():
+        # ==================== 第二级：Redis 分布式缓存批量查询 ====================
+        redis_hit_count = 0
+        mysql_lookup_ids: list[str] = []
+        if ordered_ids:
+            redis_found, redis_missed = self.redis.get_many(ordered_ids)
+            for pid, payload in redis_found.items():
                 if _is_version_valid(payload, allowed_versions):
-                    l2_valid[pid] = payload
+                    resolved[pid] = payload
+                    redis_hit_count += 1
                 else:
-                    l3_lookup_ids.append(pid)
-            l3_lookup_ids.extend(l2_missed)
-            if l2_valid:
-                resolved.update(l2_valid)
-                self.l1.put_many(l2_valid)
-                l2_hit_count = len(l2_valid)
+                    mysql_lookup_ids.append(pid)
+            mysql_lookup_ids.extend(redis_missed)
 
-        # ==================== 第三级：分布式锁防击穿 + L3 MySQL 回源 ====================
-        l3_hit_count = 0
-        if l3_lookup_ids:
-            l2_recovered, l3_loaded = self._load_with_distributed_lock(
-                l3_lookup_ids, allowed_versions
+        # ==================== 第三级：分布式锁防击穿 + MySQL 批量回源 ====================
+        mysql_hit_count = 0
+        if mysql_lookup_ids:
+            redis_recovered, mysql_loaded = self._load_with_distributed_lock(
+                mysql_lookup_ids, allowed_versions
             )
-            if l2_recovered:
-                resolved.update(l2_recovered)
-                self.l1.put_many(l2_recovered)
-                l2_hit_count += len(l2_recovered)
-            if l3_loaded:
-                resolved.update(l3_loaded)
-                l3_hit_count += len(l3_loaded)
+            if redis_recovered:
+                resolved.update(redis_recovered)
+                redis_hit_count += len(redis_recovered)
+            if mysql_loaded:
+                resolved.update(mysql_loaded)
+                mysql_hit_count += len(mysql_loaded)
 
         # ==================== 按 RRF 候选顺序组装最终父块列表 ====================
         parents: list[FusedParent] = []
@@ -195,9 +174,8 @@ class ParentBackfiller:
         return BackfillResult(
             parents=tuple(parents),
             missing_parent_count=missing_count,
-            l1_hits=l1_hit_count,
-            l2_hits=l2_hit_count,
-            l3_hits=l3_hit_count,
+            redis_hits=redis_hit_count,
+            mysql_hits=mysql_hit_count,
             backfill_ms=elapsed_ms,
         )
 
@@ -208,44 +186,42 @@ class ParentBackfiller:
     ) -> tuple[dict[str, ParentChunkPayload], dict[str, ParentChunkPayload]]:
         """使用 Redis 分布式互斥锁控制并发回源，防止热点过期瞬间击穿 MySQL。"""
         remaining = list(lookup_ids)
-        l2_recovered: dict[str, ParentChunkPayload] = {}
+        redis_recovered: dict[str, ParentChunkPayload] = {}
 
         for attempt in range(self.lock_wait_retries):
-            lock_ticket = self.l2.acquire_lock(remaining)
+            lock_ticket = self.redis.acquire_lock(remaining)
             if lock_ticket is not None:
                 lock_key, token = lock_ticket
                 try:
-                    # 抢到锁后若是重试轮次，先再查一次 L2，避免重复查库
                     if attempt > 0:
-                        found, still_missed = self.l2.get_many(remaining)
+                        found, still_missed = self.redis.get_many(remaining)
                         for pid, payload in found.items():
                             if _is_version_valid(payload, allowed_versions):
-                                l2_recovered[pid] = payload
+                                redis_recovered[pid] = payload
                         remaining = [
-                            pid for pid in still_missed if pid not in l2_recovered
+                            pid for pid in still_missed if pid not in redis_recovered
                         ]
                         if not remaining:
-                            return l2_recovered, {}
-                    l3_loaded = self._query_mysql_and_populate(
+                            return redis_recovered, {}
+                    mysql_loaded = self._query_mysql_and_populate(
                         remaining, allowed_versions
                     )
-                    return l2_recovered, l3_loaded
+                    return redis_recovered, mysql_loaded
                 finally:
-                    self.l2.release_lock(lock_key, token)
+                    self.redis.release_lock(lock_key, token)
 
-            # 未抢到锁：等待持锁进程回填 L2 Redis 后重查
+            # 未抢到锁：等待持锁进程回填 Redis 后重查
             self._sleep(self.lock_wait_seconds)
-            found, still_missed = self.l2.get_many(remaining)
+            found, still_missed = self.redis.get_many(remaining)
             for pid, payload in found.items():
                 if _is_version_valid(payload, allowed_versions):
-                    l2_recovered[pid] = payload
-            remaining = [pid for pid in still_missed if pid not in l2_recovered]
+                    redis_recovered[pid] = payload
+            remaining = [pid for pid in still_missed if pid not in redis_recovered]
             if not remaining:
-                return l2_recovered, {}
+                return redis_recovered, {}
 
-        # 等待重试耗尽后仍未命中，兜底回源查库
-        l3_loaded = self._query_mysql_and_populate(remaining, allowed_versions)
-        return l2_recovered, l3_loaded
+        mysql_loaded = self._query_mysql_and_populate(remaining, allowed_versions)
+        return redis_recovered, mysql_loaded
 
     def _query_mysql_and_populate(
         self,
@@ -254,18 +230,17 @@ class ParentBackfiller:
     ) -> dict[str, ParentChunkPayload]:
         if not parent_ids:
             return {}
-        l3_found = self.l3.get_many(parent_ids)
-        l3_valid = {
+        mysql_found = self.mysql.get_many(parent_ids)
+        mysql_valid = {
             pid: payload
-            for pid, payload in l3_found.items()
+            for pid, payload in mysql_found.items()
             if _is_version_valid(payload, allowed_versions)
         }
-        if l3_valid:
+        if mysql_valid:
             if self.bloom.is_ready:
-                self.bloom.add_many(l3_valid.keys())
-            self.l2.put_many(l3_valid)
-            self.l1.put_many(l3_valid)
-        return l3_valid
+                self.bloom.add_many(mysql_valid.keys())
+            self.redis.put_many(mysql_valid)
+        return mysql_valid
 
 
 def _is_version_valid(

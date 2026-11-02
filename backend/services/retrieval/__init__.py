@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""检索阶段服务集合：查询改写、查询路由、向量召回、关键词召回、RRF 融合、三级父块回查与 Rerank 精排。"""
+"""检索阶段服务集合：查询改写、查询路由、向量召回、关键词召回、RRF 融合、父块回查与 Rerank 精排。"""
 
 from services.retrieval.fusion import BackfillResult
 from services.retrieval.fusion import DEFAULT_RRF_K
@@ -7,7 +7,6 @@ from services.retrieval.fusion import FusedParent
 from services.retrieval.fusion import FusedParentCandidate
 from services.retrieval.fusion import FusionInput
 from services.retrieval.fusion import FusionResult
-from services.retrieval.fusion import LocalParentCache
 from services.retrieval.fusion import MatchedChild
 from services.retrieval.fusion import MySQLParentStore
 from services.retrieval.fusion import ParentBackfiller
@@ -59,7 +58,6 @@ __all__ = [
     "KeywordSearchResult",
     "LLMRewriteOutput",
     "LLMRouteResult",
-    "LocalParentCache",
     "MatchedChild",
     "MySQLParentStore",
     "PageRange",

@@ -1,13 +1,11 @@
 # -*- coding: utf-8 -*-
-"""三级父块回查存储层（布隆过滤器 + L1 进程内 LRU + L2 Redis 分布式锁 + L3 MySQL 并发控制）。"""
+"""父块回查缓存与存储层（布隆过滤器 + Redis 分布式缓存与锁 + MySQL 并发控制）。"""
 
-from services.retrieval.fusion.backfill.cache.l1_local import LocalParentCache
-from services.retrieval.fusion.backfill.cache.l1_local import ParentBloomFilter
-from services.retrieval.fusion.backfill.cache.l2_redis import RedisParentCache
-from services.retrieval.fusion.backfill.cache.l3_mysql import MySQLParentStore
+from services.retrieval.fusion.backfill.cache.bloom import ParentBloomFilter
+from services.retrieval.fusion.backfill.cache.mysql_store import MySQLParentStore
+from services.retrieval.fusion.backfill.cache.redis_cache import RedisParentCache
 
 __all__ = [
-    "LocalParentCache",
     "MySQLParentStore",
     "ParentBloomFilter",
     "RedisParentCache",

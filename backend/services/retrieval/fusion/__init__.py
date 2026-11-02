@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-"""父块聚合、父块级 RRF 融合与三级父块回查子包。"""
+"""父块聚合、父块级 RRF 融合与父块回查子包。"""
 
 from services.retrieval.fusion.backfill import BackfillResult
 from services.retrieval.fusion.backfill import FusedParent
-from services.retrieval.fusion.backfill import LocalParentCache
 from services.retrieval.fusion.backfill import MySQLParentStore
 from services.retrieval.fusion.backfill import ParentBackfiller
 from services.retrieval.fusion.backfill import ParentBloomFilter
@@ -23,7 +22,6 @@ __all__ = [
     "FusedParentCandidate",
     "FusionInput",
     "FusionResult",
-    "LocalParentCache",
     "MatchedChild",
     "MySQLParentStore",
     "ParentBackfiller",

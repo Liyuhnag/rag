@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
-"""父块三级回查与缓存三大问题（穿透/击穿/雪崩）单元测试。"""
+"""父块回查（布隆过滤器 -> Redis -> MySQL）与缓存三大问题（穿透/击穿/雪崩）单元测试。"""
 
 import json
 import pytest
 
 from model.document_chunk import orm as chunk_orm
 from services.retrieval import FusedParentCandidate
-from services.retrieval import LocalParentCache
 from services.retrieval import MySQLParentStore
 from services.retrieval import ParentBackfiller
 from services.retrieval import ParentBloomFilter
@@ -121,19 +120,16 @@ def _payload(
     )
 
 
-def test_three_tier_lookup_preserves_rrf_order_and_backfills_upper_caches():
-    l1 = LocalParentCache(capacity=10, ttl_seconds=60.0)
-    l1.put_many({"p-l1": _payload("p-l1", "来自 L1 本地缓存的父块正文")})
-
+def test_lookup_preserves_rrf_order_and_backfills_redis_from_mysql():
     fake_redis = _FakeRedisClient(
         {
             "rag:parent_chunk:p-redis": json.dumps(
-                _payload("p-redis", "来自 L2 Redis 的父块正文").to_dict(),
+                _payload("p-redis", "来自 Redis 的父块正文").to_dict(),
                 ensure_ascii=False,
             )
         }
     )
-    l2 = RedisParentCache(client=fake_redis)
+    redis_cache = RedisParentCache(client=fake_redis)
 
     db_queries: list[list[str]] = []
 
@@ -147,7 +143,7 @@ def test_three_tier_lookup_preserves_rrf_order_and_backfills_upper_caches():
                 "version": 1,
                 "parent_index": 0,
                 "file_type": "pdf",
-                "content": "来自 L3 MySQL 的父块正文",
+                "content": "来自 MySQL 的父块正文",
                 "heading_path": "第一章",
                 "locator": "page:1",
                 "page_start": 1,
@@ -156,31 +152,25 @@ def test_three_tier_lookup_preserves_rrf_order_and_backfills_upper_caches():
             }
         ]
 
-    backfiller = ParentBackfiller(l1_cache=l1, l2_cache=l2, db_loader=db_loader)
+    backfiller = ParentBackfiller(redis_cache=redis_cache, db_loader=db_loader)
     candidates = (
         _candidate("p-mysql", 1, rrf_score=0.033),
-        _candidate("p-l1", 2, rrf_score=0.032),
-        _candidate("p-redis", 3, rrf_score=0.031),
+        _candidate("p-redis", 2, rrf_score=0.031),
     )
 
     result = backfiller.backfill(candidates)
 
-    assert result.l1_hits == 1
-    assert result.l2_hits == 1
-    assert result.l3_hits == 1
+    assert result.redis_hits == 1
+    assert result.mysql_hits == 1
     assert result.missing_parent_count == 0
-    assert [p.parent_id for p in result.parents] == ["p-mysql", "p-l1", "p-redis"]
-    assert [p.rank for p in result.parents] == [1, 2, 3]
-    assert fake_redis.mget_calls == [
-        ["rag:parent_chunk:p-mysql", "rag:parent_chunk:p-redis"]
-    ]
+    assert [p.parent_id for p in result.parents] == ["p-mysql", "p-redis"]
+    assert [p.rank for p in result.parents] == [1, 2]
     assert db_queries == [["p-mysql"]]
 
-    # 第二次查询全部命中 L1
+    # 第二次查询全部命中 Redis，不再查 MySQL
     second = backfiller.backfill(candidates)
-    assert second.l1_hits == 3
-    assert second.l2_hits == 0
-    assert second.l3_hits == 0
+    assert second.redis_hits == 2
+    assert second.mysql_hits == 0
     assert len(db_queries) == 1
 
 
@@ -191,13 +181,11 @@ def test_bloom_filter_prevents_cache_penetration_without_touching_redis_or_mysql
     fake_redis = _FakeRedisClient()
     db_calls: list[list[str]] = []
     backfiller = ParentBackfiller(
-        l1_cache=LocalParentCache(),
-        l2_cache=RedisParentCache(client=fake_redis),
+        redis_cache=RedisParentCache(client=fake_redis),
         bloom_filter=bloom,
         db_loader=lambda pids: db_calls.append(list(pids)) or [],
     )
 
-    # 请求一个根本不存在的伪造 parent_id，布隆过滤器直接拦截，不查 Redis 也不查 MySQL
     result = backfiller.backfill((_candidate("p-forged-nonexistent-id", 1),))
     assert result.missing_parent_count == 1
     assert result.parents == ()
@@ -207,16 +195,14 @@ def test_bloom_filter_prevents_cache_penetration_without_touching_redis_or_mysql
 
 def test_distributed_lock_prevents_cache_breakdown_by_waiting_for_peer_fill():
     fake_redis = _FakeRedisClient()
-    l2 = RedisParentCache(client=fake_redis)
+    redis_cache = RedisParentCache(client=fake_redis)
 
-    # 模拟另一个并发进程已经抢先持有了该批次的分布式互斥锁
-    lock_key = l2._lock_key(["p-hot"])
+    lock_key = redis_cache._lock_key(["p-hot"])
     fake_redis.store[lock_key] = "other-worker-token"
 
     db_calls: list[list[str]] = []
 
     def simulate_peer_backfill(_seconds: float):
-        # 在当前进程 sleep 等待期间，持锁进程已将热点父块写入 Redis 并释放锁
         fake_redis.store["rag:parent_chunk:p-hot"] = json.dumps(
             _payload("p-hot", "同伴进程已回填的热点父块").to_dict(),
             ensure_ascii=False,
@@ -224,31 +210,28 @@ def test_distributed_lock_prevents_cache_breakdown_by_waiting_for_peer_fill():
         fake_redis.store.pop(lock_key, None)
 
     backfiller = ParentBackfiller(
-        l1_cache=LocalParentCache(),
-        l2_cache=l2,
+        redis_cache=redis_cache,
         db_loader=lambda pids: db_calls.append(list(pids)) or [],
         sleep=simulate_peer_backfill,
     )
 
     result = backfiller.backfill((_candidate("p-hot", 1),))
-    # 当前进程等待后直接从 L2 Redis 拿到结果，完全没有击穿到 MySQL
     assert db_calls == []
-    assert result.l2_hits == 1
-    assert result.l3_hits == 0
+    assert result.redis_hits == 1
+    assert result.mysql_hits == 0
     assert result.parents[0].content == "同伴进程已回填的热点父块"
 
 
 def test_ttl_jitter_and_mysql_concurrency_limit_prevent_cache_avalanche():
-    # 1. 验证 L2 Redis 每个 key 的 TTL 带有独立随机抖动
     fake_redis = _FakeRedisClient()
     seq = iter([15, 240, 580])
-    l2 = RedisParentCache(
+    redis_cache = RedisParentCache(
         client=fake_redis,
         ttl_seconds=3600,
         jitter_seconds=600,
         randint_fn=lambda _a, _b: next(seq),
     )
-    l2.put_many(
+    redis_cache.put_many(
         {
             "p-1": _payload("p-1", "a"),
             "p-2": _payload("p-2", "b"),
@@ -259,7 +242,6 @@ def test_ttl_jitter_and_mysql_concurrency_limit_prevent_cache_avalanche():
     assert fake_redis.ttls["rag:parent_chunk:p-2"] == 3840
     assert fake_redis.ttls["rag:parent_chunk:p-3"] == 4180
 
-    # 2. 验证 L3 MySQLParentStore 信号量并发控制耗尽时触发保护限流
     store = MySQLParentStore(
         db_loader=lambda pids: [],
         max_concurrency=1,

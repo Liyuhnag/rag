@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""L3 三级存储：从 MySQL 批量联表回源父块，内置信号量并发控制防止雪崩压垮数据库。"""
+"""MySQL 批量联表回源父块，内置信号量并发控制防止雪崩压垮数据库。"""
 
 from collections.abc import Callable
 from collections.abc import Sequence
@@ -13,7 +13,7 @@ DEFAULT_MYSQL_ACQUIRE_TIMEOUT_SECONDS = 3.0
 
 
 class MySQLParentStore:
-    """L3：按 parent_id 列表从 MySQL 批量查询父块，并使用有界信号量限制最大并发。"""
+    """按 parent_id 列表从 MySQL 批量查询父块，并使用有界信号量限制最大并发。"""
 
     def __init__(
         self,

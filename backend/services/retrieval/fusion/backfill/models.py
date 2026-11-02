@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""父块三级回查（L1 本地缓存 -> L2 Redis -> L3 MySQL）数据模型。"""
+"""父块回查（布隆过滤器 -> Redis -> MySQL）数据模型。"""
 
 from dataclasses import dataclass
 
@@ -8,7 +8,7 @@ from services.retrieval.fusion.models import MatchedChild
 
 @dataclass(frozen=True)
 class ParentChunkPayload:
-    """缓存在 L1 / L2 及从 L3 MySQL 查询出的父块核心数据。"""
+    """缓存在 Redis 及从 MySQL 查询出的父块核心数据。"""
 
     parent_id: str
     document_id: str
@@ -85,11 +85,10 @@ class FusedParent:
 
 @dataclass(frozen=True)
 class BackfillResult:
-    """父块三级回查输出结果与各级命中统计。"""
+    """父块回查输出结果与命中统计。"""
 
     parents: tuple[FusedParent, ...] = ()
     missing_parent_count: int = 0
-    l1_hits: int = 0
-    l2_hits: int = 0
-    l3_hits: int = 0
+    redis_hits: int = 0
+    mysql_hits: int = 0
     backfill_ms: int = 0
