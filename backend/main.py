@@ -3,6 +3,7 @@
 
 import logging
 from collections.abc import Callable
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,6 +18,7 @@ from config import Settings
 from config import load_settings
 from services.chat.service import ChatService
 from services.common.connect import connect_storage
+from services.retrieval.fusion.backfill.service import ParentBackfiller
 from task.app import celery_app
 
 logger = logging.getLogger("rag.api")
@@ -33,9 +35,19 @@ def create_app(
         connect_storage(active)
     else:
         open_storage(active)
-    application = FastAPI(title="RAG API", version="0.1.0")
+    backfiller = ParentBackfiller(settings=active)
+
+    @asynccontextmanager
+    async def lifespan(application):
+        try:
+            yield
+        finally:
+            backfiller.close()
+
+    application = FastAPI(title="RAG API", version="0.1.0", lifespan=lifespan)
     application.state.settings = active
     application.state.chat_service = ChatService()
+    application.state.parent_backfiller = backfiller
     register_exception_handlers(application)
     application.add_middleware(
         CORSMiddleware,

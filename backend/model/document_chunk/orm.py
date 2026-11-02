@@ -77,7 +77,9 @@ def get(chunk_id: str) -> DocumentChunk | None:
     return None if not rows else _from_row(rows[0])
 
 
-def list_parents_by_ids(parent_ids: Sequence[str]) -> list[dict[str, object]]:
+def list_parents_by_ids(
+    parent_ids: Sequence[str], *, timeout_seconds: float | None = None
+) -> list[dict[str, object]]:
     """按父块 ID 列表批量联表查询 READY 文档最新版本的父块及文档名称。"""
     clean_ids = [pid.strip() for pid in parent_ids if pid and pid.strip()]
     if not clean_ids:
@@ -108,8 +110,46 @@ def list_parents_by_ids(parent_ids: Sequence[str]) -> list[dict[str, object]]:
           AND dc.version = d.parse_version
         """,
         params,
+        **({"timeout_seconds": timeout_seconds} if timeout_seconds is not None else {}),
     )
     return list(rows)
+
+
+def list_ready_parent_documents(
+    document_ids: Sequence[str], *, timeout_seconds: float
+) -> list[dict[str, object]]:
+    """读取当前可检索文档状态，缓存命中也必须走此边界。"""
+    if not document_ids:
+        return []
+    holders = ", ".join(f"%(id_{i})s" for i in range(len(document_ids)))
+    return execute(
+        f"""
+        SELECT id, parse_version, parent_chunk_count, name, updated_at
+        FROM documents
+        WHERE id IN ({holders}) AND status = 'READY'
+        """,
+        {f"id_{i}": value for i, value in enumerate(document_ids)},
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def list_parent_ids_for_snapshot(
+    document_id: str, version: int, expected_count: int, revision: str, *, timeout_seconds: float
+) -> list[dict[str, object]]:
+    """完整版本 ID 快照；多读一条以发现计数不一致，不读取正文。"""
+    return execute(
+        """
+        SELECT dc.id FROM document_chunks AS dc
+        INNER JOIN documents AS d ON d.id = dc.document_id
+        WHERE dc.document_id = %(document_id)s AND dc.version = %(version)s
+          AND dc.chunk_level = 'PARENT' AND d.status = 'READY'
+          AND dc.version = d.parse_version
+          AND d.updated_at = %(revision)s
+        ORDER BY dc.id LIMIT %(limit)s
+        """,
+        {"document_id": document_id, "version": version, "limit": expected_count + 1, "revision": revision},
+        timeout_seconds=timeout_seconds,
+    )
 
 
 def list_by_version(

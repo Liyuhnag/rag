@@ -89,6 +89,8 @@ def as_aware(value: object) -> datetime:
 def execute(
     sql: str,
     params: dict[str, object] | None = None,
+    *,
+    timeout_seconds: float | None = None,
 ) -> list[dict[str, object]]:
     """执行一条 SQL。查询返回行，写入语句返回空列表。"""
     try:
@@ -97,7 +99,8 @@ def execute(
             with bound.cursor() as cursor:
                 cursor.execute(sql, params or {})
                 return [] if cursor.description is None else list(cursor.fetchall())
-        with _connect() as connection:
+        options = {} if timeout_seconds is None else {"timeout_seconds": timeout_seconds}
+        with _connect(**options) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(sql, params or {})
                 if cursor.description is None:
@@ -173,7 +176,16 @@ def transaction() -> Iterator[pymysql.Connection]:
         connection.close()
 
 
-def _connect() -> pymysql.Connection:
+def _connect(*, timeout_seconds: float | None = None) -> pymysql.Connection:
+    options = {}
+    if timeout_seconds is not None:
+        if timeout_seconds <= 0:
+            raise TimeoutError("数据库读取已超时")
+        options = {
+            "connect_timeout": max(1, min(10, int(timeout_seconds))),
+            "read_timeout": timeout_seconds,
+            "write_timeout": timeout_seconds,
+        }
     try:
         return pymysql.connect(
             host=str(_db["host"]),
@@ -184,6 +196,7 @@ def _connect() -> pymysql.Connection:
             charset="utf8mb4",
             autocommit=True,
             cursorclass=pymysql.cursors.DictCursor,
+            **options,
         )
     except MySQLError as exc:
         raise StorageError("数据库不可用") from exc

@@ -2,8 +2,40 @@
 """父块回查（布隆过滤器 -> Redis -> MySQL）数据模型。"""
 
 from dataclasses import dataclass
+from urllib.parse import quote
 
 from services.retrieval.fusion.models import MatchedChild
+
+
+@dataclass(frozen=True)
+class ParentChunkRef:
+    """已通过文档范围校验的父块身份。"""
+
+    parent_id: str
+    document_id: str
+    version: int
+    tenant_id: str = "default"
+    revision: str = ""
+
+    @property
+    def scope(self) -> str:
+        parts = (self.tenant_id, self.document_id, str(self.version), self.revision)
+        return ":".join(quote(part, safe="") for part in parts)
+
+    @property
+    def suffix(self) -> str:
+        return f"{self.scope}:{quote(self.parent_id, safe='')}"
+
+
+@dataclass(frozen=True)
+class ParentDocument:
+    """来自 MySQL 的当前 READY 文档快照，不放进正文缓存。"""
+
+    document_id: str
+    version: int
+    parent_count: int
+    name: str
+    revision: str
 
 
 @dataclass(frozen=True)
@@ -47,7 +79,7 @@ class ParentChunkPayload:
             parent_id=str(data["parent_id"]),
             document_id=str(data["document_id"]),
             document_name=str(data.get("document_name", "")),
-            version=int(data.get("version", 1)),
+            version=int(data["version"]),
             parent_index=int(data.get("parent_index") or 0),
             file_type=str(data.get("file_type", "")),
             content=str(data.get("content", "")),

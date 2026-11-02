@@ -14,7 +14,7 @@ uv sync --all-groups
 
 `start.sh` 会拉起接口、解析 worker、索引 worker、维护 worker、定时任务和 Flower。Ctrl+C 会停掉这次启动的全部进程。接口默认 `0.0.0.0:8000`，可用 `API_PORT` 改端口。
 
-接口进程、Celery worker、beat 和 Flower 要在同一台机器上。上传分片由 API 直接写入对象存储；解析任务走 `celery` 队列，补投和清理任务走独立的 `maintenance` 队列。Redis 只监听 `127.0.0.1:6379`。Flower 监控页是 `http://<主机>:5555`，登录账号在 `FLOWER_BASIC_AUTH`。
+接口进程、Celery worker、beat 和 Flower 要在同一台机器上。上传分片由 API 直接写入对象存储；解析任务走 `celery` 队列，补投和清理任务走独立的 `maintenance` 队列。Redis 分为三个独立实例，分别监听本机 6379（队列）、6380（父块正文）、6381（布隆过滤器与锁）。Flower 监控页是 `http://<主机>:5555`，登录账号在 `FLOWER_BASIC_AUTH`。
 
 接口文档：http://127.0.0.1:8000/docs
 
@@ -52,9 +52,13 @@ uv run pytest
 | `MYSQL_PASSWORD` | 无 | 数据库密码 |
 | `MYSQL_DATABASE` | 无 | 数据库名 |
 | `REDIS_URL` | `redis://127.0.0.1:6379/0` | Celery 队列地址 |
+| `PARENT_CACHE_REDIS_URL` | `redis://127.0.0.1:6380/0` | 父块正文独立实例，无 TTL + LFU |
+| `PARENT_GUARD_REDIS_URL` | `redis://127.0.0.1:6381/0` | 共享 Bitmap 布隆快照与分布式锁独立实例 |
 | `FLOWER_BASIC_AUTH` | 无 | Flower 登录，格式 `用户名:密码` |
 | `FLOWER_ADDRESS` | `0.0.0.0` | Flower 监听地址 |
 | `FLOWER_PORT` | `5555` | Flower 端口 |
+
+父块缓存、回源限流与共享布隆过滤器的配置和接入方式见 [父块回填说明](services/retrieval/fusion/backfill/README.md)。
 
 ## 接口
 

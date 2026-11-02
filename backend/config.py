@@ -4,6 +4,7 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
@@ -94,6 +95,8 @@ class Settings:
     mysql_database: str = ""
     file_base_url: str = ""
     redis_url: str = "redis://127.0.0.1:6379/0"
+    parent_cache_redis_url: str = "redis://127.0.0.1:6380/0"
+    parent_guard_redis_url: str = "redis://127.0.0.1:6381/0"
     embedding_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     dashscope_api_key: str = ""
     embedding_model: str = "text-embedding-v4"
@@ -179,6 +182,26 @@ def load_settings() -> Settings:
     redis_url = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0").strip()
     if not redis_url:
         raise RuntimeError("REDIS_URL 不能为空")
+    parent_cache_redis_url = os.getenv(
+        "PARENT_CACHE_REDIS_URL", "redis://127.0.0.1:6380/0"
+    ).strip()
+    parent_guard_redis_url = os.getenv(
+        "PARENT_GUARD_REDIS_URL", "redis://127.0.0.1:6381/0"
+    ).strip()
+    redis_addresses = (redis_url, parent_cache_redis_url, parent_guard_redis_url)
+    if not all(redis_addresses):
+        raise RuntimeError("PARENT_CACHE_REDIS_URL 和 PARENT_GUARD_REDIS_URL 不能为空")
+    endpoints = []
+    for address in redis_addresses:
+        try:
+            parsed = urlsplit(address)
+            if parsed.scheme not in ("redis", "rediss") or not parsed.hostname:
+                raise ValueError("无效 Redis 地址")
+            endpoints.append((parsed.hostname.lower(), parsed.port or 6379))
+        except ValueError as exc:
+            raise RuntimeError("Redis 地址必须为有效的 redis:// 或 rediss:// URL") from exc
+    if len(set(endpoints)) != 3:
+        raise RuntimeError("REDIS_URL、PARENT_CACHE_REDIS_URL、PARENT_GUARD_REDIS_URL 必须使用独立 Redis 实例")
 
     raw_port = os.getenv("MYSQL_PORT", "3306").strip()
     try:
@@ -244,6 +267,8 @@ def load_settings() -> Settings:
         mysql_database=_required("MYSQL_DATABASE"),
         file_base_url=file_base_url,
         redis_url=redis_url,
+        parent_cache_redis_url=parent_cache_redis_url,
+        parent_guard_redis_url=parent_guard_redis_url,
         embedding_dim=_int_env("EMBEDDING_DIM", 1024),
         indexing_batch_size=indexing_batch_size,
         indexing_timeout_seconds=_int_env("INDEXING_TIMEOUT_SECONDS", 60),

@@ -1,83 +1,182 @@
 # -*- coding: utf-8 -*-
-"""防缓存穿透：固定内存位数组布隆过滤器（ParentBloomFilter）。"""
+"""按文档版本及更新时间构建完整 Redis Bitmap，缺失或故障时放行。"""
 
 import hashlib
-from collections.abc import Iterable
-from threading import Lock
+import logging
+import math
+import time
+from collections.abc import Callable
+from collections.abc import Mapping
+from collections.abc import Sequence
 
-DEFAULT_BLOOM_BIT_SIZE = 1 << 20  # 1M bits (~128KB 固定内存)，绝不随无效请求膨胀
-DEFAULT_BLOOM_HASH_COUNT = 5
+from services.common.exceptions import StorageError
+from services.retrieval.fusion.backfill.cache.connection import RedisConnection
+from services.retrieval.fusion.backfill.models import ParentChunkRef
+
+_MAGIC = b"RAG-BLOOM-v1:"
+_HEADER_BITS = len(_MAGIC) * 8
+logger = logging.getLogger("rag.retrieval.backfill")
+
+# 一个版本的完整位图通过单次 SET 原子发布，不暴露半成品或单独的 ready 标记。
+_CONTAINS_LUA = """
+if redis.call('STRLEN', KEYS[1]) ~= tonumber(ARGV[1]) then
+    return {-1}
+end
+if redis.call('GETRANGE', KEYS[1], 0, string.len(ARGV[2]) - 1) ~= ARGV[2] then
+    return {-1}
+end
+local hashes = tonumber(ARGV[3])
+local result = {}
+for first = 4, #ARGV, hashes do
+    local present = 1
+    for offset = 0, hashes - 1 do
+        if redis.call('GETBIT', KEYS[1], tonumber(ARGV[first + offset])) == 0 then
+            present = 0
+            break
+        end
+    end
+    result[#result + 1] = present
+end
+return result
+"""
 
 
 class ParentBloomFilter:
-    """防缓存穿透：固定内存位数组布隆过滤器。
-
-    用于拦截根本不存在的 parent_id，避免缓存空值导致内存被海量无效 key 占满。
-    - might_contain(id) == False -> 100% 确定该父块不存在，直接拦截；
-    - might_contain(id) == True  -> 可能存在，放行进入 Redis 与 MySQL 查询。
-    """
+    """共享过滤器；只有从权威源加载到完整版本快照后才允许否定拦截。"""
 
     def __init__(
         self,
-        bit_size: int = DEFAULT_BLOOM_BIT_SIZE,
-        hash_count: int = DEFAULT_BLOOM_HASH_COUNT,
+        redis_url: str = "",
+        client=None,
+        *,
+        connection: RedisConnection | None = None,
+        false_positive_rate: float = 0.01,
+        max_snapshot_ids: int = 100000,
+        snapshot_ttl_seconds: int = 86400,
     ) -> None:
-        if bit_size < 64 or hash_count < 1:
-            raise ValueError("bit_size 必须 >= 64 且 hash_count >= 1")
-        self.bit_size = bit_size
-        self.hash_count = hash_count
-        self._bytes = bytearray((bit_size + 7) // 8)
-        self._lock = Lock()
-        self._count = 0
+        if (
+            not 0 < false_positive_rate < 1
+            or min(max_snapshot_ids, snapshot_ttl_seconds) < 1
+        ):
+            raise ValueError("过滤器误判率须在 0 与 1 之间，快照上限须大于 0")
+        self.connection = connection or RedisConnection(redis_url, client)
+        self.false_positive_rate = false_positive_rate
+        self.max_snapshot_ids = max_snapshot_ids
+        self.snapshot_ttl_seconds = snapshot_ttl_seconds
 
-    @property
-    def is_ready(self) -> bool:
-        """是否已写入过有效 parent_id；未预热时不拦截。"""
-        return self._count > 0
+    def _dimensions(self, count: int) -> tuple[int, int]:
+        bits = max(
+            64,
+            math.ceil(-count * math.log(self.false_positive_rate) / math.log(2) ** 2),
+        )
+        bits = math.ceil(bits / 8) * 8
+        hashes = max(1, round(bits / max(1, count) * math.log(2)))
+        return bits, min(hashes, 32)
 
-    def add(self, parent_id: str) -> None:
-        """将单个有效 parent_id 加入布隆过滤器。"""
-        key = parent_id.strip()
-        if not key:
-            return
-        positions = self._positions(key)
-        with self._lock:
-            for pos in positions:
-                self._bytes[pos >> 3] |= 1 << (pos & 7)
-            self._count += 1
+    def _key(self, ref: ParentChunkRef, count: int) -> str:
+        bits, hashes = self._dimensions(count)
+        return f"rag:parent_bloom:v1:{ref.scope}:{count}:{bits}:{hashes}"
 
-    def add_many(self, parent_ids: Iterable[str]) -> None:
-        """批量将有效 parent_id 加入布隆过滤器。"""
-        batch_positions: list[int] = []
-        added = 0
-        for raw in parent_ids:
-            key = raw.strip()
-            if key:
-                batch_positions.extend(self._positions(key))
-                added += 1
-        if not added:
-            return
-        with self._lock:
-            for pos in batch_positions:
-                self._bytes[pos >> 3] |= 1 << (pos & 7)
-            self._count += added
+    @staticmethod
+    def _positions(parent_id: str, bits: int, hashes: int) -> list[int]:
+        digest = hashlib.sha256(parent_id.encode("utf-8")).digest()
+        first = int.from_bytes(digest[:8], "big")
+        step = int.from_bytes(digest[8:16], "big") | 1
+        return [(first + index * step) % bits for index in range(hashes)]
 
-    def might_contain(self, parent_id: str) -> bool:
-        """判断 parent_id 是否可能存在；若过滤器尚未加载任何数据则默认放行。"""
-        if not self.is_ready:
-            return True
-        key = parent_id.strip()
-        if not key:
-            return False
-        positions = self._positions(key)
-        with self._lock:
-            for pos in positions:
-                if not (self._bytes[pos >> 3] & (1 << (pos & 7))):
-                    return False
-        return True
+    def _read(self, refs, count, deadline):
+        bits, hashes = self._dimensions(count)
+        offsets = []
+        for ref in refs:
+            offsets.extend(
+                pos + _HEADER_BITS
+                for pos in self._positions(ref.parent_id, bits, hashes)
+            )
+        values = self.connection.run(
+            lambda client: client.eval(
+                _CONTAINS_LUA,
+                1,
+                self._key(refs[0], count),
+                len(_MAGIC) + bits // 8,
+                _MAGIC,
+                hashes,
+                *offsets,
+            ),
+            None,
+            deadline=deadline,
+        )
+        if values is None or values == [-1] or len(values) != len(refs):
+            return None
+        return values
 
-    def _positions(self, key: str) -> list[int]:
-        digest = hashlib.sha256(key.encode("utf-8")).digest()
-        h1 = int.from_bytes(digest[:8], "big")
-        h2 = int.from_bytes(digest[8:16], "big") or 1
-        return [(h1 + i * h2) % self.bit_size for i in range(self.hash_count)]
+    def filter_many(
+        self,
+        refs: Sequence[ParentChunkRef],
+        parent_counts: Mapping[str, int],
+        id_loader: Callable,
+        *,
+        deadline: float | None = None,
+    ) -> list[ParentChunkRef]:
+        """完整快照首次缺失时从 MySQL 构建；过大文档及不完整快照放行。"""
+        grouped = {}
+        for ref in refs:
+            grouped.setdefault(ref.scope, []).append(ref)
+        allowed = set()
+        for group in grouped.values():
+            document_id = group[0].document_id
+            version = group[0].version
+            count = parent_counts.get(document_id, 0)
+            if count < 1 or count > self.max_snapshot_ids:
+                allowed.update(group)
+                continue
+            values = self._read(group, count, deadline)
+            if values is None:
+                # 熔断或未配置时不为过滤器额外查库。
+                available = self.connection.run(
+                    lambda client: client.ping(), False, deadline=deadline
+                )
+                if available:
+                    try:
+                        ids = id_loader(
+                            document_id,
+                            version,
+                            count,
+                            group[0].revision,
+                            deadline=deadline,
+                        )
+                    except (StorageError, RuntimeError) as exc:
+                        # 快照只是可降级的优化；构建失败不能否定正文缓存中的有效父块。
+                        logger.warning(
+                            "父块过滤器快照加载失败，放行查询：%s", type(exc).__name__
+                        )
+                        ids = []
+                    if len(ids) == count and len(set(ids)) == count:
+                        bits, hashes = self._dimensions(count)
+                        bitmap = bytearray(bits // 8)
+                        for index, pid in enumerate(ids):
+                            if (
+                                index % 256 == 0
+                                and deadline is not None
+                                and time.monotonic() >= deadline
+                            ):
+                                raise TimeoutError("父块过滤器构建已超时")
+                            for pos in self._positions(pid, bits, hashes):
+                                bitmap[pos >> 3] |= 1 << (7 - (pos & 7))
+                        value = _MAGIC + bytes(bitmap)
+                        self.connection.run(
+                            lambda client: client.set(
+                                self._key(group[0], count),
+                                value,
+                                ex=self.snapshot_ttl_seconds,
+                            ),
+                            False,
+                            deadline=deadline,
+                        )
+                        values = self._read(group, count, deadline)
+            if values is None:
+                allowed.update(group)
+            else:
+                allowed.update(
+                    ref for ref, present in zip(group, values, strict=True) if present
+                )
+        return [ref for ref in refs if ref in allowed]

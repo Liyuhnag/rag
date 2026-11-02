@@ -1,173 +1,176 @@
 # -*- coding: utf-8 -*-
-"""基于 Redis MGET / Pipeline、随机 TTL 抖动与分布式互斥锁的父块缓存。"""
+"""无 TTL 父块正文缓存；锁存放在另一 Redis 实例。"""
 
-import hashlib
 import json
-import logging
-import random
 from collections.abc import Mapping
 from collections.abc import Sequence
 from uuid import uuid4
 
+from services.retrieval.fusion.backfill.cache.connection import RedisConnection
 from services.retrieval.fusion.backfill.models import ParentChunkPayload
+from services.retrieval.fusion.backfill.models import ParentChunkRef
 
-logger = logging.getLogger("rag.retrieval.backfill")
-
-DEFAULT_REDIS_TTL_SECONDS = 3600
-DEFAULT_REDIS_JITTER_SECONDS = 600
-DEFAULT_LOCK_TTL_MS = 3000
-DEFAULT_REDIS_KEY_PREFIX = "rag:parent_chunk:"
+DEFAULT_LOCK_TTL_MS = 10000
+DEFAULT_REDIS_KEY_PREFIX = "rag:parent:"
 DEFAULT_REDIS_LOCK_PREFIX = "rag:parent_lock:"
 
-# 仅当锁的持有者 token 匹配时才删除锁，防止误删其他进程的锁
 _UNLOCK_LUA = """
-if redis.call("get", KEYS[1]) == ARGV[1] then
-    return redis.call("del", KEYS[1])
-else
-    return 0
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('DEL', KEYS[1])
 end
+return 0
 """
 
 
 class RedisParentCache:
-    """基于 Redis MGET / Pipeline 的分布式父块缓存。
-
-    内置防护：
-    1. 防缓存雪崩：每个 key 写入时独立附加 [0, jitter_seconds] 随机 TTL 抖动；
-    2. 防缓存击穿：提供 acquire_lock / release_lock 分布式互斥锁（SET NX PX + Lua 安全解锁）。
-    """
+    """正文通过普通 SET 写入，由实例 maxmemory + allkeys-lfu 管理容量。"""
 
     def __init__(
         self,
         redis_url: str = "",
         client=None,
         *,
-        ttl_seconds: int = DEFAULT_REDIS_TTL_SECONDS,
-        jitter_seconds: int = DEFAULT_REDIS_JITTER_SECONDS,
+        guard_url: str = "",
+        guard_client=None,
+        connection: RedisConnection | None = None,
+        guard_connection: RedisConnection | None = None,
         lock_ttl_ms: int = DEFAULT_LOCK_TTL_MS,
-        key_prefix: str = DEFAULT_REDIS_KEY_PREFIX,
-        lock_prefix: str = DEFAULT_REDIS_LOCK_PREFIX,
-        randint_fn=random.randint,
+        max_value_bytes: int = 1024 * 1024,
     ) -> None:
-        self.redis_url = redis_url.strip()
-        self._client = client
-        self.ttl_seconds = max(1, ttl_seconds)
-        self.jitter_seconds = max(0, jitter_seconds)
+        self.connection = connection or RedisConnection(redis_url, client)
+        self.guard = guard_connection or RedisConnection(guard_url, guard_client)
         self.lock_ttl_ms = max(100, lock_ttl_ms)
-        self.key_prefix = key_prefix
-        self.lock_prefix = lock_prefix
-        self._randint = randint_fn
+        self.max_value_bytes = max(1, max_value_bytes)
 
-    def _get_client(self):
-        if self._client is not None:
-            return self._client
-        if not self.redis_url:
-            return None
-        import redis
+    def _key(self, ref: ParentChunkRef) -> str:
+        return f"{DEFAULT_REDIS_KEY_PREFIX}{ref.suffix}"
 
-        self._client = redis.Redis.from_url(
-            self.redis_url,
-            decode_responses=True,
-            socket_connect_timeout=1.0,
-            socket_timeout=1.5,
-        )
-        return self._client
-
-    def _key(self, parent_id: str) -> str:
-        return f"{self.key_prefix}{parent_id}"
-
-    def _lock_key(self, parent_ids: Sequence[str]) -> str:
-        canonical = ",".join(sorted(set(parent_ids)))
-        digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24]
-        return f"{self.lock_prefix}{digest}"
+    def _lock_key(self, ref: ParentChunkRef) -> str:
+        return f"{DEFAULT_REDIS_LOCK_PREFIX}{ref.suffix}"
 
     def get_many(
-        self, parent_ids: Sequence[str]
-    ) -> tuple[dict[str, ParentChunkPayload], list[str]]:
-        """使用单次 MGET 批量查询 Redis；Redis 不可用时全部计入 missed 交由 MySQL 兜底。"""
-        if not parent_ids:
+        self,
+        refs: Sequence[ParentChunkRef],
+        *,
+        deadline: float | None = None,
+    ) -> tuple[dict[str, ParentChunkPayload], list[ParentChunkRef]]:
+        """批量查询；损坏、身份不符或超限的数据均当作未命中。"""
+        if not refs:
             return {}, []
-        try:
-            client = self._get_client()
-            if client is None:
-                return {}, list(parent_ids)
-            keys = [self._key(pid) for pid in parent_ids]
-            raw_values = client.mget(keys)
-        except Exception as exc:
-            logger.warning("Redis 父块缓存读取失败，降级直查 MySQL: %s", exc)
-            return {}, list(parent_ids)
-
-        hits: dict[str, ParentChunkPayload] = {}
-        missed: list[str] = []
-        for pid, raw in zip(parent_ids, raw_values, strict=True):
-            if not raw:
-                missed.append(pid)
+        keys = [self._key(ref) for ref in refs]
+        values = self.connection.run(
+            lambda client: client.mget(keys), None, deadline=deadline
+        )
+        if values is None or len(values) != len(refs):
+            return {}, list(refs)
+        found = {}
+        missed = []
+        for ref, raw in zip(refs, values, strict=True):
+            if not isinstance(raw, (str, bytes)):
+                missed.append(ref)
+                continue
+            size = len(raw.encode("utf-8")) if isinstance(raw, str) else len(raw)
+            if size > self.max_value_bytes:
+                missed.append(ref)
                 continue
             try:
-                data = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
-                hits[pid] = ParentChunkPayload.from_dict(data)
-            except Exception:
-                missed.append(pid)
+                data = json.loads(raw)
+                if not isinstance(data, dict) or not isinstance(
+                    data.get("content"), str
+                ):
+                    missed.append(ref)
+                    continue
+                payload = ParentChunkPayload.from_dict(data)
+            except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
+                missed.append(ref)
+                continue
+            if (
+                payload.parent_id != ref.parent_id
+                or payload.document_id != ref.document_id
+                or payload.version != ref.version
+                or not payload.content.strip()
+            ):
+                missed.append(ref)
+                continue
+            found[ref.parent_id] = payload
+        return found, missed
 
-        return hits, missed
-
-    def put_many(self, items: Mapping[str, ParentChunkPayload]) -> None:
-        """使用 Pipeline 批量写入 Redis，每个 key 附加独立随机 TTL 抖动防止集体过期雪崩。"""
-        if not items:
+    def put_many(
+        self,
+        items: Mapping[ParentChunkRef, ParentChunkPayload],
+        *,
+        deadline: float | None = None,
+    ) -> None:
+        """只缓存真实父块；普通 SET 同时清除同键历史 TTL。"""
+        encoded = {}
+        for ref, payload in items.items():
+            if (
+                payload.parent_id != ref.parent_id
+                or payload.document_id != ref.document_id
+                or payload.version != ref.version
+                or not payload.content.strip()
+            ):
+                continue
+            value = json.dumps(payload.to_dict(), ensure_ascii=False).encode("utf-8")
+            if len(value) <= self.max_value_bytes:
+                encoded[self._key(ref)] = value
+        if not encoded:
             return
-        try:
-            client = self._get_client()
-            if client is None:
-                return
-            pipe = client.pipeline(transaction=False)
-            for pid, payload in items.items():
-                jitter = (
-                    int(self._randint(0, self.jitter_seconds))
-                    if self.jitter_seconds > 0
-                    else 0
-                )
-                ttl = self.ttl_seconds + max(0, jitter)
-                serialized = json.dumps(payload.to_dict(), ensure_ascii=False)
-                pipe.setex(self._key(pid), ttl, serialized)
-            pipe.execute()
-        except Exception as exc:
-            logger.warning("Redis 父块缓存回填失败（已忽略）: %s", exc)
 
-    def acquire_lock(self, parent_ids: Sequence[str]) -> tuple[str, str] | None:
-        """防缓存击穿：尝试获取回源分布式互斥锁（SET key token NX PX）。
+        def write(client):
+            with client.pipeline(transaction=False) as pipe:
+                for key, value in encoded.items():
+                    pipe.set(key, value)
+                pipe.execute()
+            return True
 
-        返回：
-        - (lock_key, token)：成功获取锁，当前进程负责查 MySQL 并回填；
-        - ("", "")：Redis 未启用或异常，无需等待直接放行回源；
-        - None：锁已被其他并发进程持有，当前进程应短暂等待后重查 Redis。
-        """
-        if not parent_ids:
-            return ("", "")
-        try:
-            client = self._get_client()
-            if client is None:
-                return ("", "")
-            lock_key = self._lock_key(parent_ids)
-            token = uuid4().hex
-            acquired = client.set(lock_key, token, nx=True, px=self.lock_ttl_ms)
-            if acquired:
-                return (lock_key, token)
-            return None
-        except Exception as exc:
-            logger.warning("Redis 分布式锁获取异常，降级直接放行回源: %s", exc)
-            return ("", "")
+        self.connection.run(write, False, deadline=deadline)
 
-    def release_lock(self, lock_key: str, token: str) -> None:
-        """使用 Lua 脚本安全释放分布式互斥锁（仅当 token 一致时删除）。"""
-        if not lock_key or not token:
+    def acquire_locks(
+        self,
+        refs: Sequence[ParentChunkRef],
+        *,
+        deadline: float | None = None,
+    ) -> tuple[dict[ParentChunkRef, str], list[ParentChunkRef]]:
+        """逐父块加锁、批量发送；故障时放行到 MySQL 并发限制。"""
+        if not refs:
+            return {}, []
+        tokens = {ref: uuid4().hex for ref in refs}
+
+        def acquire(client):
+            with client.pipeline(transaction=False) as pipe:
+                for ref, token in tokens.items():
+                    pipe.set(self._lock_key(ref), token, nx=True, px=self.lock_ttl_ms)
+                return pipe.execute()
+
+        results = self.guard.run(acquire, None, deadline=deadline)
+        if results is None:
+            # 故障中已成功获得的锁会按租期释放；不依赖它保护数据库容量。
+            return dict.fromkeys(refs, ""), []
+        acquired = {}
+        waiting = []
+        for ref, success in zip(refs, results, strict=True):
+            if success:
+                acquired[ref] = tokens[ref]
+            else:
+                waiting.append(ref)
+        return acquired, waiting
+
+    def release_locks(self, tickets: Mapping[ParentChunkRef, str]) -> None:
+        """清理不受业务截止时间阻止，只删除自己仍持有的锁。"""
+        valid = {ref: token for ref, token in tickets.items() if token}
+        if not valid:
             return
-        try:
-            client = self._get_client()
-            if client is None:
-                return
-            if hasattr(client, "eval"):
-                client.eval(_UNLOCK_LUA, 1, lock_key, token)
-            elif client.get(lock_key) == token:
-                client.delete(lock_key)
-        except Exception as exc:
-            logger.warning("Redis 分布式锁释放异常（已忽略）: %s", exc)
+
+        def release(client):
+            with client.pipeline(transaction=False) as pipe:
+                for ref, token in valid.items():
+                    pipe.eval(_UNLOCK_LUA, 1, self._lock_key(ref), token)
+                pipe.execute()
+            return True
+
+        self.guard.run(release, False)
+
+    def close(self) -> None:
+        self.connection.close()
+        self.guard.close()

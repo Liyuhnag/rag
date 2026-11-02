@@ -40,11 +40,39 @@ services:
   redis:
     image: redis:7-alpine
     container_name: rag-redis
-    command: ["redis-server", "--appendonly", "yes"]
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
       - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis-cache:
+    image: redis:7-alpine
+    container_name: rag-redis-cache
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lfu"]
+    ports:
+      - "127.0.0.1:6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis-guard:
+    image: redis:7-alpine
+    container_name: rag-redis-guard
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "127.0.0.1:6381:6379"
+    volumes:
+      - redis-guard-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -104,4 +132,5 @@ services:
 volumes:
   mysql-data:
   redis-data:
+  redis-guard-data:
   seaweedfs-data:

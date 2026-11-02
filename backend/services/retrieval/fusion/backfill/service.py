@@ -1,255 +1,194 @@
 # -*- coding: utf-8 -*-
-"""父块回查服务（ParentBackfiller）。
+"""父块回填：权威状态校验、共享过滤、无 TTL 缓存及有界批量回源。"""
 
-采用三级架构解决缓存三大问题：
-1. 第一级（bloom.py - 防缓存穿透）：
-   - 使用固定内存的 ParentBloomFilter（位数组布隆过滤器）拦截不存在的 parent_id，
-     无需缓存空值，避免海量无效 ID 撑爆内存与 Redis。
-2. 第二级（redis_cache.py - 防缓存击穿 & 雪崩）：
-   - 使用 Redis MGET 批量读取父块；写入时每个 key 独立附加随机 TTL 抖动（Jitter）；
-   - 未命中需回源时，通过 Redis 分布式互斥锁（SET NX PX + Lua 解锁）控制并发，
-     未抢到锁的进程短暂等待后重试读取 Redis，复用持锁进程刚回填的结果。
-3. 第三级（mysql_store.py - 防缓存雪崩）：
-   - 使用 MySQLParentStore 批量联表查询，内置 BoundedSemaphore 限制最大并发数。
-"""
-
-import logging
 import time
-from collections.abc import Callable
-from collections.abc import Iterable
+from collections.abc import Mapping
 from collections.abc import Sequence
 
+from config import Settings
 from services.retrieval.fusion.backfill.cache import MySQLParentStore
 from services.retrieval.fusion.backfill.cache import ParentBloomFilter
 from services.retrieval.fusion.backfill.cache import RedisParentCache
+from services.retrieval.fusion.backfill.cache.connection import RedisConnection
 from services.retrieval.fusion.backfill.models import BackfillResult
 from services.retrieval.fusion.backfill.models import FusedParent
-from services.retrieval.fusion.backfill.models import ParentChunkPayload
+from services.retrieval.fusion.backfill.models import ParentChunkRef
 from services.retrieval.fusion.models import FusedParentCandidate
-
-logger = logging.getLogger("rag.retrieval.backfill")
-
-DEFAULT_LOCK_WAIT_RETRIES = 3
-DEFAULT_LOCK_WAIT_SECONDS = 0.02
 
 
 class ParentBackfiller:
-    """按 布隆过滤器 -> Redis 分布式缓存 -> MySQL 回查父块正文并保持 RRF 排名顺序。"""
+    """由应用进程复用；allowed_versions 必须由上层完成授权后传入。"""
 
     def __init__(
         self,
         redis_cache: RedisParentCache | None = None,
         mysql_store: MySQLParentStore | None = None,
         bloom_filter: ParentBloomFilter | None = None,
-        db_loader: Callable[[Sequence[str]], list[dict[str, object]]] | None = None,
         *,
-        lock_wait_retries: int = DEFAULT_LOCK_WAIT_RETRIES,
-        lock_wait_seconds: float = DEFAULT_LOCK_WAIT_SECONDS,
+        settings: Settings | None = None,
+        timeout_seconds: float = 3.0,
+        lock_wait_seconds: float = 0.02,
+        max_candidates: int = 200,
         sleep=time.sleep,
     ) -> None:
-        self.redis = redis_cache if redis_cache is not None else RedisParentCache()
-        self.mysql = (
-            mysql_store
-            if mysql_store is not None
-            else MySQLParentStore(db_loader=db_loader)
+        settings = settings or Settings()
+        guard = RedisConnection(settings.parent_guard_redis_url)
+        self.redis = redis_cache or RedisParentCache(
+            settings.parent_cache_redis_url, guard_connection=guard
         )
-        self.bloom = (
-            bloom_filter if bloom_filter is not None else ParentBloomFilter()
-        )
-        self.lock_wait_retries = max(1, lock_wait_retries)
+        self.bloom = bloom_filter or ParentBloomFilter(connection=self.redis.guard)
+        self.mysql = mysql_store or MySQLParentStore()
+        self.timeout_seconds = max(0.05, timeout_seconds)
+        if self.redis.lock_ttl_ms / 1000 <= self.timeout_seconds:
+            raise ValueError("父块锁租期必须大于单次回填预算")
         self.lock_wait_seconds = max(0.001, lock_wait_seconds)
+        self.max_candidates = max(1, max_candidates)
         self._sleep = sleep
-
-    def register_valid_parents(self, parent_ids: Iterable[str]) -> None:
-        """将已知存在的父块 ID 集合预热注册进布隆过滤器，开启防穿透拦截。"""
-        self.bloom.add_many(parent_ids)
 
     def backfill(
         self,
         candidates: Sequence[FusedParentCandidate],
         *,
-        allowed_versions: dict[str, int] | None = None,
+        allowed_versions: Mapping[str, int],
+        tenant_id: str = "default",
     ) -> BackfillResult:
-        """按 布隆过滤器 -> Redis -> MySQL 回查父块，严格按 candidates 的 RRF 顺序组装 FusedParent。"""
+        """先授权范围与当前状态校验，正文缓存命中不能绕过此边界。"""
         started = time.monotonic()
-        if not candidates:
-            return BackfillResult()
-
-        # ==================== 第一级：布隆过滤器防穿透拦截 ====================
-        ordered_ids: list[str] = []
-        seen: set[str] = set()
+        deadline = started + self.timeout_seconds
+        if not tenant_id.strip() or len(candidates) > self.max_candidates:
+            raise ValueError("租户作用域不能为空，候选数不能超过回填上限")
+        if not candidates or not allowed_versions:
+            return BackfillResult(missing_parent_count=len(candidates))
+        selected = {}
+        conflicted = set()
         for item in candidates:
-            pid = item.parent_id
-            if not pid or pid in seen:
+            if (
+                not item.parent_id
+                or allowed_versions.get(item.document_id) != item.version
+            ):
                 continue
-            seen.add(pid)
-            if not self.bloom.might_contain(pid):
-                logger.debug("布隆过滤器拦截不存在的父块 ID: %s", pid)
-                continue
-            ordered_ids.append(pid)
-
-        resolved: dict[str, ParentChunkPayload] = {}
-
-        # ==================== 第二级：Redis 分布式缓存批量查询 ====================
-        redis_hit_count = 0
-        mysql_lookup_ids: list[str] = []
-        if ordered_ids:
-            redis_found, redis_missed = self.redis.get_many(ordered_ids)
-            for pid, payload in redis_found.items():
-                if _is_version_valid(payload, allowed_versions):
-                    resolved[pid] = payload
-                    redis_hit_count += 1
-                else:
-                    mysql_lookup_ids.append(pid)
-            mysql_lookup_ids.extend(redis_missed)
-
-        # ==================== 第三级：分布式锁防击穿 + MySQL 批量回源 ====================
-        mysql_hit_count = 0
-        if mysql_lookup_ids:
-            redis_recovered, mysql_loaded = self._load_with_distributed_lock(
-                mysql_lookup_ids, allowed_versions
-            )
-            if redis_recovered:
-                resolved.update(redis_recovered)
-                redis_hit_count += len(redis_recovered)
-            if mysql_loaded:
-                resolved.update(mysql_loaded)
-                mysql_hit_count += len(mysql_loaded)
-
-        # ==================== 按 RRF 候选顺序组装最终父块列表 ====================
-        parents: list[FusedParent] = []
-        missing_count = 0
-        for candidate in candidates:
-            payload = resolved.get(candidate.parent_id)
-            if payload is None:
-                missing_count += 1
-                logger.warning(
-                    "父块回查缺失或已拦截: parent_id=%s document_id=%s",
-                    candidate.parent_id,
-                    candidate.document_id,
+            existing = selected.get(item.parent_id)
+            if existing and (existing.document_id, existing.version) != (
+                item.document_id,
+                item.version,
+            ):
+                conflicted.add(item.parent_id)
+            else:
+                selected.setdefault(item.parent_id, item)
+        for pid in conflicted:
+            selected.pop(pid, None)
+        documents = self.mysql.get_documents(
+            [item.document_id for item in selected.values()], deadline=deadline
+        )
+        refs = []
+        for item in selected.values():
+            document = documents.get(item.document_id)
+            if document is not None and document.version == item.version:
+                refs.append(
+                    ParentChunkRef(
+                        item.parent_id,
+                        item.document_id,
+                        item.version,
+                        tenant_id,
+                        document.revision,
+                    )
                 )
-                continue
-            if payload.document_id != candidate.document_id:
-                missing_count += 1
-                logger.warning(
-                    "父块回查 document_id 不一致: parent_id=%s (%s vs %s)",
-                    candidate.parent_id,
-                    payload.document_id,
-                    candidate.document_id,
+        refs = self.bloom.filter_many(
+            refs,
+            {key: value.parent_count for key, value in documents.items()},
+            self.mysql.get_snapshot_ids,
+            deadline=deadline,
+        )
+        resolved, missed = self.redis.get_many(refs, deadline=deadline)
+        redis_hits = len(resolved)
+        mysql_hits = 0
+        while missed:
+            tickets, waiting = self.redis.acquire_locks(missed, deadline=deadline)
+            try:
+                # 无论第几次获得锁，都必须重查；只有校验成功的命中才从回源集合移除。
+                recovered, to_load = self.redis.get_many(
+                    list(tickets), deadline=deadline
                 )
-                continue
+                redis_hits += len(recovered)
+                resolved.update(recovered)
+                if to_load:
+                    loaded = self.mysql.get_many(
+                        [ref.parent_id for ref in to_load], deadline=deadline
+                    )
+                    valid = {}
+                    for ref in to_load:
+                        payload = loaded.get(ref.parent_id)
+                        if (
+                            payload
+                            and payload.document_id == ref.document_id
+                            and payload.version == ref.version
+                        ):
+                            valid[ref] = payload
+                            resolved[ref.parent_id] = payload
+                    mysql_hits += len(valid)
+                    self.redis.put_many(valid, deadline=deadline)
+            finally:
+                self.redis.release_locks(tickets)
+            if not waiting:
+                break
+            recovered, missed = self.redis.get_many(waiting, deadline=deadline)
+            redis_hits += len(recovered)
+            resolved.update(recovered)
+            if missed:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("父块回填等待已超时")
+                self._sleep(min(self.lock_wait_seconds, remaining))
 
+        # 回填期间可能发生删除或版本切换，返回前再次读取权威状态。
+        current = self.mysql.get_documents(
+            [payload.document_id for payload in resolved.values()], deadline=deadline
+        )
+        parents = []
+        for ref in refs:
+            payload = resolved.get(ref.parent_id)
+            document = current.get(ref.document_id)
+            if (
+                payload is None
+                or document is None
+                or document.version != ref.version
+                or document.revision != ref.revision
+            ):
+                continue
+            item = selected[ref.parent_id]
             parents.append(
                 FusedParent(
                     parent_id=payload.parent_id,
                     document_id=payload.document_id,
-                    document_name=payload.document_name,
+                    document_name=document.name,
                     version=payload.version,
                     parent_index=payload.parent_index,
                     file_type=payload.file_type,
                     content=payload.content,
-                    heading_path=payload.heading_path or candidate.heading_path,
-                    locator=payload.locator or candidate.locator,
-                    page_start=(
-                        payload.page_start
-                        if payload.page_start is not None
-                        else candidate.page_start
-                    ),
-                    page_end=(
-                        payload.page_end
-                        if payload.page_end is not None
-                        else candidate.page_end
-                    ),
+                    heading_path=payload.heading_path,
+                    locator=payload.locator,
+                    page_start=payload.page_start,
+                    page_end=payload.page_end,
                     token_count=payload.token_count,
-                    score=candidate.rrf_score,
-                    rrf_score=candidate.rrf_score,
+                    score=item.rrf_score,
+                    rrf_score=item.rrf_score,
                     rerank_score=None,
                     rank=len(parents) + 1,
-                    matched_child_count=candidate.matched_child_count,
-                    matched_children=candidate.matched_children,
+                    matched_child_count=item.matched_child_count,
+                    matched_children=item.matched_children,
                 )
             )
-
-        elapsed_ms = max(0, int((time.monotonic() - started) * 1000))
+        if time.monotonic() >= deadline:
+            raise TimeoutError("父块回填已超时")
         return BackfillResult(
             parents=tuple(parents),
-            missing_parent_count=missing_count,
-            redis_hits=redis_hit_count,
-            mysql_hits=mysql_hit_count,
-            backfill_ms=elapsed_ms,
+            missing_parent_count=len(selected) - len(parents),
+            redis_hits=redis_hits,
+            mysql_hits=mysql_hits,
+            backfill_ms=max(0, int((time.monotonic() - started) * 1000)),
         )
 
-    def _load_with_distributed_lock(
-        self,
-        lookup_ids: list[str],
-        allowed_versions: dict[str, int] | None,
-    ) -> tuple[dict[str, ParentChunkPayload], dict[str, ParentChunkPayload]]:
-        """使用 Redis 分布式互斥锁控制并发回源，防止热点过期瞬间击穿 MySQL。"""
-        remaining = list(lookup_ids)
-        redis_recovered: dict[str, ParentChunkPayload] = {}
-
-        for attempt in range(self.lock_wait_retries):
-            lock_ticket = self.redis.acquire_lock(remaining)
-            if lock_ticket is not None:
-                lock_key, token = lock_ticket
-                try:
-                    if attempt > 0:
-                        found, still_missed = self.redis.get_many(remaining)
-                        for pid, payload in found.items():
-                            if _is_version_valid(payload, allowed_versions):
-                                redis_recovered[pid] = payload
-                        remaining = [
-                            pid for pid in still_missed if pid not in redis_recovered
-                        ]
-                        if not remaining:
-                            return redis_recovered, {}
-                    mysql_loaded = self._query_mysql_and_populate(
-                        remaining, allowed_versions
-                    )
-                    return redis_recovered, mysql_loaded
-                finally:
-                    self.redis.release_lock(lock_key, token)
-
-            # 未抢到锁：等待持锁进程回填 Redis 后重查
-            self._sleep(self.lock_wait_seconds)
-            found, still_missed = self.redis.get_many(remaining)
-            for pid, payload in found.items():
-                if _is_version_valid(payload, allowed_versions):
-                    redis_recovered[pid] = payload
-            remaining = [pid for pid in still_missed if pid not in redis_recovered]
-            if not remaining:
-                return redis_recovered, {}
-
-        mysql_loaded = self._query_mysql_and_populate(remaining, allowed_versions)
-        return redis_recovered, mysql_loaded
-
-    def _query_mysql_and_populate(
-        self,
-        parent_ids: Sequence[str],
-        allowed_versions: dict[str, int] | None,
-    ) -> dict[str, ParentChunkPayload]:
-        if not parent_ids:
-            return {}
-        mysql_found = self.mysql.get_many(parent_ids)
-        mysql_valid = {
-            pid: payload
-            for pid, payload in mysql_found.items()
-            if _is_version_valid(payload, allowed_versions)
-        }
-        if mysql_valid:
-            if self.bloom.is_ready:
-                self.bloom.add_many(mysql_valid.keys())
-            self.redis.put_many(mysql_valid)
-        return mysql_valid
-
-
-def _is_version_valid(
-    payload: ParentChunkPayload,
-    allowed_versions: dict[str, int] | None,
-) -> bool:
-    if allowed_versions is None:
-        return True
-    expected = allowed_versions.get(payload.document_id)
-    if expected is None:
-        return False
-    return payload.version == expected
+    def close(self) -> None:
+        self.redis.close()
+        if self.bloom.connection is not self.redis.guard:
+            self.bloom.connection.close()

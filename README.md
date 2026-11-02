@@ -63,7 +63,9 @@ docker compose down -v      # 停止并清空数据
 | 服务 | 地址 | 说明 |
 | --- | --- | --- |
 | MySQL | `127.0.0.1:3306` | 库 `app`，账号 `app` / `rag-dev-password` |
-| Redis | `127.0.0.1:6379` | Celery broker，任务结果在 `db 1` |
+| Redis 队列 | `127.0.0.1:6379` | Celery broker，任务结果在 `db 1`，`noeviction` |
+| Redis 正文缓存 | `127.0.0.1:6380` | 父块正文，无 TTL，256 MiB + `allkeys-lfu` |
+| Redis 过滤器与锁 | `127.0.0.1:6381` | 共享 Bitmap 布隆快照、分布式锁，`noeviction` |
 | SeaweedFS S3 | `127.0.0.1:8333` | 桶 `rag-documents` 首次启动自动创建 |
 | SeaweedFS Filer | `127.0.0.1:8888` | 文件访问地址，对应 `FILE_BASE_URL` |
 
