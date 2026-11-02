@@ -2,6 +2,7 @@
 """document_chunks 表的 SQL。"""
 
 from collections.abc import Iterable
+from collections.abc import Sequence
 from contextlib import contextmanager
 from datetime import datetime
 from datetime import timezone
@@ -74,6 +75,41 @@ def get(chunk_id: str) -> DocumentChunk | None:
         {"id": chunk_id},
     )
     return None if not rows else _from_row(rows[0])
+
+
+def list_parents_by_ids(parent_ids: Sequence[str]) -> list[dict[str, object]]:
+    """按父块 ID 列表批量联表查询 READY 文档最新版本的父块及文档名称。"""
+    clean_ids = [pid.strip() for pid in parent_ids if pid and pid.strip()]
+    if not clean_ids:
+        return []
+    holders = ", ".join(f"%(id_{i})s" for i in range(len(clean_ids)))
+    params = {f"id_{i}": pid for i, pid in enumerate(clean_ids)}
+    rows = execute(
+        f"""
+        SELECT
+            dc.id,
+            dc.document_id,
+            dc.version,
+            dc.parent_index,
+            dc.child_count,
+            dc.file_type,
+            dc.page_start,
+            dc.page_end,
+            dc.locator,
+            dc.heading_path,
+            dc.content,
+            dc.token_count,
+            d.name AS document_name
+        FROM document_chunks AS dc
+        INNER JOIN documents AS d ON d.id = dc.document_id
+        WHERE dc.chunk_level = 'PARENT'
+          AND dc.id IN ({holders})
+          AND d.status = 'READY'
+          AND dc.version = d.parse_version
+        """,
+        params,
+    )
+    return list(rows)
 
 
 def list_by_version(
