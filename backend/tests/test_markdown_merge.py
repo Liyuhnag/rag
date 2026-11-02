@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """PDF 分段和 Word 共用同一份 Markdown 合并。"""
 
-from services.parsing.merge import MarkdownPage
-from services.parsing.merge import MarkdownPart
-from services.parsing.merge import merge_markdown
+from services.indexing.parsing.merge import MarkdownPage
+from services.indexing.parsing.merge import MarkdownPart
+from services.indexing.parsing.merge import merge_markdown
 
 
 def test_parts_merge_in_page_order_with_markers():

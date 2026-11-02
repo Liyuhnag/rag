@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from io import BytesIO
 from types import SimpleNamespace
 
-from services.chunking.source import StoredParsedSource
+from services.indexing.chunking.source import StoredParsedSource
 
 
 def test_artifact_source_reads_local_blocks_with_provenance():

@@ -7,12 +7,12 @@ import pytest
 import tiktoken
 
 from model.document_chunk.model import ChunkLevel
-from services.chunking.common.errors import ChunkingFailed
-from services.chunking.common.models import ChunkOptions
-from services.chunking.splitter import TokenChunker
-from services.parsing.models import ParseRequest
-from services.parsing.models import ParsedBlock
-from services.parsing.models import ParsedDocument
+from services.indexing.chunking.common.errors import ChunkingFailed
+from services.indexing.chunking.common.models import ChunkOptions
+from services.indexing.chunking.splitter import TokenChunker
+from services.indexing.parsing.models import ParseRequest
+from services.indexing.parsing.models import ParsedBlock
+from services.indexing.parsing.models import ParsedDocument
 
 
 def document(blocks, version=2, file_type="md"):

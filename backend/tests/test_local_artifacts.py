@@ -5,10 +5,10 @@ import json
 
 import pytest
 
-from services.parsing.local_artifacts import store_document
-from services.parsing.models import ParseRequest
-from services.parsing.models import ParsedBlock
-from services.parsing.models import ParsedDocument
+from services.indexing.parsing.local_artifacts import store_document
+from services.indexing.parsing.models import ParseRequest
+from services.indexing.parsing.models import ParsedBlock
+from services.indexing.parsing.models import ParsedDocument
 from datetime import datetime
 from datetime import timezone
 

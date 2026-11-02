@@ -15,7 +15,7 @@ from model.document_task.model import DocumentTaskStatus
 from services.common.exceptions import StorageError
 from services.common.exceptions import UploadNotFound
 from services.common.object_storage import client as storage_client
-from services.parsing.service import SubmittedParse
+from services.indexing.parsing.service import SubmittedParse
 
 
 def _fingerprint(content: bytes) -> str:

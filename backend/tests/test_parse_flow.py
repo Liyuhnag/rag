@@ -14,12 +14,12 @@ from model.document.model import DocumentStatus
 from model.document_task.model import DocumentTask
 from model.document_task.model import DocumentTaskStage
 from model.document_task.model import DocumentTaskStatus
-from services.parsing.models import ParseRequest
-from services.parsing.models import ParsedDocument
-from services.parsing.models import SubmittedPart
-from services.parsing.service import FinishedParse
-from services.parsing.service import SubmittedParse
-from services.parsing.service import StoredParseResult
+from services.indexing.parsing.models import ParseRequest
+from services.indexing.parsing.models import ParsedDocument
+from services.indexing.parsing.models import SubmittedPart
+from services.indexing.parsing.service import FinishedParse
+from services.indexing.parsing.service import SubmittedParse
+from services.indexing.parsing.service import StoredParseResult
 
 worker = importlib.import_module("task.parse_document")
 merge_worker = importlib.import_module("task.merge_document")

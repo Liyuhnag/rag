@@ -10,12 +10,12 @@ from llama_index.core.schema import Document
 from llama_index.core.schema import NodeRelationship
 from llama_index.core.schema import TextNode
 
-from services.chunking.common.errors import ChunkingFailed
-from services.chunking.common.models import ChunkOptions
-from services.chunking.splitter import TokenChunker
-from services.parsing.models import ParseRequest
-from services.parsing.models import ParsedBlock
-from services.parsing.models import ParsedDocument
+from services.indexing.chunking.common.errors import ChunkingFailed
+from services.indexing.chunking.common.models import ChunkOptions
+from services.indexing.chunking.splitter import TokenChunker
+from services.indexing.parsing.models import ParseRequest
+from services.indexing.parsing.models import ParsedBlock
+from services.indexing.parsing.models import ParsedDocument
 
 
 def test_plain_native_splitters_use_requested_sizes_and_overlap():

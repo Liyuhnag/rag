@@ -87,8 +87,8 @@ def measure(mode, mib):
                 store.write_object(item.key, item.body, item.content_type)
             keys = result.result
         else:
-            from services.parsing.collect import PartZip
-            from services.parsing.collect import collect_parts
+            from services.indexing.parsing.collect import PartZip
+            from services.indexing.parsing.collect import collect_parts
 
             parts = [
                 PartZip(index + 1, index + 1, index + 1, f"part-{index}.zip")

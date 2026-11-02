@@ -11,10 +11,10 @@ from model.document_task import orm as task_orm
 from model.document_task.lease import LeaseLost
 from model.document_task.model import DocumentTask
 from model.document_task.model import DocumentTaskStage
-from services.chunking.service import DocumentChunkingService
+from services.indexing.chunking.service import DocumentChunkingService
 from services.document.versioning import fail_version_mismatch
-from services.parsing.service import StoredParseResult
-from services.structured.service import StructuredSchemaService
+from services.indexing.parsing.service import StoredParseResult
+from services.indexing.structured.service import StructuredSchemaService
 from services.task_runtime.lease import TaskLease
 from services.task_runtime.lifecycle import advance
 from services.task_runtime.lifecycle import fail

@@ -20,9 +20,9 @@ from model.parse_job import orm as parse_job_orm
 from model.parse_job.model import ParseJob
 from model.parse_job.model import ParseJobStatus
 from services.document.versioning import fail_version_mismatch
-from services.parsing.poll import resume_parts
-from services.parsing.service import DocumentParsingService
-from services.parsing.service import SubmittedParse
+from services.indexing.parsing.poll import resume_parts
+from services.indexing.parsing.service import DocumentParsingService
+from services.indexing.parsing.service import SubmittedParse
 from services.task_runtime.lease import TaskLease
 from services.task_runtime.lifecycle import advance
 from services.task_runtime.lifecycle import fail

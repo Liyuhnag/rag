@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from services.parsing.collect import PartZip
-from services.parsing.service import DocumentParsingService
+from services.indexing.parsing.collect import PartZip
+from services.indexing.parsing.service import DocumentParsingService
 
 
 class DiskStore:
@@ -89,7 +89,7 @@ def test_later_invalid_part_does_not_publish_any_artifacts(tmp_path):
 
 
 def test_member_actual_bytes_are_limited(tmp_path, monkeypatch):
-    import services.parsing.collect as collect
+    import services.indexing.parsing.collect as collect
 
     monkeypatch.setattr(collect, "_MAX_BYTES", 5)
     store = DiskStore(tmp_path)
@@ -155,7 +155,7 @@ def test_missing_later_zip_does_not_publish_any_artifacts(tmp_path):
 
 
 def test_zip_with_too_many_ignored_entries_is_rejected(tmp_path, monkeypatch):
-    import services.parsing.collect as collect
+    import services.indexing.parsing.collect as collect
 
     monkeypatch.setattr(collect, "_MAX_FILES", 2)
     store = DiskStore(tmp_path)
@@ -209,8 +209,8 @@ def test_s3_file_upload_wraps_transfer_failure(tmp_path):
 
 
 def test_zip64_directory_is_explicitly_rejected(tmp_path):
-    from services.parsing.collect import _check_archive_directory
-    from services.parsing.errors import ParseFailed
+    from services.indexing.parsing.collect import _check_archive_directory
+    from services.indexing.parsing.errors import ParseFailed
     import struct
 
     path = tmp_path / "zip64.zip"

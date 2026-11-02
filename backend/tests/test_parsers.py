@@ -3,8 +3,8 @@
 
 import pytest
 
-from services.parsing.errors import UnsupportedFileType
-from services.parsing.parsers import build_default_registry
+from services.indexing.parsing.errors import UnsupportedFileType
+from services.indexing.parsing.parsers import build_default_registry
 
 
 def test_default_registry_maps_file_types():

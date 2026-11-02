@@ -5,7 +5,7 @@ import logging
 
 from model.document import orm as document_orm
 from model.document.model import DocumentStatus
-from services.indexing.service import DocumentIndexingService
+from services.indexing.vector_index.service import DocumentIndexingService
 from task.app import celery_app
 
 logger = logging.getLogger("rag.task")

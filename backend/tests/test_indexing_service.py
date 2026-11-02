@@ -8,7 +8,7 @@ import pytest
 
 from model.document_chunk.model import ChunkLevel
 from model.document_chunk.model import DocumentChunk
-from services.indexing.service import DocumentIndexingService
+from services.indexing.vector_index.service import DocumentIndexingService
 
 
 def child(index=0):
@@ -117,11 +117,11 @@ class Embedder:
 
 def setup_service(monkeypatch, store):
     monkeypatch.setattr(
-        "services.indexing.service.chunk_orm.index_current_version",
+        "services.indexing.vector_index.service.chunk_orm.index_current_version",
         store.index_current_version,
     )
     monkeypatch.setattr(
-        "services.indexing.service.document_orm.mark_processing",
+        "services.indexing.vector_index.service.document_orm.mark_processing",
         lambda *args, **kwargs: True,
     )
     settings = SimpleNamespace(
@@ -183,7 +183,7 @@ def test_replay_unpublishes_ready_before_deleting_the_current_index(monkeypatch)
         return delete_version
 
     monkeypatch.setattr(
-        "services.indexing.service.document_orm.mark_processing",
+        "services.indexing.vector_index.service.document_orm.mark_processing",
         mark_processing,
     )
     vectors.delete_version = watch(vectors.delete_version)
@@ -206,7 +206,7 @@ def test_changed_version_does_not_clear_external_indexes(monkeypatch):
         return False
 
     monkeypatch.setattr(
-        "services.indexing.service.document_orm.mark_processing",
+        "services.indexing.vector_index.service.document_orm.mark_processing",
         mark_processing,
     )
     assert not service.run(SimpleNamespace(id="doc", name="a"), 2)

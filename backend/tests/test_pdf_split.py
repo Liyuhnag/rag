@@ -7,12 +7,12 @@ from pathlib import Path
 import pymupdf
 import pytest
 
-from services.parsing.errors import ParseFailed
-from services.parsing.mineru import MinerUJob
-from services.parsing.models import ParseInput
-from services.parsing.models import ParseRequest
-from services.parsing.parsers.pdf import PdfParser
-from services.parsing.parsers.pdf_split import split_pdf
+from services.indexing.parsing.errors import ParseFailed
+from services.indexing.parsing.mineru import MinerUJob
+from services.indexing.parsing.models import ParseInput
+from services.indexing.parsing.models import ParseRequest
+from services.indexing.parsing.parsers.pdf import PdfParser
+from services.indexing.parsing.parsers.pdf_split import split_pdf
 
 
 class _Reader:

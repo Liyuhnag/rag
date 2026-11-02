@@ -8,7 +8,7 @@ import pytest
 
 from model.document.model import Document
 from model.document.model import DocumentStatus
-from services.parsing.service import DocumentParsingService
+from services.indexing.parsing.service import DocumentParsingService
 
 
 class Store:

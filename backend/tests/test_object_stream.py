@@ -14,7 +14,7 @@ from botocore.exceptions import ResponseStreamingError
 from services.common.exceptions import StorageError
 from services.common.object_storage import ObjectStorage
 from services.common.object_storage import S3ObjectStorage
-from services.parsing.adapters import object_reader
+from services.indexing.parsing.adapters import object_reader
 
 
 class FakeBody(io.BytesIO):

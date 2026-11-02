@@ -16,24 +16,24 @@ from model.document_task.model import DocumentTaskStatus
 from model.document.model import DocumentStatus
 from model.parse_job.model import ParseJob
 from model.parse_job.model import ParseJobStatus
-from services.parsing.errors import MinerUJobLost
-from services.parsing.errors import MinerURequestError
-from services.parsing.errors import ParserUnavailable
-from services.parsing.mineru.client import MinerUJob
-from services.parsing.mineru.client import MinerUStatus
-from services.parsing.poll import DOWNLOAD_LEASE
-from services.parsing.poll import POLL_INTERVAL
-from services.parsing.poll import apply_plan
-from services.parsing.poll import download_job
-from services.parsing.poll import merge_ready
-from services.parsing.poll import plan_lost
-from services.parsing.poll import plan_status
-from services.parsing.poll import plan_unavailable
-from services.parsing.poll import poll_job
-from services.parsing.poll import resubmit_job
-from services.parsing.service import StoredParseResult
+from services.indexing.parsing.errors import MinerUJobLost
+from services.indexing.parsing.errors import MinerURequestError
+from services.indexing.parsing.errors import ParserUnavailable
+from services.indexing.parsing.mineru.client import MinerUJob
+from services.indexing.parsing.mineru.client import MinerUStatus
+from services.indexing.parsing.poll import DOWNLOAD_LEASE
+from services.indexing.parsing.poll import POLL_INTERVAL
+from services.indexing.parsing.poll import apply_plan
+from services.indexing.parsing.poll import download_job
+from services.indexing.parsing.poll import merge_ready
+from services.indexing.parsing.poll import plan_lost
+from services.indexing.parsing.poll import plan_status
+from services.indexing.parsing.poll import plan_unavailable
+from services.indexing.parsing.poll import poll_job
+from services.indexing.parsing.poll import resubmit_job
+from services.indexing.parsing.service import StoredParseResult
 
-poll = __import__("services.parsing.poll", fromlist=["poll"])
+poll = __import__("services.indexing.parsing.poll", fromlist=["poll"])
 
 
 def _now() -> datetime:
@@ -329,7 +329,7 @@ def test_download_waits_when_a_sibling_is_missing(monkeypatch):
 
 
 def test_download_hands_off_without_collecting_or_chunking(monkeypatch):
-    from services.merge import service as merge_service
+    from services.indexing.merge import service as merge_service
 
     job = _job(status=ParseJobStatus.COMPLETED, result_key="part.zip")
     calls = []
@@ -343,7 +343,7 @@ def test_download_hands_off_without_collecting_or_chunking(monkeypatch):
 
 
 def test_merge_publishes_and_hands_off_with_zip_pointer_preserved(monkeypatch):
-    from services.merge import service as merge_service
+    from services.indexing.merge import service as merge_service
     from services.task_runtime.lease import TaskLease
 
     job = _job(status=ParseJobStatus.COMPLETED, result_key="part.zip")
@@ -373,7 +373,7 @@ def test_merge_publishes_and_hands_off_with_zip_pointer_preserved(monkeypatch):
 
 
 def test_merge_missing_parts_rolls_back_to_parsing(monkeypatch):
-    from services.merge import service as merge_service
+    from services.indexing.merge import service as merge_service
     from services.task_runtime.lease import TaskLease
 
     task = _task()

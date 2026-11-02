@@ -5,11 +5,11 @@ from contextlib import contextmanager
 
 from model.document_chunk import orm
 from model.document_chunk.model import ChunkLevel
-from services.chunking.common.models import ChunkOptions
-from services.chunking.splitter import TokenChunker
-from services.parsing.models import ParseRequest
-from services.parsing.models import ParsedBlock
-from services.parsing.models import ParsedDocument
+from services.indexing.chunking.common.models import ChunkOptions
+from services.indexing.chunking.splitter import TokenChunker
+from services.indexing.parsing.models import ParseRequest
+from services.indexing.parsing.models import ParsedBlock
+from services.indexing.parsing.models import ParsedDocument
 
 
 def test_current_version_batches_parent_before_child_and_updates_counts(monkeypatch):

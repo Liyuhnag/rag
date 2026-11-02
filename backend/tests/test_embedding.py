@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from config import Settings
-from services.indexing.embedding import DashScopeEmbedder
+from services.indexing.vector_index.embedding import DashScopeEmbedder
 
 
 def embedder(handler, **kwargs):

@@ -13,15 +13,15 @@ from urllib.request import build_opener
 
 import pytest
 
-from services.parsing.mineru.client import UrllibTransport
+from services.indexing.parsing.mineru.client import UrllibTransport
 
-from services.parsing.mineru import HttpResponse
-from services.parsing.mineru import MinerUClient
-from services.parsing.mineru import MinerUJob
-from services.parsing.mineru import MinerUStatus
-from services.parsing.errors import MinerUJobLost
-from services.parsing.errors import MinerURequestError
-from services.parsing.errors import ParserUnavailable
+from services.indexing.parsing.mineru import HttpResponse
+from services.indexing.parsing.mineru import MinerUClient
+from services.indexing.parsing.mineru import MinerUJob
+from services.indexing.parsing.mineru import MinerUStatus
+from services.indexing.parsing.errors import MinerUJobLost
+from services.indexing.parsing.errors import MinerURequestError
+from services.indexing.parsing.errors import ParserUnavailable
 
 
 @dataclass
@@ -357,7 +357,7 @@ def test_transport_download_reads_bounded_chunks(tmp_path, monkeypatch):
             return b"x" * count
 
     monkeypatch.setattr(
-        "services.parsing.mineru.client.urlopen", lambda *a, **k: Response()
+        "services.indexing.parsing.mineru.client.urlopen", lambda *a, **k: Response()
     )
     target = tmp_path / "result.zip"
     response = UrllibTransport().download("http://mineru/result", {}, target, 300)
@@ -381,7 +381,7 @@ def test_transport_limits_json_response_size(monkeypatch):
             return b"x" * size
 
     monkeypatch.setattr(
-        "services.parsing.mineru.client.urlopen", lambda *a, **k: Response()
+        "services.indexing.parsing.mineru.client.urlopen", lambda *a, **k: Response()
     )
     with pytest.raises(MinerURequestError, match="响应.*过大"):
         UrllibTransport().send("GET", "http://mineru/status", {}, None, 60)
@@ -406,7 +406,7 @@ def test_transport_cleans_interrupted_download(tmp_path, monkeypatch):
             raise OSError("broken connection")
 
     monkeypatch.setattr(
-        "services.parsing.mineru.client.urlopen", lambda *a, **k: Response()
+        "services.indexing.parsing.mineru.client.urlopen", lambda *a, **k: Response()
     )
     target = tmp_path / "partial.zip"
     with pytest.raises(OSError):
@@ -432,7 +432,7 @@ def test_large_error_response_preserves_retryable_status(monkeypatch):
     def error_response(*args, **kwargs):
         raise HTTPError("http://mineru", 503, "busy", {}, io.BytesIO(b"x" * 2_000_000))
 
-    monkeypatch.setattr("services.parsing.mineru.client.urlopen", error_response)
+    monkeypatch.setattr("services.indexing.parsing.mineru.client.urlopen", error_response)
     response = UrllibTransport().send("GET", "http://mineru", {}, None, 60)
     assert response.status == 503
     assert len(response.body) <= 1024 * 1024
@@ -453,7 +453,7 @@ def test_transport_rejects_truncated_download(tmp_path, monkeypatch):
             return b""
 
     monkeypatch.setattr(
-        "services.parsing.mineru.client.urlopen", lambda *a, **k: Response()
+        "services.indexing.parsing.mineru.client.urlopen", lambda *a, **k: Response()
     )
     target = tmp_path / "result.zip"
     with pytest.raises(OSError, match="不完整"):
@@ -474,7 +474,7 @@ def test_urllib_put_omits_implicit_content_type_and_authorization(monkeypatch):
         assert b"".join(request.data) == b"pdf"
         return io_response()
 
-    monkeypatch.setattr("services.parsing.mineru.client.urlopen", open_request)
+    monkeypatch.setattr("services.indexing.parsing.mineru.client.urlopen", open_request)
     assert UrllibTransport().send(
         "PUT", "https://storage/upload", {"Content-Length": "3"}, [b"pdf"], 300
     ) == HttpResponse(200, b"")
@@ -495,7 +495,7 @@ def test_urllib_does_not_forward_control_authorization_on_redirect(monkeypatch):
         assert redirected.get_header("Authorization") is None
         return io_response()
 
-    monkeypatch.setattr("services.parsing.mineru.client.urlopen", open_request)
+    monkeypatch.setattr("services.indexing.parsing.mineru.client.urlopen", open_request)
     UrllibTransport().send(
         "GET",
         "https://mineru.net/status",

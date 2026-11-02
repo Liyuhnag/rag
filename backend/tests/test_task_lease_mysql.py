@@ -665,11 +665,11 @@ def test_mineru_jobs_are_grouped_and_polled_by_original_claim(mysql):
 
 def test_chunk_transaction_rolls_back_with_outer_lease_transaction(mysql):
     from model.document_chunk import orm as chunk_orm
-    from services.chunking.common.models import ChunkOptions
-    from services.chunking.splitter import TokenChunker
-    from services.parsing.models import ParseRequest
-    from services.parsing.models import ParsedBlock
-    from services.parsing.models import ParsedDocument
+    from services.indexing.chunking.common.models import ChunkOptions
+    from services.indexing.chunking.splitter import TokenChunker
+    from services.indexing.parsing.models import ParseRequest
+    from services.indexing.parsing.models import ParsedBlock
+    from services.indexing.parsing.models import ParsedDocument
 
     task = orm.claim("task", mysql)
     parsed = ParsedDocument(

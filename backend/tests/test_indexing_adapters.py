@@ -7,8 +7,8 @@ import pytest
 from pymilvus.exceptions import MilvusException
 
 from config import Settings
-from services.indexing.elasticsearch import ElasticsearchChunkStore
-from services.indexing.milvus import MilvusChunkStore
+from services.indexing.vector_index.elasticsearch import ElasticsearchChunkStore
+from services.indexing.vector_index.milvus import MilvusChunkStore
 
 
 def test_es_partial_bulk_failure_cannot_be_success():

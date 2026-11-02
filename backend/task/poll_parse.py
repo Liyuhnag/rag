@@ -4,11 +4,11 @@
 from datetime import datetime
 from datetime import timezone
 
-from services.parsing.mineru.client import MinerUClient
-from services.parsing.poll import default_reader
-from services.parsing.poll import download_job
-from services.parsing.poll import poll_due
-from services.parsing.poll import resubmit_job
+from services.indexing.parsing.mineru.client import MinerUClient
+from services.indexing.parsing.poll import default_reader
+from services.indexing.parsing.poll import download_job
+from services.indexing.parsing.poll import poll_due
+from services.indexing.parsing.poll import resubmit_job
 from task.app import celery_app
 
 

@@ -9,8 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from services.chunking.source import StoredParsedSource
-from services.chunking.common.errors import ChunkingFailed
+from services.indexing.chunking.source import StoredParsedSource
+from services.indexing.chunking.common.errors import ChunkingFailed
 
 
 def _document():

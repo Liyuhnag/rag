@@ -6,12 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from services.parsing.errors import ParseFailed
-from services.parsing.models import ParseInput
-from services.parsing.models import ParseRequest
-from services.parsing.parsers.csv import CsvParser
-from services.parsing.parsers.markdown import MarkdownParser
-from services.parsing.parsers.txt import TxtParser
+from services.indexing.parsing.errors import ParseFailed
+from services.indexing.parsing.models import ParseInput
+from services.indexing.parsing.models import ParseRequest
+from services.indexing.parsing.parsers.csv import CsvParser
+from services.indexing.parsing.parsers.markdown import MarkdownParser
+from services.indexing.parsing.parsers.txt import TxtParser
 
 
 class DownloadReader:

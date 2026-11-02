@@ -11,7 +11,7 @@ from model.document_task.lease import LeaseLost
 from model.document_task.model import DocumentTask
 from model.document_task.model import DocumentTaskStage
 from services.document.versioning import fail_version_mismatch
-from services.merge.service import run_merge
+from services.indexing.merge.service import run_merge
 from services.task_runtime.lease import TaskLease
 from services.task_runtime.lifecycle import fail
 from services.task_runtime.policy import MERGE_STAGES

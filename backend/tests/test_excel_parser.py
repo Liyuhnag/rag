@@ -8,10 +8,10 @@ from datetime import datetime
 import pytest
 from openpyxl import Workbook
 
-from services.parsing.errors import ParseFailed
-from services.parsing.models import ParseInput
-from services.parsing.models import ParseRequest
-from services.parsing.parsers.xlsx import XlsxParser
+from services.indexing.parsing.errors import ParseFailed
+from services.indexing.parsing.models import ParseInput
+from services.indexing.parsing.models import ParseRequest
+from services.indexing.parsing.parsers.xlsx import XlsxParser
 
 
 class _Reader:

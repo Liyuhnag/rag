@@ -8,21 +8,21 @@ from pathlib import Path
 
 import pytest
 
-import services.parsing.service as parsing_service
+import services.indexing.parsing.service as parsing_service
 
 from model.document.model import Document
 from model.document.model import DocumentStatus
-from services.parsing.mineru import MinerUJob
-from services.parsing.errors import ParseFailed
-from services.parsing.models import ParseInput
-from services.parsing.models import ParseRequest
-from services.parsing.models import ParseSubmission
-from services.parsing.models import ParsedDocument
-from services.parsing.parsers.doc import DocParser
-from services.parsing.parsers.docx import DocxParser
-from services.parsing.service import DocumentParsingService
-from services.parsing.service import FinishedParse
-from services.parsing.service import SubmittedParse
+from services.indexing.parsing.mineru import MinerUJob
+from services.indexing.parsing.errors import ParseFailed
+from services.indexing.parsing.models import ParseInput
+from services.indexing.parsing.models import ParseRequest
+from services.indexing.parsing.models import ParseSubmission
+from services.indexing.parsing.models import ParsedDocument
+from services.indexing.parsing.parsers.doc import DocParser
+from services.indexing.parsing.parsers.docx import DocxParser
+from services.indexing.parsing.service import DocumentParsingService
+from services.indexing.parsing.service import FinishedParse
+from services.indexing.parsing.service import SubmittedParse
 
 
 class _Reader:

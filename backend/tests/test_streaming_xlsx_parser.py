@@ -12,10 +12,10 @@ from zipfile import ZIP_DEFLATED
 import pytest
 from openpyxl import Workbook
 
-from services.parsing.errors import ParseFailed
-from services.parsing.models import ParseInput
-from services.parsing.models import ParseRequest
-from services.parsing.parsers.xlsx import XlsxParser
+from services.indexing.parsing.errors import ParseFailed
+from services.indexing.parsing.models import ParseInput
+from services.indexing.parsing.models import ParseRequest
+from services.indexing.parsing.parsers.xlsx import XlsxParser
 
 
 class DownloadReader:
@@ -268,7 +268,7 @@ def test_streaming_missing_cell_reference_follows_previous_column():
 
 @pytest.mark.parametrize("count,size", [(10001, 0), (1, 16 * 1024 * 1024 + 1)])
 def test_streaming_rejects_directory_before_zipfile(monkeypatch, count, size):
-    from services.parsing.parsers import _xlsx_stream
+    from services.indexing.parsing.parsers import _xlsx_stream
 
     content = struct.pack("<4s4H2LH", b"PK\x05\x06", 0, 0, count, count, size, 0, 0)
 

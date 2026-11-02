@@ -3,11 +3,11 @@
 
 import pytest
 
-from services.parsing.errors import ParseFailed
-from services.parsing.models import ParseInput
-from services.parsing.models import ParseRequest
-from services.parsing.models import ParsedBlock
-from services.parsing.parsers.markdown import MarkdownParser
+from services.indexing.parsing.errors import ParseFailed
+from services.indexing.parsing.models import ParseInput
+from services.indexing.parsing.models import ParseRequest
+from services.indexing.parsing.models import ParsedBlock
+from services.indexing.parsing.parsers.markdown import MarkdownParser
 
 
 class _Reader:

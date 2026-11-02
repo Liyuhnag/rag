@@ -14,7 +14,7 @@ from model.document_task import orm
 from model.document_task.model import DocumentTaskStage as Stage
 from model.parse_job import orm as job_orm
 from model.parse_job.model import ParseJobStatus as PartStatus
-from services.parsing import poll
+from services.indexing.parsing import poll
 from services.task_runtime import lifecycle
 from services.task_runtime.lease import TaskLease
 from tests.test_poll_parse import _job
@@ -253,7 +253,7 @@ def test_retry_reuses_zip_and_active_parts_and_resubmits_only_failed_part(mysql,
     assert job_orm.claim_due(mysql, 10) == []
     task = orm.claim("task", mysql, (stage,))
     if stage == Stage.MERGING:
-        from services.merge.service import run_merge
+        from services.indexing.merge.service import run_merge
 
         run_merge(task, document_orm.get("doc"), TaskLease("task", task.lease_token, (stage,)))
         assert orm.get("task").stage == "PARSING"

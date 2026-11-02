@@ -5,10 +5,10 @@ import json
 
 import pytest
 
-from services.parsing.errors import ParseFailed
-from services.parsing.models import ParseInput
-from services.parsing.models import ParseRequest
-from services.parsing.parsers.csv import CsvParser
+from services.indexing.parsing.errors import ParseFailed
+from services.indexing.parsing.models import ParseInput
+from services.indexing.parsing.models import ParseRequest
+from services.indexing.parsing.parsers.csv import CsvParser
 
 
 class _Reader:

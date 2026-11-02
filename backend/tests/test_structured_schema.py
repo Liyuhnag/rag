@@ -9,12 +9,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from services.chunking.source import StoredParsedSource
-from services.parsing.models import ParseRequest
-from services.parsing.models import ParsedBlock
-from services.parsing.models import ParsedDocument
-from services.structured.service import StructuredSchemaService
-from services.structured.service import _datasets
+from services.indexing.chunking.source import StoredParsedSource
+from services.indexing.parsing.models import ParseRequest
+from services.indexing.parsing.models import ParsedBlock
+from services.indexing.parsing.models import ParsedDocument
+from services.indexing.structured.service import StructuredSchemaService
+from services.indexing.structured.service import _datasets
 
 
 def parsed(blocks, version=1):
@@ -141,7 +141,7 @@ def test_actual_stored_source_stream_replay_and_context_closure(monkeypatch):
         return True
 
     monkeypatch.setattr(
-        "services.structured.service.orm.replace_current_version", replace
+        "services.indexing.structured.service.orm.replace_current_version", replace
     )
     document = SimpleNamespace(
         id="doc",

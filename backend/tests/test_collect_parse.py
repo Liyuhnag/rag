@@ -8,13 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from services.parsing.collect import PartZip
-from services.parsing.errors import ParseFailed
-from services.parsing.models import ParseRequest
-from services.parsing.models import ParsedBlock
-from services.parsing.models import ParsedDocument
-from services.parsing.service import DocumentParsingService
-import services.parsing.service as parsing_service
+from services.indexing.parsing.collect import PartZip
+from services.indexing.parsing.errors import ParseFailed
+from services.indexing.parsing.models import ParseRequest
+from services.indexing.parsing.models import ParsedBlock
+from services.indexing.parsing.models import ParsedDocument
+from services.indexing.parsing.service import DocumentParsingService
+import services.indexing.parsing.service as parsing_service
 
 
 class _Store:

@@ -3,7 +3,7 @@
 
 import pytest
 
-from services.chunking.common.models import ChunkOptions
+from services.indexing.chunking.common.models import ChunkOptions
 
 
 def test_default_options_match_two_native_levels():
