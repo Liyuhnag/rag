@@ -5,7 +5,7 @@ from fastapi import Request
 
 from config import Settings
 from services.chat.service import ChatService
-from services.retrieval.fusion.backfill.service import ParentBackfiller
+from services.retrieval.rag.fusion.backfill.service import ParentBackfiller
 
 
 def get_settings(request: Request) -> Settings:

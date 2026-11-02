@@ -18,7 +18,7 @@ from config import Settings
 from config import load_settings
 from services.chat.service import ChatService
 from services.common.connect import connect_storage
-from services.retrieval.fusion.backfill.service import ParentBackfiller
+from services.retrieval.rag.fusion.backfill.service import ParentBackfiller
 from task.app import celery_app
 
 logger = logging.getLogger("rag.api")

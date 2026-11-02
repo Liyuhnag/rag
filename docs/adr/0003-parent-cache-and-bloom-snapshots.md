@@ -26,4 +26,4 @@
 
 chunk 继续使用确定性 UUIDv5。本次不实现未来子块查父块接口、不实现租户 ACL、不在应用中实现 Redis 高可用。
 
-运行参数、接入示例和验证方式见 [父块回填说明](../../backend/services/retrieval/fusion/backfill/README.md)。
+运行参数、接入示例和验证方式见 [父块回填说明](../../backend/services/retrieval/rag/fusion/backfill/README.md)。

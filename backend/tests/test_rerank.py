@@ -13,7 +13,7 @@ from services.retrieval import FusedParent
 from services.retrieval import RerankCallError
 from services.retrieval import RerankInput
 from services.retrieval import Reranker
-from services.retrieval.rerank.service import truncate_document
+from services.retrieval.rag.rerank.service import truncate_document
 
 
 class ManualClock:

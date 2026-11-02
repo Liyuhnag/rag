@@ -58,7 +58,7 @@ uv run pytest
 | `FLOWER_ADDRESS` | `0.0.0.0` | Flower 监听地址 |
 | `FLOWER_PORT` | `5555` | Flower 端口 |
 
-父块缓存、回源限流与共享布隆过滤器的配置和接入方式见 [父块回填说明](services/retrieval/fusion/backfill/README.md)。
+父块缓存、回源限流与共享布隆过滤器的配置和接入方式见 [父块回填说明](services/retrieval/rag/fusion/backfill/README.md)。
 
 ## 接口
 

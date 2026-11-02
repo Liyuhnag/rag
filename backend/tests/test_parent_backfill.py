@@ -24,8 +24,8 @@ from services.retrieval import ParentBackfiller
 from services.retrieval import ParentBloomFilter
 from services.retrieval import ParentChunkPayload
 from services.retrieval import RedisParentCache
-from services.retrieval.fusion.backfill.cache.connection import RedisConnection
-from services.retrieval.fusion.backfill.models import ParentChunkRef
+from services.retrieval.rag.fusion.backfill.cache.connection import RedisConnection
+from services.retrieval.rag.fusion.backfill.models import ParentChunkRef
 
 
 @pytest.fixture(scope="module")
