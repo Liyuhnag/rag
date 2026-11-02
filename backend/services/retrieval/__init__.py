@@ -17,6 +17,12 @@ from services.retrieval.router import RouteRequest
 from services.retrieval.router import RouteType
 from services.retrieval.router import SearchMode
 from services.retrieval.router import normalize_query
+from services.retrieval.vector import VectorHit
+from services.retrieval.vector import VectorRetrievalInput
+from services.retrieval.vector import VectorRetriever
+from services.retrieval.vector import VectorSearchResult
+from services.retrieval.vector import build_milvus_filter
+from services.retrieval.vector import escape_milvus_string
 
 __all__ = [
     "ChatMessage",
@@ -33,6 +39,12 @@ __all__ = [
     "RouteRequest",
     "RouteType",
     "SearchMode",
+    "VectorHit",
+    "VectorRetrievalInput",
+    "VectorRetriever",
+    "VectorSearchResult",
+    "build_milvus_filter",
+    "escape_milvus_string",
     "needs_rewrite",
     "normalize_query",
 ]
