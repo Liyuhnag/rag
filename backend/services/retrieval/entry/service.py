@@ -60,7 +60,9 @@ class RetrievalEntry:
                 rewritten_query=decision.normalized_query,
                 reason=decision.reason,
             )
-        if decision.route_type == RouteType.SQL:
+
+        table_result = None
+        if decision.route_type in {RouteType.SQL, RouteType.BOTH}:
             table_result = self._structured.query(
                 StructuredQueryRequest(
                     query=decision.normalized_query,
@@ -68,38 +70,38 @@ class RetrievalEntry:
                     request_id=request.request_id,
                 )
             )
-            return RetrievalResult(
-                route_type=RouteType.SQL,
-                rewritten_query=decision.normalized_query,
-                reason=decision.reason,
-                dataset_ids=table_result.dataset_ids,
-                structured_ready=table_result.ready,
-                message=table_result.message,
+        document_result = None
+        if decision.route_type in {RouteType.NL, RouteType.BOTH}:
+            document_result = self._rag.search(
+                RagSearchRequest(
+                    query=decision.normalized_query,
+                    documents=decision.ready_documents,
+                    top_k=request.top_k,
+                    file_types=rewritten.file_types,
+                    page_range=request.page_range,
+                    keyword_only=decision.search_mode == SearchMode.KEYWORD_FIRST,
+                    extracted_keywords=decision.extracted_keywords,
+                    rerank=request.rerank,
+                    include_children=request.include_children,
+                    include_highlight=request.include_highlight,
+                    request_id=request.request_id,
+                )
             )
-
-        document_result = self._rag.search(
-            RagSearchRequest(
-                query=decision.normalized_query,
-                documents=decision.ready_documents,
-                top_k=request.top_k,
-                file_types=rewritten.file_types,
-                page_range=request.page_range,
-                keyword_only=decision.search_mode == SearchMode.KEYWORD_FIRST,
-                extracted_keywords=decision.extracted_keywords,
-                rerank=request.rerank,
-                include_children=request.include_children,
-                include_highlight=request.include_highlight,
-                request_id=request.request_id,
-            )
-        )
         return RetrievalResult(
-            route_type=RouteType.NL,
+            route_type=decision.route_type,
             rewritten_query=decision.normalized_query,
             reason=decision.reason,
-            parents=document_result.parents,
-            degraded=document_result.degraded,
-            degraded_reasons=document_result.degraded_reasons,
-            reranked=document_result.reranked,
-            rerank_error=document_result.rerank_error,
-            missing_parent_count=document_result.missing_parent_count,
+            parents=() if document_result is None else document_result.parents,
+            dataset_ids=() if table_result is None else table_result.dataset_ids,
+            structured_ready=False if table_result is None else table_result.ready,
+            message="" if table_result is None else table_result.message,
+            degraded=False if document_result is None else document_result.degraded,
+            degraded_reasons=(
+                () if document_result is None else document_result.degraded_reasons
+            ),
+            reranked=False if document_result is None else document_result.reranked,
+            rerank_error=None if document_result is None else document_result.rerank_error,
+            missing_parent_count=(
+                0 if document_result is None else document_result.missing_parent_count
+            ),
         )

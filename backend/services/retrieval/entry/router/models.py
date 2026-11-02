@@ -19,6 +19,7 @@ class RouteType(str, Enum):
 
     NL = "NL"        # 自然语言文档检索（Milvus 向量 + ES BM25 双路召回）
     SQL = "SQL"      # 结构化表格查询（基于 structured_datasets 的数据分析/Text2SQL）
+    BOTH = "BOTH"    # 同一问题同时需要文档检索和结构化查询
     EMPTY = "EMPTY"  # 限定范围内无任何可检索文档或工作表，直接短路返回空
 
 

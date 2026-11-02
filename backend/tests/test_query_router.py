@@ -193,6 +193,72 @@ def test_llm_router_selects_nl_with_keyword_first_mode():
     assert decision.metadata["method"] == "llm"
 
 
+def test_llm_router_selects_both_when_table_and_document_are_required():
+    doc = _doc("doc-pdf", "财务制度.pdf", "pdf")
+    dataset = _dataset("ds-sales", "doc-xlsx", "销售明细", ("华东区收入", "回款金额"))
+    llm = _mock_llm_client(
+        {
+            "route_type": "BOTH",
+            "dataset_ids": ["ds-sales"],
+            "search_mode": "DUAL",
+            "extracted_keywords": ["华东区收入", "口径"],
+            "reason": "收入取自销售表，口径需要对照财务制度",
+        }
+    )
+    router = QueryRouter(
+        llm_client=llm,
+        document_loader=lambda *args: [doc],
+        dataset_loader=lambda *args: [dataset],
+    )
+    decision = router.route(RouteRequest(query="华东区收入和制度里的统计口径一致吗"))
+    assert decision.route_type == RouteType.BOTH
+    assert decision.ready_document_ids == ("doc-pdf",)
+    assert decision.dataset_ids == ("ds-sales",)
+    assert decision.extracted_keywords == ("华东区收入", "口径")
+
+
+def test_both_route_downgrades_when_one_source_is_missing():
+    doc = _doc("doc-pdf", "制度.pdf", "pdf")
+    dataset = _dataset()
+    sql_only = _mock_llm_client(
+        {
+            "route_type": "BOTH",
+            "dataset_ids": ["ds-1"],
+            "search_mode": "DUAL",
+            "extracted_keywords": ["收入"],
+            "reason": "同时需要表和文档",
+        }
+    )
+    without_docs = QueryRouter(
+        llm_client=sql_only,
+        document_loader=lambda *args: [],
+        dataset_loader=lambda *args: [dataset],
+    )
+    assert (
+        without_docs.route(RouteRequest(query="收入和制度口径")).route_type
+        == RouteType.SQL
+    )
+
+    doc_only = _mock_llm_client(
+        {
+            "route_type": "BOTH",
+            "dataset_ids": [],
+            "search_mode": "DUAL",
+            "extracted_keywords": ["口径"],
+            "reason": "同时需要表和文档",
+        }
+    )
+    without_tables = QueryRouter(
+        llm_client=doc_only,
+        document_loader=lambda *args: [doc],
+        dataset_loader=lambda *args: [],
+    )
+    assert (
+        without_tables.route(RouteRequest(query="收入和制度口径")).route_type
+        == RouteType.NL
+    )
+
+
 def test_llm_router_guards_against_impossible_route_when_datasets_empty():
     doc = _doc("doc-pdf", "制度.pdf", "pdf")
     # 即使 LLM 误返回 SQL，但当前范围内根本没有结构化表，应自动修正为 NL

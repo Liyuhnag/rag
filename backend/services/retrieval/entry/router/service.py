@@ -5,7 +5,7 @@
 1. 校验并规范化用户 query；
 2. 解析限定范围内的 READY 文档与 SCHEMA_READY 结构化工作表；
 3. 若范围内无任何可用数据，直接短路返回 EMPTY；
-4. 调用 LLM（DashScopeRouterClient）结合候选文档与表结构 Schema 判断走 NL 还是 SQL，
+4. 调用 LLM（DashScopeRouterClient）结合候选文档与表结构 Schema 判断走 NL、SQL 或 BOTH，
    并输出检索模式（DUAL / KEYWORD_FIRST）与核心检索词；
 5. 当 LLM 未配置或调用超时/异常时，自动降级到本地轻量兜底规则，不阻塞检索主链路。
 """
@@ -53,7 +53,7 @@ def normalize_query(query: str, max_length: int = DEFAULT_MAX_QUERY_LENGTH) -> s
 
 
 class QueryRouter:
-    """结合可用数据范围与 LLM 意图理解，将查询分发至 NL 或 SQL 检索链路。"""
+    """结合可用数据范围与 LLM 意图理解，将查询分发至文档、表格或两者。"""
 
     def __init__(
         self,
@@ -155,14 +155,9 @@ def _build_llm_decision(
     by_id = {ds.id: ds for ds in datasets}
     selected_datasets = [by_id[ds_id] for ds_id in llm_result.dataset_ids if ds_id in by_id]
 
-    route_type = llm_result.route_type
-    # 防止 LLM 误判到不存在的数据源类型
-    if route_type == RouteType.SQL and not datasets:
-        route_type = RouteType.NL
-    elif route_type == RouteType.NL and not ready_docs and datasets:
-        route_type = RouteType.SQL
+    route_type = _available_route(llm_result.route_type, ready_docs, datasets)
 
-    if route_type == RouteType.SQL and not selected_datasets:
+    if route_type in {RouteType.SQL, RouteType.BOTH} and not selected_datasets:
         selected_datasets = list(datasets)
 
     return RouteDecision(
@@ -176,6 +171,25 @@ def _build_llm_decision(
         latency_ms=_elapsed_ms(started),
         metadata={"method": "llm"},
     )
+
+
+def _available_route(
+    route_type: RouteType,
+    ready_docs: Sequence[Document],
+    datasets: Sequence[StructuredDataset],
+) -> RouteType:
+    """缺哪一边数据，就把同时查询或误判收成实际能执行的链路。"""
+    if route_type == RouteType.BOTH:
+        if ready_docs and datasets:
+            return RouteType.BOTH
+        route_type = RouteType.NL if ready_docs else RouteType.SQL
+    if route_type == RouteType.SQL and not datasets:
+        return RouteType.NL if ready_docs else RouteType.EMPTY
+    if route_type == RouteType.NL and not ready_docs and datasets:
+        return RouteType.SQL
+    if route_type == RouteType.NL and not ready_docs:
+        return RouteType.EMPTY
+    return route_type
 
 
 def _fallback_decision(

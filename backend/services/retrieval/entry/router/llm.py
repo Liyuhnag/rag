@@ -26,6 +26,10 @@ _SYSTEM_PROMPT = """你是一个企业级 RAG 系统的查询路由器（Query R
 2. "NL"：
    - 用户询问的是规章制度、合同条款、操作流程、原因分析、背景说明、概念定义等自然语言文档内容；
    - 或者虽然问题包含数字，但【结构化数据表 Schema】中没有相关表/字段，需要从非结构化文档（PDF/Word/Markdown/TXT）中检索。
+3. "BOTH"：
+   - 同一个问题必须同时使用两类数据才能回答：既要结构化表中的数值、明细或统计，又要文档中的制度、条款、口径或原因；
+   - 且当前文档列表和表 Schema 两边都有能用上的内容。
+   - 只靠表或只靠文档就能完整回答时，不要选 BOTH。
 
 ### 检索模式（search_mode）判定规则（针对 NL 检索）：
 - "KEYWORD_FIRST"：当问题包含明确的法条/章节编号（如“第三章”、“3.2节”、“第十二条”）、专有编号/错误码/型号（如“ERR-404”）、或引号包裹的精确短语时选用。
@@ -33,8 +37,8 @@ _SYSTEM_PROMPT = """你是一个企业级 RAG 系统的查询路由器（Query R
 
 ### 输出 JSON 格式要求（不要输出任何 Markdown 代码块包裹或多余文字）：
 {
-  "route_type": "NL" 或 "SQL",
-  "dataset_ids": ["当 route_type 为 SQL 时，按相关性排序填入命中的 dataset_id 列表；否则填空数组 []"],
+  "route_type": "NL"、"SQL" 或 "BOTH",
+  "dataset_ids": ["当 route_type 为 SQL 或 BOTH 时，按相关性排序填入命中的 dataset_id 列表；NL 时填空数组 []"],
   "search_mode": "DUAL" 或 "KEYWORD_FIRST",
   "extracted_keywords": ["从问题中提炼的 1~5 个核心检索实体或关键词"],
   "reason": "简短的一句话路由理由"
@@ -159,7 +163,12 @@ def _parse_llm_response(
         raise RuntimeError("LLM 路由返回格式无法解析") from exc
 
     raw_route = str(parsed.get("route_type", "NL")).upper().strip()
-    route_type = RouteType.SQL if raw_route == "SQL" else RouteType.NL
+    if raw_route == "SQL":
+        route_type = RouteType.SQL
+    elif raw_route == "BOTH":
+        route_type = RouteType.BOTH
+    else:
+        route_type = RouteType.NL
 
     raw_mode = str(parsed.get("search_mode", "DUAL")).upper().strip()
     search_mode = (

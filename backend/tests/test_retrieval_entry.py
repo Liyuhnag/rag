@@ -77,8 +77,12 @@ class RouterFake:
             normalized_query=request.query,
             route_type=self.route_type,
             search_mode=self.search_mode,
-            ready_documents=(_document(),) if self.route_type == RouteType.NL else (),
-            matched_datasets=(_dataset(),) if self.route_type == RouteType.SQL else (),
+            ready_documents=(
+                (_document(),) if self.route_type in {RouteType.NL, RouteType.BOTH} else ()
+            ),
+            matched_datasets=(
+                (_dataset(),) if self.route_type in {RouteType.SQL, RouteType.BOTH} else ()
+            ),
             reason="测试路由",
         )
 
@@ -145,6 +149,18 @@ def test_empty_route_calls_neither_retriever():
     assert result.parents == ()
     assert rag.request is None
     assert structured.request is None
+
+
+def test_both_route_queries_documents_and_tables():
+    service, _rewriter, _router, rag, _structured = _entry(RouteType.BOTH)
+    service._structured = StructuredQueryService()
+    result = service.retrieve(RetrievalRequest(question="华东区收入和制度口径是否一致"))
+    assert result.route_type == RouteType.BOTH
+    assert rag.request is not None
+    assert rag.request.documents[0].id == "doc-1"
+    assert result.dataset_ids == ("ds-1",)
+    assert not result.structured_ready
+    assert result.message == "结构化数据尚未入库，不能执行查询"
 
 
 def test_table_route_calls_structured_query_and_skips_documents():
