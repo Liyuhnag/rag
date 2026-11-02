@@ -97,6 +97,7 @@ class Settings:
     embedding_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     dashscope_api_key: str = ""
     embedding_model: str = "text-embedding-v4"
+    router_model: str = "qwen-plus"
     embedding_dim: int = 1024
     indexing_batch_size: int = 10
     indexing_timeout_seconds: int = 60
@@ -197,6 +198,7 @@ def load_settings() -> Settings:
         "embedding_base_url": "EMBEDDING_BASE_URL",
         "dashscope_api_key": "DASHSCOPE_API_KEY",
         "embedding_model": "EMBEDDING_MODEL",
+        "router_model": "ROUTER_MODEL",
         "milvus_uri": "MILVUS_URI",
         "milvus_token": "MILVUS_TOKEN",
         "milvus_database": "MILVUS_DATABASE",

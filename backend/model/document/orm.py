@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """documents 表的 SQL。服务层只调用这里的函数。"""
 
+from collections.abc import Sequence
 from datetime import datetime
 
 from model.common.database import as_aware
@@ -280,3 +281,35 @@ def set_parsed_artifacts(
         sql += " AND parse_version = %(expected_version)s"
         params["expected_version"] = expected_version
     execute(sql, params)
+
+
+def list_ready(
+    document_ids: Sequence[str] | None = None,
+    file_types: Sequence[str] | None = None,
+    limit: int = 10000,
+) -> list[Document]:
+    """查询处于 READY 状态的可检索文档；显式传入空 document_ids 时直接返回空列表。"""
+    if document_ids is not None and len(document_ids) == 0:
+        return []
+    if limit <= 0:
+        return []
+    clauses = ["status = 'READY'"]
+    params: dict[str, object] = {"limit": limit}
+    if document_ids is not None:
+        holders = ", ".join(f"%(doc_{i})s" for i in range(len(document_ids)))
+        clauses.append(f"id IN ({holders})")
+        for i, doc_id in enumerate(document_ids):
+            params[f"doc_{i}"] = doc_id
+    if file_types:
+        normalized = [item.lower().strip() for item in file_types if item.strip()]
+        if normalized:
+            holders = ", ".join(f"%(ft_{i})s" for i in range(len(normalized)))
+            clauses.append(f"LOWER(file_type) IN ({holders})")
+            for i, ft in enumerate(normalized):
+                params[f"ft_{i}"] = ft
+    where_sql = " AND ".join(clauses)
+    rows = execute(
+        f"SELECT * FROM documents WHERE {where_sql} ORDER BY uploaded_at DESC, id ASC LIMIT %(limit)s",
+        params,
+    )
+    return [_from_row(row) for row in rows]

@@ -3,6 +3,7 @@
 
 import json
 from collections.abc import Iterable
+from collections.abc import Sequence
 from datetime import datetime
 from datetime import timezone
 
@@ -43,6 +44,45 @@ def list_by_version(document_id: str, version: int) -> list[StructuredDataset]:
         "SELECT * FROM structured_datasets "
         "WHERE document_id = %(id)s AND version = %(version)s ORDER BY sheet_name, id",
         {"id": document_id, "version": version},
+    )
+    return [_from_row(row) for row in rows]
+
+
+def list_current_datasets(
+    document_ids: Sequence[str] | None = None,
+    file_types: Sequence[str] | None = None,
+) -> list[StructuredDataset]:
+    """查询当前文档最新版本下的可用结构化工作表 schema。"""
+    if document_ids is not None and len(document_ids) == 0:
+        return []
+    clauses = [
+        "sd.version = d.parse_version",
+        "sd.status = 'SCHEMA_READY'",
+        "d.status != 'FAILED'",
+    ]
+    params: dict[str, object] = {}
+    if document_ids is not None:
+        holders = ", ".join(f"%(doc_{i})s" for i in range(len(document_ids)))
+        clauses.append(f"sd.document_id IN ({holders})")
+        for i, doc_id in enumerate(document_ids):
+            params[f"doc_{i}"] = doc_id
+    if file_types:
+        normalized = [item.lower().strip() for item in file_types if item.strip()]
+        if normalized:
+            holders = ", ".join(f"%(ft_{i})s" for i in range(len(normalized)))
+            clauses.append(f"LOWER(sd.file_type) IN ({holders})")
+            for i, ft in enumerate(normalized):
+                params[f"ft_{i}"] = ft
+    where_sql = " AND ".join(clauses)
+    rows = execute(
+        f"""
+        SELECT sd.*
+        FROM structured_datasets AS sd
+        INNER JOIN documents AS d ON d.id = sd.document_id
+        WHERE {where_sql}
+        ORDER BY sd.document_id ASC, sd.sheet_name ASC, sd.id ASC
+        """,
+        params,
     )
     return [_from_row(row) for row in rows]
 
