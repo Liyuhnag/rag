@@ -1,6 +1,11 @@
 # -*- coding: utf-8 -*-
-"""检索阶段服务集合。"""
+"""检索阶段服务集合：查询改写、查询路由、向量召回、关键词召回、RRF 融合与 Rerank 精排。"""
 
+from services.retrieval.keyword import KeywordHit
+from services.retrieval.keyword import KeywordRetrievalInput
+from services.retrieval.keyword import KeywordRetriever
+from services.retrieval.keyword import KeywordSearchResult
+from services.retrieval.keyword import build_es_dsl
 from services.retrieval.rewrite import ChatMessage
 from services.retrieval.rewrite import DashScopeRewriteClient
 from services.retrieval.rewrite import LLMRewriteOutput
@@ -28,6 +33,10 @@ __all__ = [
     "ChatMessage",
     "DashScopeRewriteClient",
     "DashScopeRouterClient",
+    "KeywordHit",
+    "KeywordRetrievalInput",
+    "KeywordRetriever",
+    "KeywordSearchResult",
     "LLMRewriteOutput",
     "LLMRouteResult",
     "PageRange",
@@ -43,6 +52,7 @@ __all__ = [
     "VectorRetrievalInput",
     "VectorRetriever",
     "VectorSearchResult",
+    "build_es_dsl",
     "build_milvus_filter",
     "escape_milvus_string",
     "needs_rewrite",
