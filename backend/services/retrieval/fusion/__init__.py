@@ -4,6 +4,7 @@
 from services.retrieval.fusion.backfill import BackfillResult
 from services.retrieval.fusion.backfill import FusedParent
 from services.retrieval.fusion.backfill import LocalParentCache
+from services.retrieval.fusion.backfill import MySQLParentStore
 from services.retrieval.fusion.backfill import ParentBackfiller
 from services.retrieval.fusion.backfill import ParentChunkPayload
 from services.retrieval.fusion.backfill import RedisParentCache
@@ -23,6 +24,7 @@ __all__ = [
     "FusionResult",
     "LocalParentCache",
     "MatchedChild",
+    "MySQLParentStore",
     "ParentBackfiller",
     "ParentChunkPayload",
     "RRFFuser",

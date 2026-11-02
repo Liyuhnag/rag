@@ -2,13 +2,9 @@
 """父块三级回查服务（ParentBackfiller）。
 
 查询链路：
-- L1：LocalParentCache（进程内 LRU 内存缓存，微秒级）
-- L2：RedisParentCache（分布式 MGET 缓存，毫秒级，命中后自动回填 L1）
-- L3：MySQL document_chunks + documents 批量联表查询（命中后自动回填 L2 与 L1）
-
-版本与状态防呆：
-- 若传入了 allowed_versions（当前 READY 文档的 {document_id: parse_version}），
-  即使 L1/L2 命中旧版本缓存，也会被过滤拦截，避免返回已失效或未 READY 文档的父块。
+- L1：LocalParentCache（cache/l1_local.py，进程内 LRU 内存缓存）
+- L2：RedisParentCache（cache/l2_redis.py，分布式 MGET 缓存，命中后自动回填 L1）
+- L3：MySQLParentStore（cache/l3_mysql.py，MySQL 批量联表查询，命中后自动回填 L2 与 L1）
 """
 
 import logging
@@ -16,8 +12,8 @@ import time
 from collections.abc import Callable
 from collections.abc import Sequence
 
-from model.document_chunk import orm as chunk_orm
 from services.retrieval.fusion.backfill.cache import LocalParentCache
+from services.retrieval.fusion.backfill.cache import MySQLParentStore
 from services.retrieval.fusion.backfill.cache import RedisParentCache
 from services.retrieval.fusion.backfill.models import BackfillResult
 from services.retrieval.fusion.backfill.models import FusedParent
@@ -34,11 +30,16 @@ class ParentBackfiller:
         self,
         l1_cache: LocalParentCache | None = None,
         l2_cache: RedisParentCache | None = None,
+        l3_store: MySQLParentStore | None = None,
         db_loader: Callable[[Sequence[str]], list[dict[str, object]]] | None = None,
     ) -> None:
         self.l1 = l1_cache if l1_cache is not None else LocalParentCache()
         self.l2 = l2_cache if l2_cache is not None else RedisParentCache()
-        self._load_from_db = db_loader or chunk_orm.list_parents_by_ids
+        self.l3 = (
+            l3_store
+            if l3_store is not None
+            else MySQLParentStore(db_loader=db_loader)
+        )
 
     def backfill(
         self,
@@ -63,21 +64,21 @@ class ParentBackfiller:
         # ==================== 第一级：L1 进程内本地 LRU 缓存 ====================
         l1_found, l1_missed = self.l1.get_many(ordered_ids)
         l1_valid: dict[str, ParentChunkPayload] = {}
-        l2_Lookup_ids: list[str] = []
+        l2_lookup_ids: list[str] = []
         for pid, payload in l1_found.items():
             if _is_version_valid(payload, allowed_versions):
                 l1_valid[pid] = payload
             else:
-                l2_Lookup_ids.append(pid)
-        l2_Lookup_ids.extend(l1_missed)
+                l2_lookup_ids.append(pid)
+        l2_lookup_ids.extend(l1_missed)
         resolved.update(l1_valid)
         l1_hit_count = len(l1_valid)
 
         # ==================== 第二级：L2 Redis 分布式缓存 ====================
         l2_hit_count = 0
         l3_lookup_ids: list[str] = []
-        if l2_Lookup_ids:
-            l2_found, l2_missed = self.l2.get_many(l2_Lookup_ids)
+        if l2_lookup_ids:
+            l2_found, l2_missed = self.l2.get_many(l2_lookup_ids)
             l2_valid: dict[str, ParentChunkPayload] = {}
             for pid, payload in l2_found.items():
                 if _is_version_valid(payload, allowed_versions):
@@ -93,17 +94,17 @@ class ParentBackfiller:
         # ==================== 第三级：L3 MySQL 批量主键回源 ====================
         l3_hit_count = 0
         if l3_lookup_ids:
-            rows = self._load_from_db(l3_lookup_ids)
-            l3_loaded: dict[str, ParentChunkPayload] = {}
-            for row in rows:
-                payload = _row_to_payload(row)
-                if _is_version_valid(payload, allowed_versions):
-                    l3_loaded[payload.parent_id] = payload
-            if l3_loaded:
-                resolved.update(l3_loaded)
-                self.l2.put_many(l3_loaded)
-                self.l1.put_many(l3_loaded)
-                l3_hit_count = len(l3_loaded)
+            l3_found = self.l3.get_many(l3_lookup_ids)
+            l3_valid = {
+                pid: payload
+                for pid, payload in l3_found.items()
+                if _is_version_valid(payload, allowed_versions)
+            }
+            if l3_valid:
+                resolved.update(l3_valid)
+                self.l2.put_many(l3_valid)
+                self.l1.put_many(l3_valid)
+                l3_hit_count = len(l3_valid)
 
         # ==================== 按 RRF 候选顺序组装最终父块列表 ====================
         parents: list[FusedParent] = []
@@ -180,22 +181,3 @@ def _is_version_valid(
     if expected is None:
         return False
     return payload.version == expected
-
-
-def _row_to_payload(row: dict[str, object]) -> ParentChunkPayload:
-    page_start = row.get("page_start")
-    page_end = row.get("page_end")
-    return ParentChunkPayload(
-        parent_id=str(row["id"]),
-        document_id=str(row["document_id"]),
-        document_name=str(row.get("document_name", "")),
-        version=int(row.get("version", 1)),
-        parent_index=int(row.get("parent_index") or 0),
-        file_type=str(row.get("file_type", "")),
-        content=str(row.get("content", "")),
-        heading_path=str(row.get("heading_path", "")),
-        locator=str(row.get("locator", "")),
-        page_start=None if page_start is None else int(page_start),
-        page_end=None if page_end is None else int(page_end),
-        token_count=int(row.get("token_count") or 0),
-    )

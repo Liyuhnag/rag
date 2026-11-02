@@ -9,6 +9,7 @@ from services.retrieval.fusion import FusionInput
 from services.retrieval.fusion import FusionResult
 from services.retrieval.fusion import LocalParentCache
 from services.retrieval.fusion import MatchedChild
+from services.retrieval.fusion import MySQLParentStore
 from services.retrieval.fusion import ParentBackfiller
 from services.retrieval.fusion import ParentChunkPayload
 from services.retrieval.fusion import RRFFuser
@@ -59,6 +60,7 @@ __all__ = [
     "LLMRouteResult",
     "LocalParentCache",
     "MatchedChild",
+    "MySQLParentStore",
     "PageRange",
     "ParentBackfiller",
     "ParentChunkPayload",

@@ -2,6 +2,7 @@
 """父块三级回查子包（L1 本地 LRU -> L2 Redis -> L3 MySQL）。"""
 
 from services.retrieval.fusion.backfill.cache import LocalParentCache
+from services.retrieval.fusion.backfill.cache import MySQLParentStore
 from services.retrieval.fusion.backfill.cache import RedisParentCache
 from services.retrieval.fusion.backfill.models import BackfillResult
 from services.retrieval.fusion.backfill.models import FusedParent
@@ -12,6 +13,7 @@ __all__ = [
     "BackfillResult",
     "FusedParent",
     "LocalParentCache",
+    "MySQLParentStore",
     "ParentBackfiller",
     "ParentChunkPayload",
     "RedisParentCache",
