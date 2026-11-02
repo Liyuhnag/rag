@@ -6,6 +6,7 @@ from services.retrieval.fusion.backfill import FusedParent
 from services.retrieval.fusion.backfill import LocalParentCache
 from services.retrieval.fusion.backfill import MySQLParentStore
 from services.retrieval.fusion.backfill import ParentBackfiller
+from services.retrieval.fusion.backfill import ParentBloomFilter
 from services.retrieval.fusion.backfill import ParentChunkPayload
 from services.retrieval.fusion.backfill import RedisParentCache
 from services.retrieval.fusion.models import DEFAULT_RRF_K
@@ -26,6 +27,7 @@ __all__ = [
     "MatchedChild",
     "MySQLParentStore",
     "ParentBackfiller",
+    "ParentBloomFilter",
     "ParentChunkPayload",
     "RRFFuser",
     "RedisParentCache",

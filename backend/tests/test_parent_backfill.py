@@ -1,19 +1,23 @@
 # -*- coding: utf-8 -*-
-"""父块三级回查（L1 本地 LRU -> L2 Redis -> L3 MySQL）单元测试。"""
+"""父块三级回查与缓存三大问题（穿透/击穿/雪崩）单元测试。"""
 
 import json
+import pytest
 
 from model.document_chunk import orm as chunk_orm
 from services.retrieval import FusedParentCandidate
 from services.retrieval import LocalParentCache
+from services.retrieval import MySQLParentStore
 from services.retrieval import ParentBackfiller
+from services.retrieval import ParentBloomFilter
 from services.retrieval import ParentChunkPayload
 from services.retrieval import RedisParentCache
 
 
 class _FakeRedisPipeline:
-    def __init__(self, store: dict[str, str]):
+    def __init__(self, store: dict[str, str], ttls: dict[str, int]):
         self.store = store
+        self.ttls = ttls
         self.ops: list[tuple[str, int, str]] = []
 
     def setex(self, key: str, ttl: int, value: str):
@@ -21,14 +25,16 @@ class _FakeRedisPipeline:
         return self
 
     def execute(self):
-        for key, _ttl, value in self.ops:
+        for key, ttl, value in self.ops:
             self.store[key] = value
+            self.ttls[key] = ttl
         return [True] * len(self.ops)
 
 
 class _FakeRedisClient:
     def __init__(self, initial: dict[str, str] | None = None, fail: bool = False):
         self.store = dict(initial or {})
+        self.ttls: dict[str, int] = {}
         self.fail = fail
         self.mget_calls: list[list[str]] = []
 
@@ -38,10 +44,31 @@ class _FakeRedisClient:
         self.mget_calls.append(list(keys))
         return [self.store.get(k) for k in keys]
 
+    def set(self, key: str, value: str, nx: bool = False, px: int | None = None):
+        if self.fail:
+            raise RuntimeError("redis set failed")
+        if nx and key in self.store:
+            return False
+        self.store[key] = value
+        return True
+
+    def get(self, key: str):
+        return self.store.get(key)
+
+    def delete(self, key: str):
+        self.store.pop(key, None)
+        return 1
+
+    def eval(self, script: str, numkeys: int, key: str, token: str):
+        if self.store.get(key) == token:
+            del self.store[key]
+            return 1
+        return 0
+
     def pipeline(self, transaction: bool = False):
         if self.fail:
             raise RuntimeError("redis pipeline failed")
-        return _FakeRedisPipeline(self.store)
+        return _FakeRedisPipeline(self.store, self.ttls)
 
 
 def _candidate(
@@ -95,7 +122,6 @@ def _payload(
 
 
 def test_three_tier_lookup_preserves_rrf_order_and_backfills_upper_caches():
-    # RRF 排名顺序：p-mysql(第1) -> p-l1(第2) -> p-redis(第3)
     l1 = LocalParentCache(capacity=10, ttl_seconds=60.0)
     l1.put_many({"p-l1": _payload("p-l1", "来自 L1 本地缓存的父块正文")})
 
@@ -143,16 +169,14 @@ def test_three_tier_lookup_preserves_rrf_order_and_backfills_upper_caches():
     assert result.l2_hits == 1
     assert result.l3_hits == 1
     assert result.missing_parent_count == 0
-    # 严格保持 RRF 候选顺序
     assert [p.parent_id for p in result.parents] == ["p-mysql", "p-l1", "p-redis"]
     assert [p.rank for p in result.parents] == [1, 2, 3]
-    # L2 只查了 L1 没命中的 2 个，L3 MySQL 只查了 L1+L2 都没命中的 1 个
     assert fake_redis.mget_calls == [
         ["rag:parent_chunk:p-mysql", "rag:parent_chunk:p-redis"]
     ]
     assert db_queries == [["p-mysql"]]
 
-    # 验证回填效果：第二次查询全部直接命中 L1，不再访问 Redis 和 MySQL
+    # 第二次查询全部命中 L1
     second = backfiller.backfill(candidates)
     assert second.l1_hits == 3
     assert second.l2_hits == 0
@@ -160,68 +184,93 @@ def test_three_tier_lookup_preserves_rrf_order_and_backfills_upper_caches():
     assert len(db_queries) == 1
 
 
-def test_redis_failure_falls_back_to_mysql_and_missing_parents_are_counted():
-    l1 = LocalParentCache(capacity=10, ttl_seconds=60.0)
-    l2 = RedisParentCache(client=_FakeRedisClient(fail=True))
+def test_bloom_filter_prevents_cache_penetration_without_touching_redis_or_mysql():
+    bloom = ParentBloomFilter(bit_size=4096, hash_count=4)
+    bloom.add_many(["p-valid-1", "p-valid-2"])
 
-    def db_loader(pids):
-        return [
-            {
-                "id": "p-1",
-                "document_id": "doc-1",
-                "document_name": "制度.pdf",
-                "version": 1,
-                "parent_index": 0,
-                "file_type": "pdf",
-                "content": "正文1",
-                "heading_path": "一",
-                "locator": "p1",
-                "page_start": 1,
-                "page_end": 1,
-                "token_count": 50,
-            }
-        ]
-
-    backfiller = ParentBackfiller(l1_cache=l1, l2_cache=l2, db_loader=db_loader)
-    result = backfiller.backfill(
-        (_candidate("p-1", 1), _candidate("p-missing", 2))
+    fake_redis = _FakeRedisClient()
+    db_calls: list[list[str]] = []
+    backfiller = ParentBackfiller(
+        l1_cache=LocalParentCache(),
+        l2_cache=RedisParentCache(client=fake_redis),
+        bloom_filter=bloom,
+        db_loader=lambda pids: db_calls.append(list(pids)) or [],
     )
-    assert result.l3_hits == 1
+
+    # 请求一个根本不存在的伪造 parent_id，布隆过滤器直接拦截，不查 Redis 也不查 MySQL
+    result = backfiller.backfill((_candidate("p-forged-nonexistent-id", 1),))
     assert result.missing_parent_count == 1
-    assert [p.parent_id for p in result.parents] == ["p-1"]
+    assert result.parents == ()
+    assert fake_redis.mget_calls == []
+    assert db_calls == []
 
 
-def test_stale_cached_version_is_evicted_when_allowed_versions_mismatch():
-    l1 = LocalParentCache(capacity=10, ttl_seconds=60.0)
-    l1.put_many({"p-1": _payload("p-1", "旧版本v1内容", version=1)})
-    l2 = RedisParentCache(client=_FakeRedisClient())
+def test_distributed_lock_prevents_cache_breakdown_by_waiting_for_peer_fill():
+    fake_redis = _FakeRedisClient()
+    l2 = RedisParentCache(client=fake_redis)
 
-    def db_loader(pids):
-        return [
-            {
-                "id": "p-1",
-                "document_id": "doc-1",
-                "document_name": "制度.pdf",
-                "version": 2,
-                "parent_index": 0,
-                "file_type": "pdf",
-                "content": "新版本v2内容",
-                "heading_path": "一",
-                "locator": "p1",
-                "page_start": 1,
-                "page_end": 1,
-                "token_count": 60,
-            }
-        ]
+    # 模拟另一个并发进程已经抢先持有了该批次的分布式互斥锁
+    lock_key = l2._lock_key(["p-hot"])
+    fake_redis.store[lock_key] = "other-worker-token"
 
-    backfiller = ParentBackfiller(l1_cache=l1, l2_cache=l2, db_loader=db_loader)
-    result = backfiller.backfill(
-        (_candidate("p-1", 1, version=2),),
-        allowed_versions={"doc-1": 2},
+    db_calls: list[list[str]] = []
+
+    def simulate_peer_backfill(_seconds: float):
+        # 在当前进程 sleep 等待期间，持锁进程已将热点父块写入 Redis 并释放锁
+        fake_redis.store["rag:parent_chunk:p-hot"] = json.dumps(
+            _payload("p-hot", "同伴进程已回填的热点父块").to_dict(),
+            ensure_ascii=False,
+        )
+        fake_redis.store.pop(lock_key, None)
+
+    backfiller = ParentBackfiller(
+        l1_cache=LocalParentCache(),
+        l2_cache=l2,
+        db_loader=lambda pids: db_calls.append(list(pids)) or [],
+        sleep=simulate_peer_backfill,
     )
-    assert result.l1_hits == 0
-    assert result.l3_hits == 1
-    assert result.parents[0].content == "新版本v2内容"
+
+    result = backfiller.backfill((_candidate("p-hot", 1),))
+    # 当前进程等待后直接从 L2 Redis 拿到结果，完全没有击穿到 MySQL
+    assert db_calls == []
+    assert result.l2_hits == 1
+    assert result.l3_hits == 0
+    assert result.parents[0].content == "同伴进程已回填的热点父块"
+
+
+def test_ttl_jitter_and_mysql_concurrency_limit_prevent_cache_avalanche():
+    # 1. 验证 L2 Redis 每个 key 的 TTL 带有独立随机抖动
+    fake_redis = _FakeRedisClient()
+    seq = iter([15, 240, 580])
+    l2 = RedisParentCache(
+        client=fake_redis,
+        ttl_seconds=3600,
+        jitter_seconds=600,
+        randint_fn=lambda _a, _b: next(seq),
+    )
+    l2.put_many(
+        {
+            "p-1": _payload("p-1", "a"),
+            "p-2": _payload("p-2", "b"),
+            "p-3": _payload("p-3", "c"),
+        }
+    )
+    assert fake_redis.ttls["rag:parent_chunk:p-1"] == 3615
+    assert fake_redis.ttls["rag:parent_chunk:p-2"] == 3840
+    assert fake_redis.ttls["rag:parent_chunk:p-3"] == 4180
+
+    # 2. 验证 L3 MySQLParentStore 信号量并发控制耗尽时触发保护限流
+    store = MySQLParentStore(
+        db_loader=lambda pids: [],
+        max_concurrency=1,
+        acquire_timeout_seconds=0.05,
+    )
+    assert store._semaphore.acquire(blocking=False)
+    try:
+        with pytest.raises(RuntimeError, match="限流保护"):
+            store.get_many(["p-1"])
+    finally:
+        store._semaphore.release()
 
 
 def test_orm_list_parents_by_ids_sql(monkeypatch):

@@ -1,19 +1,27 @@
 # -*- coding: utf-8 -*-
 """父块三级回查服务（ParentBackfiller）。
 
-查询链路：
-- L1：LocalParentCache（cache/l1_local.py，进程内 LRU 内存缓存）
-- L2：RedisParentCache（cache/l2_redis.py，分布式 MGET 缓存，命中后自动回填 L1）
-- L3：MySQLParentStore（cache/l3_mysql.py，MySQL 批量联表查询，命中后自动回填 L2 与 L1）
+完整解决缓存三大问题：
+1. 缓存穿透（Cache Penetration）：
+   - 使用固定内存的 ParentBloomFilter（位数组布隆过滤器）拦截不存在的 parent_id，
+     无需缓存空值，避免海量无效 ID 撑爆内存与 Redis。
+2. 缓存击穿（Cache Breakdown）：
+   - 当 L2 Redis 未命中需要回源 MySQL 时，通过 Redis 分布式互斥锁（SET NX PX + Lua 解锁）控制并发；
+   - 未抢到锁的进程短暂等待后重试读取 L2 Redis，复用持锁进程刚回填的结果。
+3. 缓存雪崩（Cache Avalanche）：
+   - L1 与 L2 写入时均为每个 key 独立附加随机 TTL 抖动（Jitter），打散过期时间；
+   - L3 MySQLParentStore 使用 BoundedSemaphore 限制最大并发查询数，保护数据库不被洪峰击穿。
 """
 
 import logging
 import time
 from collections.abc import Callable
+from collections.abc import Iterable
 from collections.abc import Sequence
 
 from services.retrieval.fusion.backfill.cache import LocalParentCache
 from services.retrieval.fusion.backfill.cache import MySQLParentStore
+from services.retrieval.fusion.backfill.cache import ParentBloomFilter
 from services.retrieval.fusion.backfill.cache import RedisParentCache
 from services.retrieval.fusion.backfill.models import BackfillResult
 from services.retrieval.fusion.backfill.models import FusedParent
@@ -22,16 +30,24 @@ from services.retrieval.fusion.models import FusedParentCandidate
 
 logger = logging.getLogger("rag.retrieval.backfill")
 
+DEFAULT_LOCK_WAIT_RETRIES = 3
+DEFAULT_LOCK_WAIT_SECONDS = 0.02
+
 
 class ParentBackfiller:
-    """按 L1 本地内存 -> L2 Redis -> L3 MySQL 三级回查父块正文并保持 RRF 排名顺序。"""
+    """按 布隆过滤器 -> L1 本地内存 -> L2 Redis -> L3 MySQL 回查父块正文并保持 RRF 排名顺序。"""
 
     def __init__(
         self,
         l1_cache: LocalParentCache | None = None,
         l2_cache: RedisParentCache | None = None,
         l3_store: MySQLParentStore | None = None,
+        bloom_filter: ParentBloomFilter | None = None,
         db_loader: Callable[[Sequence[str]], list[dict[str, object]]] | None = None,
+        *,
+        lock_wait_retries: int = DEFAULT_LOCK_WAIT_RETRIES,
+        lock_wait_seconds: float = DEFAULT_LOCK_WAIT_SECONDS,
+        sleep=time.sleep,
     ) -> None:
         self.l1 = l1_cache if l1_cache is not None else LocalParentCache()
         self.l2 = l2_cache if l2_cache is not None else RedisParentCache()
@@ -40,6 +56,16 @@ class ParentBackfiller:
             if l3_store is not None
             else MySQLParentStore(db_loader=db_loader)
         )
+        self.bloom = (
+            bloom_filter if bloom_filter is not None else ParentBloomFilter()
+        )
+        self.lock_wait_retries = max(1, lock_wait_retries)
+        self.lock_wait_seconds = max(0.001, lock_wait_seconds)
+        self._sleep = sleep
+
+    def register_valid_parents(self, parent_ids: Iterable[str]) -> None:
+        """将已知存在的父块 ID 集合预热注册进布隆过滤器，开启防穿透拦截。"""
+        self.bloom.add_many(parent_ids)
 
     def backfill(
         self,
@@ -52,12 +78,18 @@ class ParentBackfiller:
         if not candidates:
             return BackfillResult()
 
+        # ==================== 第零级：布隆过滤器防穿透拦截 ====================
         ordered_ids: list[str] = []
         seen: set[str] = set()
         for item in candidates:
-            if item.parent_id and item.parent_id not in seen:
-                seen.add(item.parent_id)
-                ordered_ids.append(item.parent_id)
+            pid = item.parent_id
+            if not pid or pid in seen:
+                continue
+            seen.add(pid)
+            if not self.bloom.might_contain(pid):
+                logger.debug("布隆过滤器拦截不存在的父块 ID: %s", pid)
+                continue
+            ordered_ids.append(pid)
 
         resolved: dict[str, ParentChunkPayload] = {}
 
@@ -91,20 +123,19 @@ class ParentBackfiller:
                 self.l1.put_many(l2_valid)
                 l2_hit_count = len(l2_valid)
 
-        # ==================== 第三级：L3 MySQL 批量主键回源 ====================
+        # ==================== 第三级：分布式锁防击穿 + L3 MySQL 回源 ====================
         l3_hit_count = 0
         if l3_lookup_ids:
-            l3_found = self.l3.get_many(l3_lookup_ids)
-            l3_valid = {
-                pid: payload
-                for pid, payload in l3_found.items()
-                if _is_version_valid(payload, allowed_versions)
-            }
-            if l3_valid:
-                resolved.update(l3_valid)
-                self.l2.put_many(l3_valid)
-                self.l1.put_many(l3_valid)
-                l3_hit_count = len(l3_valid)
+            l2_recovered, l3_loaded = self._load_with_distributed_lock(
+                l3_lookup_ids, allowed_versions
+            )
+            if l2_recovered:
+                resolved.update(l2_recovered)
+                self.l1.put_many(l2_recovered)
+                l2_hit_count += len(l2_recovered)
+            if l3_loaded:
+                resolved.update(l3_loaded)
+                l3_hit_count += len(l3_loaded)
 
         # ==================== 按 RRF 候选顺序组装最终父块列表 ====================
         parents: list[FusedParent] = []
@@ -114,7 +145,7 @@ class ParentBackfiller:
             if payload is None:
                 missing_count += 1
                 logger.warning(
-                    "父块回查缺失或版本已失效: parent_id=%s document_id=%s",
+                    "父块回查缺失或已拦截: parent_id=%s document_id=%s",
                     candidate.parent_id,
                     candidate.document_id,
                 )
@@ -169,6 +200,72 @@ class ParentBackfiller:
             l3_hits=l3_hit_count,
             backfill_ms=elapsed_ms,
         )
+
+    def _load_with_distributed_lock(
+        self,
+        lookup_ids: list[str],
+        allowed_versions: dict[str, int] | None,
+    ) -> tuple[dict[str, ParentChunkPayload], dict[str, ParentChunkPayload]]:
+        """使用 Redis 分布式互斥锁控制并发回源，防止热点过期瞬间击穿 MySQL。"""
+        remaining = list(lookup_ids)
+        l2_recovered: dict[str, ParentChunkPayload] = {}
+
+        for attempt in range(self.lock_wait_retries):
+            lock_ticket = self.l2.acquire_lock(remaining)
+            if lock_ticket is not None:
+                lock_key, token = lock_ticket
+                try:
+                    # 抢到锁后若是重试轮次，先再查一次 L2，避免重复查库
+                    if attempt > 0:
+                        found, still_missed = self.l2.get_many(remaining)
+                        for pid, payload in found.items():
+                            if _is_version_valid(payload, allowed_versions):
+                                l2_recovered[pid] = payload
+                        remaining = [
+                            pid for pid in still_missed if pid not in l2_recovered
+                        ]
+                        if not remaining:
+                            return l2_recovered, {}
+                    l3_loaded = self._query_mysql_and_populate(
+                        remaining, allowed_versions
+                    )
+                    return l2_recovered, l3_loaded
+                finally:
+                    self.l2.release_lock(lock_key, token)
+
+            # 未抢到锁：等待持锁进程回填 L2 Redis 后重查
+            self._sleep(self.lock_wait_seconds)
+            found, still_missed = self.l2.get_many(remaining)
+            for pid, payload in found.items():
+                if _is_version_valid(payload, allowed_versions):
+                    l2_recovered[pid] = payload
+            remaining = [pid for pid in still_missed if pid not in l2_recovered]
+            if not remaining:
+                return l2_recovered, {}
+
+        # 等待重试耗尽后仍未命中，兜底回源查库
+        l3_loaded = self._query_mysql_and_populate(remaining, allowed_versions)
+        return l2_recovered, l3_loaded
+
+    def _query_mysql_and_populate(
+        self,
+        parent_ids: Sequence[str],
+        allowed_versions: dict[str, int] | None,
+    ) -> dict[str, ParentChunkPayload]:
+        if not parent_ids:
+            return {}
+        l3_found = self.l3.get_many(parent_ids)
+        l3_valid = {
+            pid: payload
+            for pid, payload in l3_found.items()
+            if _is_version_valid(payload, allowed_versions)
+        }
+        if l3_valid:
+            if self.bloom.is_ready:
+                self.bloom.add_many(l3_valid.keys())
+            self.l2.put_many(l3_valid)
+            self.l1.put_many(l3_valid)
+        return l3_valid
 
 
 def _is_version_valid(

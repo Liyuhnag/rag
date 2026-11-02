@@ -11,6 +11,7 @@ from services.retrieval.fusion import LocalParentCache
 from services.retrieval.fusion import MatchedChild
 from services.retrieval.fusion import MySQLParentStore
 from services.retrieval.fusion import ParentBackfiller
+from services.retrieval.fusion import ParentBloomFilter
 from services.retrieval.fusion import ParentChunkPayload
 from services.retrieval.fusion import RRFFuser
 from services.retrieval.fusion import RedisParentCache
@@ -63,6 +64,7 @@ __all__ = [
     "MySQLParentStore",
     "PageRange",
     "ParentBackfiller",
+    "ParentBloomFilter",
     "ParentChunkPayload",
     "QueryRewriter",
     "QueryRouter",
