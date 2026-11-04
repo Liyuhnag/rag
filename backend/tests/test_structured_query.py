@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""结构化查询在数据入库前只返回数据集，不生成 SQL。"""
+"""结构化查询在没有数据行时只返回数据集。"""
 
 from model.structured_dataset.model import StructuredDataset
 from services.retrieval.structured.models import StructuredQueryRequest

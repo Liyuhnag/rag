@@ -21,6 +21,7 @@ dependencies = [
     "python-multipart>=0.0.12",
     "tiktoken>=0.12,<1",
     "uvicorn>=0.32,<1",
+    "pandas>=2,<4",
 ]
 
 [dependency-groups]

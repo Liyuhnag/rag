@@ -7,6 +7,14 @@ from model.structured_dataset.model import StructuredDataset
 
 
 @dataclass(frozen=True)
+class DataTable:
+    """装入代码执行器的一张工作表。"""
+
+    name: str
+    rows: tuple[dict[str, object], ...] = ()
+
+
+@dataclass(frozen=True)
 class StructuredQueryRequest:
     """已经路由到表查询的请求。"""
 
@@ -17,8 +25,10 @@ class StructuredQueryRequest:
 
 @dataclass(frozen=True)
 class StructuredQueryResult:
-    """表查询结果。当前数据行尚未入库，ready 保持为 false。"""
+    """表查询结果。没有数据行时 ready 为 false；计算完成后 value 保存结果。"""
 
     dataset_ids: tuple[str, ...] = ()
     ready: bool = False
     message: str = ""
+    value: object = None
+    error: str | None = None
