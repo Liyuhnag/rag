@@ -63,7 +63,9 @@ docker compose down -v      # 停止并清空数据
 | 服务 | 地址 | 说明 |
 | --- | --- | --- |
 | MySQL | `127.0.0.1:3306` | 库 `app`，账号 `app` / `rag-dev-password` |
-| Redis | `127.0.0.1:6379` | Celery broker，任务结果在 `db 1` |
+| Redis 队列 | `127.0.0.1:6379` | Celery broker，任务结果在 `db 1`，`noeviction` |
+| Redis 正文缓存 | `127.0.0.1:6380` | 父块正文，无 TTL，256 MiB + `allkeys-lfu` |
+| Redis 过滤器与锁 | `127.0.0.1:6381` | 共享 Bitmap 布隆快照、分布式锁，`noeviction` |
 | SeaweedFS S3 | `127.0.0.1:8333` | 桶 `rag-documents` 首次启动自动创建 |
 | SeaweedFS Filer | `127.0.0.1:8888` | 文件访问地址，对应 `FILE_BASE_URL` |
 
@@ -85,37 +87,14 @@ FILE_BASE_URL=http://127.0.0.1:8888
 ```bash
 cd backend
 uv sync --all-groups
-uv run uvicorn main:app --reload --host 127.0.0.1 --port 8000
+./start.sh
 ```
 
-访问 http://127.0.0.1:8000/docs
+访问 http://127.0.0.1:8000/docs 。Flower 默认是 http://127.0.0.1:5555 ，账号在 `.env` 的 `FLOWER_BASIC_AUTH`。
 
-也可以直接用脚本入口启动（等价，默认监听 `0.0.0.0:8000` 并开启 reload）：
+这条命令同时启动接口、解析 worker、维护 worker、定时任务和 Flower。分片由接口直接写入对象存储，解析走 `celery` 队列，补投和清理走 `maintenance` 队列。Ctrl+C 会停掉这次启动的全部进程。
 
-```bash
-cd backend
-uv run python main.py
-```
-
-### 3. 启动 Celery Worker
-
-文档上传接口只负责入队，真正的入库和存储由 worker 完成（不启动 worker 时上传会停在排队状态）：
-
-```bash
-cd backend
-uv run celery -A main.celery_app worker --loglevel=info
-```
-
-需要查看任务状态时再启动 Flower：
-
-```bash
-cd backend
-uv run celery -A main.celery_app flower
-```
-
-Flower 的账号、监听地址和端口读取 `.env` 里的 `FLOWER_BASIC_AUTH`、`FLOWER_ADDRESS`、`FLOWER_PORT`，默认地址 http://127.0.0.1:5555。
-
-### 4. 前端开发
+### 3. 前端开发
 
 ```bash
 cd frontend
@@ -129,7 +108,6 @@ npm run dev
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | `/api/documents` | 上传文件，返回 `202` 和任务 ID |
 | GET | `/api/documents` | 文档列表 |
 | GET | `/api/documents/{id}` | 文档详情 |
 | DELETE | `/api/documents/{id}` | 删除文档 |

@@ -15,7 +15,7 @@ def test_importing_tasks_does_not_import_main() -> None:
     api 包半初始化的状态下被二次导入，导致路由对象绑定成模块。
     """
     code = (
-        "import sys; import task.document; "
+        "import sys; import task; "
         "assert 'main' not in sys.modules, 'task 不应导入 main'"
     )
     result = subprocess.run(

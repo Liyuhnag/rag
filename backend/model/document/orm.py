@@ -1,9 +1,13 @@
 # -*- coding: utf-8 -*-
 """documents 表的 SQL。服务层只调用这里的函数。"""
 
+from collections.abc import Sequence
+from datetime import datetime
+
 from model.common.database import as_aware
 from model.common.database import as_utc
 from model.common.database import execute
+from model.common.database import execute_count
 from model.document.model import Document
 from model.document.model import DocumentStatus
 
@@ -14,12 +18,13 @@ def insert(document: Document) -> None:
         INSERT INTO documents (
             id, name, file_type, size_bytes, chunk_count,
             status, uploaded_at, updated_at, object_key,
-            file_url, previewable, preview_url
+            file_url, previewable, preview_url, parse_version
         ) VALUES (
             %(id)s, %(name)s, %(file_type)s, %(size_bytes)s,
             %(chunk_count)s, %(status)s,
             %(uploaded_at)s, %(updated_at)s, %(object_key)s,
-            %(file_url)s, %(previewable)s, %(preview_url)s
+            %(file_url)s, %(previewable)s, %(preview_url)s,
+            %(parse_version)s
         )
     """
     execute(
@@ -37,6 +42,7 @@ def insert(document: Document) -> None:
             "file_url": document.file_url,
             "previewable": int(document.previewable),
             "preview_url": document.preview_url,
+            "parse_version": document.parse_version,
         },
     )
 
@@ -96,6 +102,7 @@ def list_page(
 
 
 def _from_row(row: dict[str, object]) -> Document:
+    """把一行 documents 记录转换为模型。"""
     return Document(
         id=str(row["id"]),
         name=str(row["name"]),
@@ -111,6 +118,34 @@ def _from_row(row: dict[str, object]) -> Document:
         preview_url=(
             None if row["preview_url"] is None else str(row["preview_url"])
         ),
+        page_count=int(row.get("page_count", 0)),
+        parent_chunk_count=int(row.get("parent_chunk_count", 0)),
+        parse_version=int(row.get("parse_version", 0)),
+        parsed_md_key=(
+            None
+            if row.get("parsed_md_key") is None
+            else str(row["parsed_md_key"])
+        ),
+        parsed_json_key=(
+            None
+            if row.get("parsed_json_key") is None
+            else str(row["parsed_json_key"])
+        ),
+        source_sha256=(
+            None
+            if row.get("source_sha256") is None
+            else str(row["source_sha256"])
+        ),
+        parsed_version=(
+            None
+            if row.get("parsed_version") is None
+            else int(row["parsed_version"])
+        ),
+        error_message=(
+            None
+            if row.get("error_message") is None
+            else str(row["error_message"])
+        ),
     )
 
 
@@ -121,3 +156,160 @@ def exists(document_id: str) -> bool:
         {"id": document_id},
     )
     return bool(rows)
+
+
+def begin_parse(
+    document_id: str,
+    parse_version: int,
+    now: datetime,
+) -> bool:
+    """仅启动当前版本；版本分配由创建任务的业务入口负责。"""
+    return mark_processing(document_id, parse_version, now)
+
+
+def mark_processing(document_id: str, version: int, now: datetime) -> bool:
+    """重放外部索引前取消 READY。版本不符时不改文档。"""
+    params = {
+        "id": document_id,
+        "version": version,
+        "now": as_utc(now),
+    }
+    changed = execute_count(
+        """
+        UPDATE documents
+        SET status = 'PROCESSING',
+            error_message = NULL,
+            updated_at = %(now)s
+        WHERE id = %(id)s AND parse_version = %(version)s
+        """,
+        params,
+    )
+    if changed == 1:
+        return True
+    # 状态本来就是 PROCESSING 时，MySQL 可能报告 0 行变化。再读一次确认版本仍在。
+    rows = execute(
+        """
+        SELECT status FROM documents
+        WHERE id = %(id)s AND parse_version = %(version)s
+        LIMIT 1
+        """,
+        params,
+    )
+    if not rows:
+        return False
+    return str(rows[0]["status"]) == DocumentStatus.PROCESSING.value
+
+
+def mark_ready(
+    document_id: str,
+    chunk_count: int,
+    parent_chunk_count: int,
+    now: datetime,
+) -> None:
+    """索引完成：写入父子块数量并置 READY。"""
+    execute(
+        """
+        UPDATE documents
+        SET status = 'READY',
+            chunk_count = %(chunk_count)s,
+            parent_chunk_count = %(parent_chunk_count)s,
+            error_message = NULL,
+            updated_at = %(now)s
+        WHERE id = %(id)s
+        """,
+        {
+            "id": document_id,
+            "chunk_count": chunk_count,
+            "parent_chunk_count": parent_chunk_count,
+            "now": as_utc(now),
+        },
+    )
+
+
+def mark_failed(
+    document_id: str,
+    message: str,
+    now: datetime,
+    *,
+    expected_version: int | None = None,
+) -> None:
+    """只允许 PROCESSING 失败，防止收尾异常撤销已经发布的 READY。"""
+    sql = """
+        UPDATE documents
+        SET status = 'FAILED',
+            error_message = %(message)s,
+            updated_at = %(now)s
+        WHERE id = %(id)s AND status = 'PROCESSING'
+    """
+    params: dict[str, object] = {
+        "id": document_id,
+        "message": message[:1024],
+        "now": as_utc(now),
+    }
+    if expected_version is not None:
+        sql += " AND parse_version = %(expected_version)s"
+        params["expected_version"] = expected_version
+    execute(sql, params)
+
+
+def set_parsed_artifacts(
+    document_id: str,
+    parsed_md_key: str | None,
+    parsed_json_key: str | None,
+    now: datetime,
+    *,
+    expected_version: int | None = None,
+) -> None:
+    """记录解析产物；指定版本时仅更新仍处于该版本的文档。
+    parsed_version 与两个 key 在同一条更新写入，取 expected_version 的值。"""
+    sql = """
+        UPDATE documents
+        SET parsed_md_key = %(parsed_md_key)s,
+            parsed_json_key = %(parsed_json_key)s,
+            parsed_version = %(parsed_version)s,
+            updated_at = %(now)s
+        WHERE id = %(id)s
+    """
+    params: dict[str, object] = {
+        "id": document_id,
+        "parsed_md_key": parsed_md_key,
+        "parsed_json_key": parsed_json_key,
+        "parsed_version": expected_version,
+        "now": as_utc(now),
+    }
+    if expected_version is not None:
+        sql += " AND parse_version = %(expected_version)s"
+        params["expected_version"] = expected_version
+    execute(sql, params)
+
+
+def list_ready(
+    document_ids: Sequence[str] | None = None,
+    file_types: Sequence[str] | None = None,
+    limit: int = 10000,
+) -> list[Document]:
+    """查询处于 READY 状态的可检索文档；显式传入空 document_ids 时直接返回空列表。"""
+    if document_ids is not None and len(document_ids) == 0:
+        return []
+    if limit <= 0:
+        return []
+    clauses = ["status = 'READY'"]
+    params: dict[str, object] = {"limit": limit}
+    if document_ids is not None:
+        holders = ", ".join(f"%(doc_{i})s" for i in range(len(document_ids)))
+        clauses.append(f"id IN ({holders})")
+        for i, doc_id in enumerate(document_ids):
+            params[f"doc_{i}"] = doc_id
+    if file_types:
+        normalized = [item.lower().strip() for item in file_types if item.strip()]
+        if normalized:
+            holders = ", ".join(f"%(ft_{i})s" for i in range(len(normalized)))
+            clauses.append(f"LOWER(file_type) IN ({holders})")
+            for i, ft in enumerate(normalized):
+                params[f"ft_{i}"] = ft
+    where_sql = " AND ".join(clauses)
+    rows = execute(
+        f"SELECT * FROM documents WHERE {where_sql} ORDER BY uploaded_at DESC, id ASC LIMIT %(limit)s",
+        params,
+    )
+    return [_from_row(row) for row in rows]

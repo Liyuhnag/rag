@@ -1,0 +1,144 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1600" viewBox="0 0 1200 1600">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#142A49"/>
+    </marker>
+  </defs>
+  <style>
+    text { font-family: 'PingFang SC', 'Hiragino Sans GB', sans-serif; fill: #142A49; }
+    .sub { fill: #64748B; }
+    .faint { fill: #94A3B8; }
+    .node { fill: #FFFFFF; stroke: #142A49; stroke-width: 2.5; }
+    .flow { stroke: #142A49; stroke-width: 2.5; fill: none; }
+  </style>
+
+  <rect width="1200" height="1600" fill="#FFFEF8"/>
+
+  <text x="600" y="68" text-anchor="middle" font-size="32" font-weight="700">异步任务流程：文档上传与处理</text>
+  <text x="600" y="104" text-anchor="middle" font-size="17" class="sub">前端上传 → FastAPI 接收 → Celery 异步处理（feature 分支现状）</text>
+  <rect x="1010" y="44" width="130" height="42" rx="21" fill="#FFF8D8" stroke="#F59E0B" stroke-width="2"/>
+  <text x="1075" y="72" text-anchor="middle" font-size="18" font-weight="700" fill="#B45309">开发中</text>
+
+  <rect x="60" y="140" width="300" height="1310" rx="16" fill="#EAF6FF"/>
+  <text x="82" y="177" font-size="18" font-weight="700">前端（Vue）</text>
+  <rect x="400" y="140" width="740" height="1310" rx="16" fill="#EEF8E8"/>
+  <text x="422" y="177" font-size="18" font-weight="700">后端（FastAPI · Celery · Redis · MySQL · S3）</text>
+
+  <rect x="85" y="200" width="250" height="95" rx="10" class="node"/>
+  <text x="210" y="244" text-anchor="middle" font-size="17" font-weight="600">前端上传文件</text>
+  <text x="210" y="272" text-anchor="middle" font-size="14" class="sub">（最多 3 并发上传）</text>
+
+  <rect x="85" y="1092" width="250" height="95" rx="10" class="node"/>
+  <text x="210" y="1126" text-anchor="middle" font-size="17" font-weight="600">轮询任务状态</text>
+  <text x="210" y="1152" text-anchor="middle" font-size="13" class="sub">GET /api/tasks/{id}</text>
+  <text x="210" y="1174" text-anchor="middle" font-size="13" class="sub">每 2 秒 · 直到终态</text>
+
+  <rect x="85" y="985" width="250" height="92" rx="10" fill="#FFF8D8" stroke="#142A49" stroke-width="1.5" stroke-dasharray="6 5"/>
+  <text x="97" y="1012" font-size="13" font-weight="700">契约对齐开发中：</text>
+  <text x="97" y="1033" font-size="13" class="sub">前端等 completed / failed、</text>
+  <text x="97" y="1052" font-size="13" class="sub">progress / step / result；</text>
+  <text x="97" y="1071" font-size="13" class="sub">后端现为 id、STORED / FAILED</text>
+
+  <rect x="85" y="1240" width="250" height="80" rx="10" class="node"/>
+  <text x="210" y="1278" text-anchor="middle" font-size="17" font-weight="600">按结果更新界面</text>
+  <text x="210" y="1302" text-anchor="middle" font-size="13" class="sub">成功 / 失败提示</text>
+
+  <rect x="490" y="200" width="560" height="95" rx="10" class="node"/>
+  <text x="770" y="235" text-anchor="middle" font-size="17" font-weight="600">FastAPI 接收上传</text>
+  <text x="770" y="263" text-anchor="middle" font-size="14" class="sub">校验：空文件 422 · 超限 413</text>
+
+  <rect x="490" y="335" width="560" height="100" rx="10" class="node"/>
+  <text x="770" y="368" text-anchor="middle" font-size="17" font-weight="600">落临时文件并建任务</text>
+  <text x="770" y="395" text-anchor="middle" font-size="13" class="sub">/tmp/rag-uploads/{task_id}</text>
+  <text x="770" y="417" text-anchor="middle" font-size="13" class="sub">写 processing_tasks（PENDING）</text>
+
+  <rect x="490" y="475" width="560" height="85" rx="10" class="node"/>
+  <text x="770" y="508" text-anchor="middle" font-size="17" font-weight="600">投递 Celery 任务</text>
+  <text x="770" y="534" text-anchor="middle" font-size="13" class="sub">process_document.delay(task_id)</text>
+
+  <rect x="490" y="600" width="560" height="70" rx="10" fill="#F0EDFF" stroke="#142A49" stroke-width="2.5"/>
+  <text x="770" y="643" text-anchor="middle" font-size="17" font-weight="600">Redis 任务队列（Celery broker）</text>
+
+  <rect x="490" y="710" width="560" height="85" rx="10" class="node"/>
+  <text x="770" y="743" text-anchor="middle" font-size="17" font-weight="600">Celery Worker 领取任务</text>
+  <text x="770" y="769" text-anchor="middle" font-size="13" class="sub">状态 → STORING</text>
+
+  <rect x="490" y="835" width="560" height="100" rx="10" class="node"/>
+  <text x="770" y="868" text-anchor="middle" font-size="17" font-weight="600">写对象存储并建文档记录</text>
+  <text x="770" y="894" text-anchor="middle" font-size="13" class="sub">key: documents/{doc_id}/{name}</text>
+  <text x="770" y="917" text-anchor="middle" font-size="13" class="sub">documents 表 · 状态 UPLOADED</text>
+
+  <polygon points="770,957 840,1015 770,1073 700,1015" class="node"/>
+  <text x="770" y="1021" text-anchor="middle" font-size="15" font-weight="600">处理成功？</text>
+
+  <rect x="950" y="982" width="170" height="66" rx="10" fill="#FCEBF1" stroke="#142A49" stroke-width="2.5"/>
+  <text x="1035" y="1008" text-anchor="middle" font-size="14" font-weight="600">状态 → FAILED</text>
+  <text x="1035" y="1029" text-anchor="middle" font-size="12" class="sub">记录 error_message</text>
+
+  <rect x="490" y="1100" width="560" height="80" rx="10" class="node"/>
+  <text x="770" y="1131" text-anchor="middle" font-size="17" font-weight="600">更新状态 → STORED</text>
+  <text x="770" y="1155" text-anchor="middle" font-size="13" class="sub">记录 document_id</text>
+
+  <line x1="335" y1="247" x2="490" y2="247" class="flow" marker-end="url(#a)"/>
+  <text x="412" y="236" text-anchor="middle" font-size="13" class="sub">POST /api/documents</text>
+
+  <path d="M 490 517 H 365 V 262 H 335" class="flow" marker-end="url(#a)"/>
+  <text x="430" y="506" text-anchor="middle" font-size="12" class="sub">202 立即返回</text>
+  <text x="430" y="531" text-anchor="middle" font-size="12" class="sub">任务 ID（PENDING）</text>
+
+  <line x1="770" y1="295" x2="770" y2="335" class="flow" marker-end="url(#a)"/>
+  <line x1="770" y1="435" x2="770" y2="475" class="flow" marker-end="url(#a)"/>
+  <line x1="770" y1="560" x2="770" y2="600" class="flow" marker-end="url(#a)"/>
+  <line x1="770" y1="670" x2="770" y2="710" class="flow" marker-end="url(#a)"/>
+  <text x="782" y="695" font-size="12" class="sub">worker 领取</text>
+  <line x1="770" y1="795" x2="770" y2="835" class="flow" marker-end="url(#a)"/>
+  <text x="782" y="820" font-size="12" class="sub">document_store.add()</text>
+  <line x1="770" y1="935" x2="770" y2="957" class="flow" marker-end="url(#a)"/>
+  <text x="782" y="952" font-size="12" class="faint">finally: 删除临时文件</text>
+
+  <line x1="770" y1="1073" x2="770" y2="1100" class="flow" marker-end="url(#a)"/>
+  <text x="780" y="1092" font-size="12" class="sub">成功</text>
+  <line x1="840" y1="1015" x2="950" y2="1015" class="flow" marker-end="url(#a)"/>
+  <text x="895" y="1005" text-anchor="middle" font-size="12" class="sub">异常</text>
+
+  <line x1="490" y1="1140" x2="335" y2="1140" class="flow" marker-end="url(#a)"/>
+  <text x="412" y="1126" text-anchor="middle" font-size="12" class="sub">轮询读取状态</text>
+
+  <line x1="210" y1="1187" x2="210" y2="1240" class="flow" marker-end="url(#a)"/>
+  <text x="222" y="1218" font-size="12" class="sub">终态后停止</text>
+
+  <rect x="430" y="1240" width="680" height="180" rx="12" fill="#FFF8D8" stroke="#142A49" stroke-width="2" stroke-dasharray="8 6"/>
+  <text x="452" y="1272" font-size="17" font-weight="700">下一阶段 · 开发中</text>
+
+  <rect x="460" y="1292" width="170" height="64" rx="10" fill="#FFFFFF" stroke="#142A49" stroke-width="2" stroke-dasharray="7 5"/>
+  <text x="545" y="1318" text-anchor="middle" font-size="15" font-weight="600">文本分块</text>
+  <text x="545" y="1338" text-anchor="middle" font-size="12" class="sub">语义切分</text>
+
+  <rect x="668" y="1292" width="190" height="64" rx="10" fill="#FFFFFF" stroke="#142A49" stroke-width="2" stroke-dasharray="7 5"/>
+  <text x="763" y="1318" text-anchor="middle" font-size="15" font-weight="600">向量化</text>
+  <text x="763" y="1338" text-anchor="middle" font-size="12" class="sub">embedding 模型</text>
+
+  <rect x="896" y="1292" width="180" height="64" rx="10" fill="#FFFFFF" stroke="#142A49" stroke-width="2" stroke-dasharray="7 5"/>
+  <text x="986" y="1318" text-anchor="middle" font-size="15" font-weight="600">写入向量库</text>
+  <text x="986" y="1338" text-anchor="middle" font-size="12" class="sub">（待选型）</text>
+
+  <line x1="630" y1="1324" x2="668" y2="1324" stroke="#142A49" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#a)"/>
+  <line x1="858" y1="1324" x2="896" y2="1324" stroke="#142A49" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#a)"/>
+  <line x1="770" y1="1180" x2="770" y2="1240" stroke="#142A49" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#a)"/>
+  <text x="782" y="1215" font-size="12" class="faint">接在入库之后</text>
+
+  <text x="770" y="1400" text-anchor="middle" font-size="13" class="sub">配套：进度上报（progress / step）与前后端状态契约对齐同为开发中</text>
+
+  <rect x="270" y="1470" width="660" height="88" rx="12" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+  <text x="290" y="1496" font-size="13" font-weight="700">图例</text>
+  <line x1="300" y1="1522" x2="344" y2="1522" stroke="#142A49" stroke-width="2.5" marker-end="url(#a)"/>
+  <text x="356" y="1526" font-size="13">已实现（feature 分支代码）</text>
+  <line x1="620" y1="1522" x2="664" y2="1522" stroke="#142A49" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#a)"/>
+  <text x="676" y="1526" font-size="13">开发中 / 尚未实现</text>
+  <polygon points="300,1550 310,1540 320,1550 310,1560" fill="#FFFFFF" stroke="#142A49" stroke-width="1.5"/>
+  <text x="332" y="1554" font-size="13">条件判断</text>
+  <rect x="620" y="1540" width="20" height="20" rx="4" fill="#FCEBF1" stroke="#142A49" stroke-width="1.5"/>
+  <text x="650" y="1554" font-size="13">失败路径</text>
+
+  <text x="600" y="1584" text-anchor="middle" font-size="11" class="faint">依据：backend/api、backend/task、frontend/src/composables/useUploadManager.js（feature 分支）</text>
+</svg>

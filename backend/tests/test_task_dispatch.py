@@ -1,42 +1,51 @@
 # -*- coding: utf-8 -*-
-"""解析任务投递和补投。"""
+"""维护任务按持久化阶段补投。"""
 
+from datetime import timedelta
 from types import SimpleNamespace
 
-from services.upload.jobs import dispatch as task_dispatch
+import pytest
+
+from model.document_task.model import DocumentTaskStage as Stage
 from task import maintenance
 
 
-def test_dispatch_task_success(monkeypatch):
-    calls: list[str] = []
-    monkeypatch.setattr(
-        task_dispatch.parse_document,
-        "delay",
-        lambda task_id: calls.append(task_id),
-    )
+@pytest.mark.parametrize("has_pending", [False, True])
+def test_redispatch_recovers_before_finding_pending_tasks(monkeypatch, has_pending):
+    calls = []
+    recovered_at = []
 
-    assert task_dispatch.dispatch_task("task-1") is True
-    assert calls == ["task-1"]
+    def recover(now, limit):
+        recovered_at.append(now)
+        assert limit == maintenance._REDISPATCH_BATCH
+        calls.append("recover")
+        return 1
 
+    def find_pending(older_than, limit):
+        assert len(recovered_at) == 1
+        assert recovered_at[0] - older_than == timedelta(seconds=120)
+        assert limit == maintenance._REDISPATCH_BATCH
+        calls.append("find-pending")
+        return [SimpleNamespace(id="task", stage=Stage.INDEXING)] if has_pending else []
 
-def test_dispatch_task_swallows_broker_error(monkeypatch):
-    def boom(_task_id: str) -> None:
-        raise RuntimeError("redis down")
+    def dispatch(task_id, stage):
+        calls.append((task_id, stage))
 
-    monkeypatch.setattr(task_dispatch.parse_document, "delay", boom)
-
-    assert task_dispatch.dispatch_task("task-2") is False
-
-
-def test_redispatch_pending_tasks(monkeypatch):
-    calls: list[str] = []
-    monkeypatch.setattr(
-        maintenance.task_orm,
-        "find_pending",
-        lambda _older_than, _limit: [SimpleNamespace(id="task-3")],
-    )
-    monkeypatch.setattr(maintenance, "dispatch_task", calls.append)
-
+    monkeypatch.setattr(maintenance, "recover_tasks", recover)
+    monkeypatch.setattr(maintenance.task_orm, "find_pending", find_pending)
+    monkeypatch.setattr(maintenance, "dispatch_task", dispatch)
     maintenance.redispatch_pending_tasks()
+    expected = ["recover", "find-pending"]
+    if has_pending:
+        expected.append(("task", Stage.INDEXING))
+    assert calls == expected
 
-    assert calls == ["task-3"]
+
+def test_beat_recovers_every_minute_and_polls_mineru_independently():
+    schedule = maintenance.celery_app.conf.beat_schedule
+    assert schedule["redispatch-pending-tasks"] == {
+        "task": "rag.redispatch_pending_tasks", "schedule": 60.0,
+    }
+    assert schedule["poll-parse-jobs"] == {
+        "task": "rag.poll_parse_jobs", "schedule": 10.0,
+    }

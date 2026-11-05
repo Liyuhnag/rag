@@ -54,6 +54,12 @@ def _app_error(exc: UploadError) -> AppError:
     )
 
 
+def _task_status_value(task) -> str | None:
+    if task is None:
+        return None
+    return getattr(task.status, "value", task.status)
+
+
 def _init_response(session, uploaded_parts, task=None) -> UploadInitResponse:
     return UploadInitResponse(
         upload_id=session.id,
@@ -70,7 +76,7 @@ def _init_response(session, uploaded_parts, task=None) -> UploadInitResponse:
         ],
         expires_at=session.expires_at,
         task_id=None if task is None else task.id,
-        task_status=None if task is None else task.status,
+        task_status=_task_status_value(task),
     )
 
 
@@ -93,7 +99,7 @@ def _status_response(session, uploaded_parts, task) -> UploadStatusResponse:
         expires_at=session.expires_at,
         error_message=session.error_message,
         task_id=None if task is None else task.id,
-        task_status=None if task is None else task.status,
+        task_status=_task_status_value(task),
     )
 
 
@@ -211,7 +217,7 @@ def complete_upload(upload_id: str, response: Response) -> UploadCompleteRespons
         document_id=result.session.document_id,
         status=result.session.status,
         task_id=None if result.task is None else result.task.id,
-        task_status=None if result.task is None else result.task.status,
+        task_status=_task_status_value(result.task),
     )
 
 

@@ -48,19 +48,3 @@ class FingerprintConflict(Exception):
     def __init__(self, upload_id: str) -> None:
         super().__init__("同一指纹存在其他未完成上传")
         self.upload_id = upload_id
-
-
-class QueueFull(Exception):
-    """等待中的任务已达到上限。"""
-
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
-        self.message = message
-
-
-class BrokerUnavailable(Exception):
-    """任务队列暂时查不到。"""
-
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
-        self.message = message

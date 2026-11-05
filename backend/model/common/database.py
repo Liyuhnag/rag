@@ -2,6 +2,7 @@
 """数据库连接。各模型的 ORM 通过这里执行 SQL。"""
 
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -26,6 +27,20 @@ _db = {
     "password": "",
     "database": "",
 }
+
+_bound_connection: ContextVar[pymysql.Connection | None] = ContextVar(
+    "database_connection", default=None
+)
+
+
+@contextmanager
+def bind_connection(connection: pymysql.Connection) -> Iterator[None]:
+    """让一次受租约保护的写入复用同一事务；后台续租线程不共享连接。"""
+    token = _bound_connection.set(connection)
+    try:
+        yield
+    finally:
+        _bound_connection.reset(token)
 
 
 def configure(
@@ -74,10 +89,18 @@ def as_aware(value: object) -> datetime:
 def execute(
     sql: str,
     params: dict[str, object] | None = None,
+    *,
+    timeout_seconds: float | None = None,
 ) -> list[dict[str, object]]:
     """执行一条 SQL。查询返回行，写入语句返回空列表。"""
     try:
-        with _connect() as connection:
+        bound = _bound_connection.get()
+        if bound is not None:
+            with bound.cursor() as cursor:
+                cursor.execute(sql, params or {})
+                return [] if cursor.description is None else list(cursor.fetchall())
+        options = {} if timeout_seconds is None else {"timeout_seconds": timeout_seconds}
+        with _connect(**options) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(sql, params or {})
                 if cursor.description is None:
@@ -97,6 +120,11 @@ def execute_count(
 ) -> int:
     """执行写入语句并返回受影响行数。"""
     try:
+        bound = _bound_connection.get()
+        if bound is not None:
+            with bound.cursor() as cursor:
+                cursor.execute(sql, params or {})
+                return int(cursor.rowcount)
         with _connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(sql, params or {})
@@ -112,6 +140,10 @@ def execute_count(
 @contextmanager
 def transaction() -> Iterator[pymysql.Connection]:
     """在一个关闭自动提交的连接上执行多条语句。"""
+    bound = _bound_connection.get()
+    if bound is not None:
+        yield bound
+        return
     try:
         connection = pymysql.connect(
             host=str(_db["host"]),
@@ -144,7 +176,16 @@ def transaction() -> Iterator[pymysql.Connection]:
         connection.close()
 
 
-def _connect() -> pymysql.Connection:
+def _connect(*, timeout_seconds: float | None = None) -> pymysql.Connection:
+    options = {}
+    if timeout_seconds is not None:
+        if timeout_seconds <= 0:
+            raise TimeoutError("数据库读取已超时")
+        options = {
+            "connect_timeout": max(1, min(10, int(timeout_seconds))),
+            "read_timeout": timeout_seconds,
+            "write_timeout": timeout_seconds,
+        }
     try:
         return pymysql.connect(
             host=str(_db["host"]),
@@ -155,6 +196,7 @@ def _connect() -> pymysql.Connection:
             charset="utf8mb4",
             autocommit=True,
             cursorclass=pymysql.cursors.DictCursor,
+            **options,
         )
     except MySQLError as exc:
         raise StorageError("数据库不可用") from exc

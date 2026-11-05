@@ -8,10 +8,11 @@ from datetime import timezone
 from config import load_settings
 from model.document_task import orm as task_orm
 from services.upload.jobs import cleanup
-from services.upload.jobs.dispatch import dispatch_task
+from services.task_runtime.dispatch import dispatch as dispatch_task
+from services.task_runtime.lifecycle import recover as recover_tasks
+from services.task_runtime.policy import PENDING_MIN_AGE_SECONDS
 from task.app import celery_app
 
-_REDISPATCH_MIN_AGE_SECONDS = 300
 _REDISPATCH_BATCH = 100
 
 
@@ -107,9 +108,9 @@ def cleanup_old_sessions() -> None:
     queue="maintenance",
 )
 def redispatch_pending_tasks() -> None:
-    """补投超过 5 分钟仍未执行的 PENDING 任务。"""
-    older_than = datetime.now(timezone.utc) - timedelta(
-        seconds=_REDISPATCH_MIN_AGE_SECONDS
-    )
+    """按阶段恢复失联任务，并按公共策略补投等待过久的 PENDING 任务。"""
+    now = datetime.now(timezone.utc)
+    recover_tasks(now, _REDISPATCH_BATCH)
+    older_than = now - timedelta(seconds=PENDING_MIN_AGE_SECONDS)
     for task in task_orm.find_pending(older_than, _REDISPATCH_BATCH):
-        dispatch_task(task.id)
+        dispatch_task(task.id, task.stage)

@@ -4,11 +4,11 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
 
-DEFAULT_MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 DEFAULT_MAX_DOCUMENT_BYTES = 1000 * 1024 * 1024
 DEFAULT_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
 DEFAULT_UPLOAD_SESSION_TTL_HOURS = 24
@@ -17,7 +17,6 @@ DEFAULT_ORPHAN_MPU_GRACE_HOURS = 24
 DEFAULT_ORPHAN_OBJECT_RETENTION_DAYS = 7
 DEFAULT_SESSION_RETENTION_DAYS = 30
 DEFAULT_CLEANUP_BATCH_SIZE = 50
-DEFAULT_TASK_QUEUE_LIMIT = 200
 ALLOWED_FILE_TYPES = frozenset(
     {
         "pdf",
@@ -26,7 +25,6 @@ ALLOWED_FILE_TYPES = frozenset(
         "doc",
         "docx",
         "txt",
-        "xls",
         "xlsx",
         "csv",
     }
@@ -49,6 +47,28 @@ def _required(name: str) -> str:
     return value
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{name} 必须是布尔值")
+
+
+def _str_env(name: str, default: str) -> str:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = raw.strip()
+    if not value:
+        raise RuntimeError(f"{name} 不能为空")
+    return value
+
+
 def _int_env(name: str, default: int, minimum: int = 1) -> int:
     raw = os.getenv(name, str(default))
     try:
@@ -57,6 +77,20 @@ def _int_env(name: str, default: int, minimum: int = 1) -> int:
         raise RuntimeError(f"{name} 必须是整数") from exc
     if value < minimum:
         raise RuntimeError(f"{name} 必须大于等于 {minimum}")
+    return value
+
+
+def _rerank_candidates_from_env() -> int:
+    value = _int_env("RETRIEVAL_RERANK_CANDIDATES", 20)
+    if value > 50:
+        raise RuntimeError("RETRIEVAL_RERANK_CANDIDATES 不能超过 50")
+    return value
+
+
+def _rerank_top_n_from_env() -> int:
+    value = _int_env("RETRIEVAL_RERANK_TOP_N", 10)
+    if value > _rerank_candidates_from_env():
+        raise RuntimeError("RETRIEVAL_RERANK_TOP_N 不能超过 RETRIEVAL_RERANK_CANDIDATES")
     return value
 
 
@@ -73,7 +107,6 @@ def _first_present(*names: str) -> str:
 class Settings:
     """API 进程使用的配置。"""
 
-    max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES
     max_document_bytes: int = DEFAULT_MAX_DOCUMENT_BYTES
     upload_chunk_bytes: int = DEFAULT_UPLOAD_CHUNK_BYTES
     upload_session_ttl_hours: int = DEFAULT_UPLOAD_SESSION_TTL_HOURS
@@ -98,23 +131,44 @@ class Settings:
     mysql_database: str = ""
     file_base_url: str = ""
     redis_url: str = "redis://127.0.0.1:6379/0"
-    task_queue_limit: int = DEFAULT_TASK_QUEUE_LIMIT
+    parent_cache_redis_url: str = "redis://127.0.0.1:6380/0"
+    parent_guard_redis_url: str = "redis://127.0.0.1:6381/0"
+    embedding_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    dashscope_api_key: str = ""
+    embedding_model: str = "text-embedding-v4"
+    router_model: str = "qwen-plus"
+    embedding_dim: int = 1024
+    indexing_batch_size: int = 10
+    indexing_timeout_seconds: int = 60
+    milvus_uri: str = "http://127.0.0.1:19530"
+    milvus_token: str = ""
+    milvus_database: str = "default"
+    milvus_collection: str = "document_chunks"
+    es_url: str = "http://127.0.0.1:9200"
+    es_username: str = ""
+    es_password: str = ""
+    es_api_key: str = ""
+    es_ca_certs: str = ""
+    es_index: str = "document_chunks"
+    es_bulk_size: int = 500
+    es_analyzer: str = "ik_max_word"
+    es_search_analyzer: str = "ik_smart"
+    retrieval_rerank_enabled: bool = False
+    rerank_base_url: str = "https://dashscope.aliyuncs.com/api/v1"
+    rerank_model: str = "gte-rerank-v2"
+    retrieval_rerank_candidates: int = 20
+    retrieval_rerank_top_n: int = 10
+    rerank_timeout_seconds: int = 15
+    rerank_connect_timeout_seconds: int = 5
+    rerank_max_retries: int = 1
+    rerank_max_doc_chars: int = 4000
+    rerank_failure_circuit_threshold: int = 5
+    rerank_circuit_open_seconds: int = 300
 
 
 def load_settings() -> Settings:
     """从环境变量构造配置。非法数值在启动时直接失败。"""
     load_dotenv(ENV_FILE, override=False)
-    raw_max = os.getenv(
-        "MAX_UPLOAD_BYTES",
-        str(DEFAULT_MAX_UPLOAD_BYTES),
-    )
-    try:
-        max_upload_bytes = int(raw_max)
-    except ValueError as exc:
-        raise RuntimeError("MAX_UPLOAD_BYTES 必须是整数") from exc
-    if max_upload_bytes < 1:
-        raise RuntimeError("MAX_UPLOAD_BYTES 必须大于 0")
-
     raw_max_document = os.getenv(
         "MAX_DOCUMENT_BYTES",
         str(DEFAULT_MAX_DOCUMENT_BYTES),
@@ -175,16 +229,26 @@ def load_settings() -> Settings:
     redis_url = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0").strip()
     if not redis_url:
         raise RuntimeError("REDIS_URL 不能为空")
-    raw_queue_limit = os.getenv(
-        "TASK_QUEUE_LIMIT",
-        str(DEFAULT_TASK_QUEUE_LIMIT),
-    )
-    try:
-        task_queue_limit = int(raw_queue_limit)
-    except ValueError as exc:
-        raise RuntimeError("TASK_QUEUE_LIMIT 必须是整数") from exc
-    if task_queue_limit < 1:
-        raise RuntimeError("TASK_QUEUE_LIMIT 必须大于 0")
+    parent_cache_redis_url = os.getenv(
+        "PARENT_CACHE_REDIS_URL", "redis://127.0.0.1:6380/0"
+    ).strip()
+    parent_guard_redis_url = os.getenv(
+        "PARENT_GUARD_REDIS_URL", "redis://127.0.0.1:6381/0"
+    ).strip()
+    redis_addresses = (redis_url, parent_cache_redis_url, parent_guard_redis_url)
+    if not all(redis_addresses):
+        raise RuntimeError("PARENT_CACHE_REDIS_URL 和 PARENT_GUARD_REDIS_URL 不能为空")
+    endpoints = []
+    for address in redis_addresses:
+        try:
+            parsed = urlsplit(address)
+            if parsed.scheme not in ("redis", "rediss") or not parsed.hostname:
+                raise ValueError("无效 Redis 地址")
+            endpoints.append((parsed.hostname.lower(), parsed.port or 6379))
+        except ValueError as exc:
+            raise RuntimeError("Redis 地址必须为有效的 redis:// 或 rediss:// URL") from exc
+    if len(set(endpoints)) != 3:
+        raise RuntimeError("REDIS_URL、PARENT_CACHE_REDIS_URL、PARENT_GUARD_REDIS_URL 必须使用独立 Redis 实例")
 
     raw_port = os.getenv("MYSQL_PORT", "3306").strip()
     try:
@@ -194,8 +258,35 @@ def load_settings() -> Settings:
     if mysql_port < 1 or mysql_port > 65535:
         raise RuntimeError("MYSQL_PORT 必须在 1 到 65535 之间")
 
+    indexing_batch_size = _int_env("INDEXING_BATCH_SIZE", 10)
+    if indexing_batch_size > 10:
+        raise RuntimeError("INDEXING_BATCH_SIZE 不能超过 10（DashScope 单批上限）")
+
+    indexing_strings = {}
+    defaults = Settings()
+    for field, env in {
+        "embedding_base_url": "EMBEDDING_BASE_URL",
+        "dashscope_api_key": "DASHSCOPE_API_KEY",
+        "embedding_model": "EMBEDDING_MODEL",
+        "router_model": "ROUTER_MODEL",
+        "milvus_uri": "MILVUS_URI",
+        "milvus_token": "MILVUS_TOKEN",
+        "milvus_database": "MILVUS_DATABASE",
+        "milvus_collection": "MILVUS_COLLECTION",
+        "es_url": "ES_URL",
+        "es_username": "ES_USERNAME",
+        "es_password": "ES_PASSWORD",
+        "es_api_key": "ES_API_KEY",
+        "es_ca_certs": "ES_CA_CERTS",
+        "es_index": "ES_INDEX",
+        "es_analyzer": "ES_ANALYZER",
+        "es_search_analyzer": "ES_SEARCH_ANALYZER",
+    }.items():
+        indexing_strings[field] = os.getenv(env, getattr(defaults, field)).strip()
+        if getattr(defaults, field) and not indexing_strings[field]:
+            raise RuntimeError(f"{env} 不能为空")
+
     return Settings(
-        max_upload_bytes=max_upload_bytes,
         max_document_bytes=max_document_bytes,
         upload_chunk_bytes=upload_chunk_bytes,
         upload_session_ttl_hours=upload_session_ttl_hours,
@@ -223,5 +314,31 @@ def load_settings() -> Settings:
         mysql_database=_required("MYSQL_DATABASE"),
         file_base_url=file_base_url,
         redis_url=redis_url,
-        task_queue_limit=task_queue_limit,
+        parent_cache_redis_url=parent_cache_redis_url,
+        parent_guard_redis_url=parent_guard_redis_url,
+        embedding_dim=_int_env("EMBEDDING_DIM", 1024),
+        indexing_batch_size=indexing_batch_size,
+        indexing_timeout_seconds=_int_env("INDEXING_TIMEOUT_SECONDS", 60),
+        es_bulk_size=_int_env("ES_BULK_SIZE", 500),
+        retrieval_rerank_enabled=_bool_env("RETRIEVAL_RERANK_ENABLED", False),
+        rerank_base_url=_str_env(
+            "RERANK_BASE_URL",
+            "https://dashscope.aliyuncs.com/api/v1",
+        ),
+        rerank_model=_str_env("RERANK_MODEL", "gte-rerank-v2"),
+        retrieval_rerank_candidates=_rerank_candidates_from_env(),
+        retrieval_rerank_top_n=_rerank_top_n_from_env(),
+        rerank_timeout_seconds=_int_env("RERANK_TIMEOUT_SECONDS", 15),
+        rerank_connect_timeout_seconds=_int_env(
+            "RERANK_CONNECT_TIMEOUT_SECONDS",
+            5,
+        ),
+        rerank_max_retries=_int_env("RERANK_MAX_RETRIES", 1, minimum=0),
+        rerank_max_doc_chars=_int_env("RERANK_MAX_DOC_CHARS", 4000),
+        rerank_failure_circuit_threshold=_int_env(
+            "RERANK_FAILURE_CIRCUIT_THRESHOLD",
+            5,
+        ),
+        rerank_circuit_open_seconds=_int_env("RERANK_CIRCUIT_OPEN_SECONDS", 300),
+        **indexing_strings,
     )

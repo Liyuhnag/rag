@@ -112,18 +112,3 @@ export function del(url, options = {}) {
     ...options
   })
 }
-
-/**
- * 上传文件（multipart/form-data）
- */
-export function upload(url, formData, options = {}, timeout) {
-  return request(url, {
-    method: 'POST',
-    body: formData,
-    headers: {
-      // 不设置 Content-Type，让浏览器自动设置 multipart boundary
-      ...(options.headers || {})
-    },
-    ...options
-  }, timeout)
-}
